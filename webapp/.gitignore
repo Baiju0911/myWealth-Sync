@@ -1,0 +1,84 @@
+Set-Content -Path .gitignore -Value @"
+# ====================================================================
+# 🐍 PYTHON / DJANGO BACKEND LAYER
+# ====================================================================
+# Python bytecode & compiled execution cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.pyo
+
+# Django framework specifics & database file protection
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+.report/
+celerybeat-schedule
+
+# Virtual Environments (Local python execution boxes)
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ====================================================================
+# 📦 NODE / NPM FRONTEND LAYER (Dynamic UI Mapping Dashboard)
+# ====================================================================
+# Node dependency directory trees
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Frontend framework distribution and static builds (Next.js/Nuxt/Vite)
+dist/
+build/
+.next/
+.nuxt/
+out/
+
+# Local configuration overrides & browser settings
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.DS_Store
+Thumbs.db
+
+# ====================================================================
+# 📱 REACT NATIVE / EXPO MOBILE MULTI-PLATFORM LAYER
+# ====================================================================
+# Expo frameworks tracking parameters & Metro bundler pipelines
+.expo/
+.expo-shared/
+.metro/
+web-build/
+
+# Mobile Binary distribution artifacts (Never track finished binaries)
+*.apk
+*.aab
+*.ipa
+*.app
+
+# ====================================================================
+# 🤖 AI CORE COLLABORATION LAYERS
+# ====================================================================
+# Anthropic Claude Code, agent states, & AI workspace workspace keys
+.claude/
+.anthropic/
+
+# IDE Workspace setups
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.log

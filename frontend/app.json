@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "myWealth-Sync",
+    "slug": "myWealth-Sync",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.baijsoft.mywealthsync",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app requires direct camera access to parse and intercept physical ledger QR codes at merchant checkout points.",
+        "LSApplicationQueriesSchemes": [
+          "bhim",
+          "tez",
+          "phonepe",
+          "paytm",
+          "upi"
+        ]
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Give myWealth Scanner camera privileges to capture physical ledger QR frames."
+        }
+      ],
+      "expo-sqlite",
+      "expo-asset"
+    ]
+  }
+}
