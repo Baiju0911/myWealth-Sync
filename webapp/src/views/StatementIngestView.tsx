@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { accountApi } from '../api';
+import { accountApi } from '../api.ts';
 import api from '../api/client';
 import { type AccountEntity } from '../types/ledger';
 
@@ -7,8 +7,8 @@ interface StagingPreviewLine {
   id: string;
   date: string;
   description: string;
-  tran_type?: string;     // 🟢 Added: Handles explicit backend types natively
-  cheque_ref?: string;    // 🟢 Added: Handles explicit reference keys natively
+  tran_type?: string;     
+  cheque_ref?: string;    
   credit: number | null;
   debit: number | null;
   amount: number;
@@ -27,7 +27,7 @@ interface ApiResponseMeta {
   rawMatchCount: number;
   debitLineCount: number;
   creditLineCount: number;
-  duplicateCount: number; // 🟢 Added: Synchronized with the backend update
+  duplicateCount: number; 
   report_from_date?: string | null;
   report_to_date?: string | null;
 }
@@ -43,7 +43,7 @@ export default function StatementIngestView() {
   const [commitLoading, setCommitLoading] = useState(false);
   
   const [previewLines, setPreviewLines] = useState<StagingPreviewLine[]>([]);
-  const [responseMeta, setResponseMeta] = useState<ApiResponseMeta | null>(null); // 🟢 Explicitly typed
+  const [responseMeta, setResponseMeta] = useState<ApiResponseMeta | null>(null); 
   
   const [errorMsg, setErrorMsg] = useState('');
   const [commitSuccessMsg, setCommitSuccessMsg] = useState('');
@@ -112,7 +112,7 @@ export default function StatementIngestView() {
           rawMatchCount: res.data.raw_match_count || 0,
           debitLineCount: res.data.debit_line_count || 0,
           creditLineCount: res.data.credit_line_count || 0,
-          duplicateCount: res.data.duplicate_count || 0, // 🟢 Set explicitly from backend response
+          duplicateCount: res.data.duplicate_count || 0, 
           report_from_date: res.data.report_from_date || null,
           report_to_date: res.data.report_to_date || null,
         });
@@ -184,15 +184,15 @@ export default function StatementIngestView() {
   const isDoubleTrustOk = isBalanceVerified || isFileFullyStale;
 
   return (
-    <div className="space-y-8 animate-fade-in text-white p-2">
+    <div className="space-y-8 animate-fade-in text-white p-2 text-left">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Adaptive Ingestion Pipeline</h2>
-        <p className="text-sm text-zinc-400">Stream parsing engines directly into persistent database staging workspaces.</p>
+        <p className="text-sm text-zinc-400 mt-1">Stream parsing engines directly into persistent database staging workspaces.</p>
       </div>
 
       {commitSuccessMsg && (
         <div className="p-4 bg-emerald-500/10 text-emerald-400 text-sm border border-emerald-500/20 rounded-xl font-medium animate-fade-in shadow-lg">
-        {commitSuccessMsg}
+          {commitSuccessMsg}
         </div>
       )}
 
@@ -335,7 +335,6 @@ export default function StatementIngestView() {
               <div>Vault Decryption: <span className={responseMeta.decrypted ? "text-emerald-400 font-bold" : "text-zinc-500"}>{responseMeta.decrypted ? "PASSED (Unlocked via Vault)" : "NONE (No pass needed)"}</span></div>
               <div>Staged Rows: <span className="text-sky-400 font-bold">{responseMeta.count} records loaded</span></div>
               
-              {/* 🟢 Live Duplicates UI Badge */}
               <div className="pt-1.5 border-t border-zinc-800/60 mt-1 flex justify-between">
                 <span className="text-zinc-500">Stale Duplicates:</span>
                 <span className={`font-bold ${responseMeta.duplicateCount > 0 ? 'text-amber-400 animate-pulse' : 'text-zinc-400'}`}>
@@ -372,7 +371,7 @@ export default function StatementIngestView() {
                 {commitLoading ? (
                   <span>Saving Ledger Run...</span>
                 ) : isFileFullyStale ? (
-                  <span>箱️ Skip Upload (Stale)</span>
+                  <span>⏭️ Skip Upload (Stale)</span>
                 ) : isDoubleTrustOk ? (
                   <span>🔒 Save Reconciled Statement</span>
                 ) : (
@@ -387,36 +386,37 @@ export default function StatementIngestView() {
               No active statement line entries extracted into the workspace staging layer yet. Choose parameters and activate the parser engine.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-zinc-300 table-fixed">
+            <div className="overflow-x-auto w-full">
+              {/* Enforced table layout structural fix to support column alignment */}
+              <table className="w-full text-left text-xs text-zinc-300 table-fixed border-collapse" style={{ minWidth: "850px" }}>
                 <thead>
-                  <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-[11px]">
-                    <th className="pb-3 font-medium w-2/12">Txn Date</th>
-                    <th className="pb-3 font-medium w-4/12">Raw Statement Narration string</th>
-                    <th className="pb-3 font-medium text-right w-2/12">Debit</th>
-                    <th className="pb-3 font-medium text-right w-2/12">Credit</th>
-                    <th className="pb-3 font-medium text-right w-1/12 pr-2">Amount</th>
-                    <th className="pb-3 font-medium text-center w-1/12">Status</th>
+                  <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-[11px] uppercase tracking-wider">
+                    <th className="pb-3 font-semibold" style={{ width: "12%" }}>Txn Date</th>
+                    <th className="pb-3 font-semibold" style={{ width: "38%" }}>Narration Description</th>
+                    <th className="pb-3 font-semibold text-right text-red-400" style={{ width: "12%" }}>Debit (-)</th>
+                    <th className="pb-3 font-semibold text-right text-emerald-400" style={{ width: "12%" }}>Credit (+)</th>
+                    <th className="pb-3 font-semibold text-right text-cyan-400" style={{ width: "12%" }}>Balance</th>
+                    <th className="pb-3 font-semibold text-center text-zinc-400" style={{ width: "6%" }}>Hex</th>
+                    <th className="pb-3 font-semibold text-center" style={{ width: "8%" }}>Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/30 font-sans">
+                <tbody className="divide-y divide-zinc-800/40 font-sans">
                   {previewLines.map((line, index) => {
                     const isDuplicate = line.status === "DUPLICATE";
 
                     return (
                       <tr 
                         key={line.id || index} 
-                        className={`transition-colors vertical-align-top ${
+                        className={`transition-colors border-b border-zinc-800/30 ${
                           isDuplicate 
-                            ? 'bg-zinc-950/10 text-zinc-500 hover:bg-zinc-950/20 border-l-2 border-zinc-700' 
+                            ? 'bg-zinc-950/20 text-zinc-500 hover:bg-zinc-950/30 border-l-2 border-zinc-700' 
                             : 'hover:bg-zinc-950/40 text-zinc-300'
                         }`}
                         style={{ opacity: isDuplicate ? 0.65 : 1 }}
                       >
-                        <td className="py-3.5 font-mono text-zinc-400 align-top">{line.date}</td>
+                        <td className="py-3 font-mono text-zinc-400 align-top">{line.date}</td>
                         
-                        {/* DESCRIPTION CELL BADGE EXTRACTION DECK */}
-                        <td className="py-3.5 font-medium pr-4 align-top leading-relaxed text-[13px]">
+                        <td className="py-3 font-medium pr-4 align-top leading-relaxed text-[12px]">
                           <div className="flex flex-wrap items-center gap-1.5 mb-1">
                             {line.tran_type && (
                               <span className="px-1 py-0.5 bg-zinc-800 text-zinc-400 border border-zinc-700/50 font-mono text-[9px] rounded uppercase font-bold tracking-wider shadow-inner">
@@ -429,35 +429,31 @@ export default function StatementIngestView() {
                               </span>
                             )}
                           </div>
-                          <span className={`${isDuplicate ? 'text-zinc-500 line-through decoration-zinc-800/50' : 'text-zinc-200'}`}>
+                          <span className={isDuplicate ? 'text-zinc-600 line-through decoration-zinc-800/60' : 'text-zinc-200'}>
                             {line.description}
                           </span>
                         </td>
 
-                        <td className={`py-3.5 text-right font-mono font-bold align-top text-[13px] ${
-                          isDuplicate ? 'text-zinc-700/50' : 'text-red-400'
-                        }`}>
-                          {line.debit ? `₹${line.debit.toFixed(2)}` : <span className="text-zinc-700 opacity-40 font-normal">-</span>}
+                        <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-red-400'}`}>
+                          {line.debit ? `₹${line.debit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
-                        <td className={`py-3.5 text-right font-mono font-bold align-top text-[13px] ${
-                          isDuplicate ? 'text-zinc-700/50' : 'text-emerald-400'
-                        }`}>
-                          {line.credit ? `₹${line.credit.toFixed(2)}` : <span className="text-zinc-700 opacity-40 font-normal">-</span>}
+                        <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-emerald-400'}`}>
+                          {line.credit ? `₹${line.credit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
-                        <td className="py-3.5 text-right font-mono text-zinc-500 pr-2 align-top text-[11px]">
-                          {line.amount.toFixed(2)}
+                        <td className={`py-3 text-right font-mono font-bold align-top text-[13px] text-cyan-400/90`}>
+                          ₹{line.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
-                        <td className="py-3.5 text-right font-mono text-zinc-500 pr-2 align-top text-[11px]">
-                          {line.Hex ? `${line.Hex}` : <span className="text-zinc-700 opacity-40 font-normal">NIL</span>}
+                        <td className="py-3 text-center font-mono text-zinc-500 align-top text-[11px]">
+                          {line.Hex ? <span className="bg-zinc-950 px-1 py-0.5 rounded border border-zinc-800/80 text-zinc-400">{line.Hex}</span> : <span className="text-zinc-800 opacity-30">-</span>}
                         </td>
 
-                        <td className="py-3.5 text-center align-top">
+                        <td className="py-3 text-center align-top">
                           {isDuplicate ? (
-                            <span className="px-1.5 py-0.5 bg-zinc-800/60 text-zinc-400 border border-zinc-700/40 rounded font-mono text-[9px] font-bold inline-block uppercase tracking-wider shadow-inner" title="Skipped during save step">
-                              ⏭️ SKIPPED
+                            <span className="px-1.5 py-0.5 bg-zinc-800/80 text-zinc-500 border border-zinc-700/30 rounded font-mono text-[8px] font-bold inline-block uppercase tracking-wider">
+                              ⏭️ STALE
                             </span>
                           ) : (
-                            <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded font-mono text-[9px] font-bold inline-block uppercase tracking-wider">
+                            <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded font-mono text-[8px] font-bold inline-block uppercase tracking-wider">
                               ✅ NEW
                             </span>
                           )}
@@ -466,6 +462,49 @@ export default function StatementIngestView() {
                     );
                   })}
                 </tbody>
+
+                {/* ─── 🟢 INJECTED METRICS FOOTER ACCOUNT SUMMARY BLOCK ─── */}
+                <tfoot>
+                  {/* Row 1: Opening Balance Summary */}
+                  <tr className="bg-zinc-950/40 border-t border-zinc-800 text-[11px] font-mono text-zinc-400">
+                    <td colSpan={2} className="p-3 font-bold text-zinc-500 uppercase tracking-wide text-left">Statement Opening Summary</td>
+                    <td colSpan={3} className="p-3 text-right font-bold text-zinc-300 text-sm">
+                      ₹{opening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td colSpan={2} className="p-3"></td>
+                  </tr>
+
+                  {/* Row 2: Live Accumulated Transaction Volume Runs */}
+                  <tr className="bg-zinc-950/20 text-[11px] font-mono border-t border-zinc-800/50">
+                    <td colSpan={2} className="p-3 font-bold text-zinc-500 uppercase tracking-wide text-left">Total Segment Changes Vol ({previewLines.length} rows)</td>
+                    <td className="p-3 text-right font-bold text-red-400 text-xs">
+                      -₹{totalDebit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="p-3 text-right font-bold text-emerald-400 text-xs">
+                      +₹{totalCredit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td colSpan={3} className="p-3"></td>
+                  </tr>
+
+                  {/* Row 3: Final Closing Balance Comparison Deck */}
+                  <tr className="bg-zinc-950/60 border-t-2 border-zinc-800 text-[11px] font-mono">
+                    <td colSpan={2} className="p-3 font-bold text-zinc-400 uppercase tracking-wide text-left">Computed Closing Balance Run</td>
+                    <td colSpan={3} className="p-3 text-right font-bold text-cyan-400 text-sm">
+                      ₹{calculatedClosingValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td colSpan={2} className="p-3 text-center">
+                      {isBalanceVerified ? (
+                        <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] rounded font-bold uppercase tracking-wider">
+                          Verified
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[9px] rounded font-bold uppercase tracking-wider">
+                          Drift Warning
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}

@@ -2,9 +2,7 @@
 import csv
 import datetime
 import decimal
-import io
-import re
-import hashlib
+import json
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -19,7 +17,17 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
-from .parsers.utils import MatchWrapper, generate_row_fingerprint
+
+# from .parsers.utils import MatchWrapper, generate_row_fingerprint
+
+from rest_framework.views import APIView
+
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework import status
+
+# from .parsers.raw_extractor import extract_raw_preview
+import os
+from django.core.files.storage import default_storage
 
 
 from .models import (
@@ -33,12 +41,15 @@ from .models import (
     TransactionHeader,
     StatementStagingLine,
     StatementIngestRegistry,
+    UserStatementTemplate,
 )
 from .serializers import AccountSerializer, BankCredentialSerializer
 from .parsers.SBI_format import process_SBI_pdf_statement
 from .parsers.SIB_format import process_SIB_pdf_statement
 from .parsers.FED_format import process_FED_pdf_statement
 from .parsers.unified_csv_format import process_unified_csv_statement
+from .parsers.raw_extractor import extract_spatial_preview, match_statement_template
+from .parsers.universal_format import UniversalStatementIngestionProcessor
 
 User = get_user_model()
 
@@ -448,7 +459,7 @@ class BankCredentialViewSet(viewsets.ModelViewSet):
         serializer.save(user=target_user, password_vault=validated_vault)
 
 
-class StatementIngestRouterView(APIView):
+class StatementIngestRouterView_older1(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
@@ -823,3 +834,372 @@ class UpdateBankCredentialVaultView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+########### Template UI
+
+
+class AvailableTemplatesListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        templates = UserStatementTemplate.objects.all().order_by("template_name")
+        payload = []
+
+        for t in templates:
+            sig = t.header_signature or ""
+            is_universal = "UNIVERSAL_GEOMETRY" in sig
+
+            # Safely unpack the JSON metadata to serve the full mapping coordinates
+            meta = {}
+            if is_universal:
+                try:
+                    meta = json.loads(sig)
+                except Exception:
+                    pass
+
+            payload.append(
+                {
+                    "id": t.id,
+                    "template_name": t.template_name,
+                    "is_universal": is_universal,
+                    "matching_keyword": meta.get("matching_keyword", ""),
+                    "bounds": {
+                        "date_max": t.date_index,
+                        "value_date_max": t.narration_index,
+                        "particulars_max": t.amount_index,
+                        "trantype_max": t.debit_index,
+                        "cheque_max": t.credit_index,
+                        "withdrawals_max": meta.get("withdrawals_max", 0),
+                        "deposits_max": meta.get("deposits_max", 0),
+                        "balance_max": meta.get("balance_max", 0),
+                    },
+                }
+            )
+
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class StatementPreviewAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("file")
+        account_id = request.data.get("account_id")
+
+        if not uploaded_file or not account_id:
+            return Response(
+                {"error": "Required fields (file or account_id) missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # 🏛️ Pull the exact account and credentials profile from your DB tables
+            account = get_object_or_404(Account, id=account_id)
+            credential = BankCredential.objects.filter(account=account).first()
+
+            # Extract your database list matrix pool safely
+            password_pool = (
+                credential.password_vault
+                if credential and isinstance(credential.password_vault, list)
+                else []
+            )
+
+            # 🔥 Pass the memory buffer file stream straight to your utility
+            spatial_matrix = extract_spatial_preview(
+                uploaded_file, password_pool, max_rows=15
+            )
+
+            # 🟢 FIXED: Cleaned up structural logic verification checks safely
+            if (
+                spatial_matrix
+                and isinstance(spatial_matrix, list)
+                and len(spatial_matrix) > 0
+                and isinstance(spatial_matrix[0], list)
+                and len(spatial_matrix[0]) > 0
+            ):
+                first_token_text = spatial_matrix[0][0].get("text", "")
+
+                if (
+                    "❌ DECRYPTION FAILURE:" in first_token_text
+                    or "🔒 LOCKED:" in first_token_text
+                ):
+                    return Response(
+                        {"error": first_token_text},
+                        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    )
+
+            return Response(
+                {
+                    "status": "REQUIRES_MAPPING",
+                    "file_name": uploaded_file.name,
+                    "raw_matrix": spatial_matrix,  # Forwards coordinates matrix to React
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class StatementTemplateSaveAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        template_name = request.data.get("templateName")
+        account_id = request.data.get("accountId")
+        bounds_config = request.data.get("boundsConfig")
+        # 🟢 NEW: Capture a unique text keyword string identifying the layout from the request
+        matching_keyword = request.data.get("matchingKeyword", "").strip().upper()
+
+        if not template_name or not account_id or not bounds_config:
+            return Response(
+                {"error": "Required blueprint mapping metadata fields are missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            account = get_object_or_404(Account, id=account_id)
+
+            target_user = (
+                request.user
+                if request.user and not request.user.is_anonymous
+                else get_user_model().objects.first()
+            )
+
+            # Pack bounds AND layout validation keywords cleanly inside our JSON warehouse
+            extended_meta = {
+                "UNIVERSAL_GEOMETRY": True,
+                "matching_keyword": matching_keyword,  # 🟢 Saved right into the blueprint!
+                "withdrawals_max": int(bounds_config.get("withdrawals_max", 0)),
+                "deposits_max": int(bounds_config.get("deposits_max", 0)),
+                "balance_max": int(bounds_config.get("balance_max", 0)),
+                "indicator_max": int(bounds_config.get("indicator_max", 100)),
+            }
+
+            template, created = UserStatementTemplate.objects.update_or_create(
+                template_name=template_name.strip(),
+                defaults={
+                    "user": target_user,
+                    "date_index": int(bounds_config.get("date_max", 0)),
+                    "narration_index": int(bounds_config.get("value_date_max", 0)),
+                    "amount_index": int(bounds_config.get("particulars_max", 0)),
+                    "debit_index": int(bounds_config.get("trantype_max", 0)),
+                    "credit_index": int(bounds_config.get("cheque_max", 0)),
+                    "balance_index": 0,
+                    "header_signature": json.dumps(extended_meta),
+                    "has_separate_dr_cr_columns": True,
+                    "date_format": "%d-%m-%Y",
+                },
+            )
+
+            return Response(
+                {"status": "synchronized", "template_name": template.template_name},
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class StatementIngestRouterDynamicView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("file")
+        account_id = request.data.get("account_id")
+
+        if not uploaded_file or not account_id:
+            return Response(
+                {
+                    "error": "Missing required ingestion payload: file or account_id block."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # 🔍 STEP 1: Execute template matching selector rules safely
+            routing_match = match_statement_template(uploaded_file, account_id)
+
+            if routing_match["type"] == "UNKNOWN":
+                return Response(
+                    {
+                        "status": "REQUIRES_MAPPING",
+                        "message": "No registered schema model blueprint found for this statement signature layout.",
+                        "file_name": uploaded_file.name,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            # 📄 STEP 2: Handle Universal 9-Column Engine PDF layout parameters
+            if routing_match["type"] == "UNIVERSAL_PDF":
+                bounds = routing_match["bounds"]
+                template_model = routing_match["template"]
+
+                account = get_object_or_404(Account, id=account_id)
+
+                # Fetch account password pool credentials safely
+                credential = BankCredential.objects.filter(account=account).first()
+                password_pool = (
+                    credential.password_vault
+                    if credential and isinstance(credential.password_vault, list)
+                    else []
+                )
+
+                # Extract raw spatial matrix token items
+                spatial_matrix = extract_spatial_preview(
+                    uploaded_file, password_pool, max_rows=500
+                )
+
+                parsed_transactions = []
+
+                # Slicing loop: sort strings across the 9 universal zones
+                for row in spatial_matrix:
+                    # Initialize coordinate text segment buckets
+                    cols = {
+                        k: []
+                        for k in [
+                            "date",
+                            "v_date",
+                            "part",
+                            "type",
+                            "chq",
+                            "wth",
+                            "dep",
+                            "bal",
+                            "ind",
+                        ]
+                    }
+
+                    for token in row:
+                        x = token.get("x_pct", 0)
+                        txt = token.get("text", "").strip()
+                        if not txt:
+                            continue
+
+                        # 📐 UNIVERSAL 9-STAGE SLICING ROUTER
+                        # Valid bounds must be greater than zero. If set to 0, it skips right over them!
+                        if bounds["date_max"] > 0 and x <= bounds["date_max"]:
+                            cols["date"].append(txt)
+                        elif (
+                            bounds["value_date_max"] > 0
+                            and x <= bounds["value_date_max"]
+                        ):
+                            cols["v_date"].append(txt)
+                        elif (
+                            bounds["particulars_max"] > 0
+                            and x <= bounds["particulars_max"]
+                        ):
+                            cols["part"].append(txt)
+                        elif bounds["trantype_max"] > 0 and x <= bounds["trantype_max"]:
+                            cols["type"].append(txt)
+                        elif bounds["cheque_max"] > 0 and x <= bounds["cheque_max"]:
+                            cols["chq"].append(txt)
+                        elif (
+                            bounds["withdrawals_max"] > 0
+                            and x <= bounds["withdrawals_max"]
+                        ):
+                            cols["wth"].append(txt)
+                        elif bounds["deposits_max"] > 0 and x <= bounds["deposits_max"]:
+                            cols["dep"].append(txt)
+                        elif bounds["balance_max"] > 0 and x <= bounds["balance_max"]:
+                            cols["bal"].append(txt)
+                        else:
+                            # Catch-all bucket for trailing fields like Cr/Dr indicator flags
+                            cols["ind"].append(txt)
+
+                    final_date = " ".join(cols["date"]).strip()
+                    final_particulars = " ".join(cols["part"]).strip()
+
+                    # Bypass parsing empty spacing spacer lines
+                    if not final_date and not final_particulars:
+                        continue
+
+                    # Compile unified dictionary row layout payload matching all 9 spaces
+                    parsed_transactions.append(
+                        {
+                            "date": final_date,
+                            "value_date": " ".join(cols["v_date"]).strip(),
+                            "particulars": final_particulars,
+                            "type": " ".join(cols["type"]).strip(),
+                            "cheque_details": " ".join(cols["chq"]).strip(),
+                            "debit": " ".join(cols["wth"]).strip(),
+                            "credit": " ".join(cols["dep"]).strip(),
+                            "balance": " ".join(cols["bal"]).strip(),
+                            "indicator": " ".join(cols["ind"]).strip(),
+                        }
+                    )
+
+                return Response(
+                    {
+                        "status": "PARSED_SUCCESS",
+                        "parser_engine": "UNIVERSAL_GEOMETRIC_SLICER",
+                        "applied_template": template_model.template_name,
+                        "file_name": uploaded_file.name,
+                        "transactions": parsed_transactions,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            # 📂 STEP 3: Handle CSV spreadsheet ingestion
+            elif routing_match["type"] == "CSV":
+                return Response(
+                    {
+                        "status": "PARSED_SUCCESS",
+                        "parser_engine": "CSV_INDEX_READER",
+                        "applied_template": routing_match["template"].template_name,
+                        "transactions": [],
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        except Exception as e:
+            return Response(
+                {"error": f"Automated ledger ingest pipeline trace crash: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class StatementBulkIngestPipelineView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        # 🟢 Matches the frontend Form Key parameter tracking variables exactly
+        uploaded_file = request.FILES.get("statement_file")
+        account_id = request.data.get("account_id")
+
+        if not uploaded_file or not account_id:
+            return Response(
+                {
+                    "status": "ERROR",
+                    "message": "Required payload configuration data parameters are missing.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # 🟢 Instantiate service orchestrator block with NO row constraints
+            processor = UniversalStatementIngestionProcessor(uploaded_file, account_id)
+            result = processor.execute_full_parse()
+
+            if not result["success"]:
+                return Response(
+                    {"status": "ERROR", "message": result["error_message"]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Return the fully compiled double-trust ledger dataset array structure cleanly
+            return Response(result["data"], status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {
+                    "status": "ERROR",
+                    "message": f"Pipeline engine trace crash error: {str(e)}",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

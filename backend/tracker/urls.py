@@ -8,8 +8,13 @@ from .views import (
     BulkTransactionSyncView,
     BankViewSet,
     BankCredentialViewSet,
-    StatementIngestRouterView,
+    StatementIngestRouterView_older1,
     StatementStagingCommitView,
+    StatementPreviewAPIView,
+    StatementTemplateSaveAPIView,
+    StatementIngestRouterDynamicView,
+    AvailableTemplatesListView,
+    StatementBulkIngestPipelineView,
 )
 
 urlpatterns = [
@@ -65,14 +70,39 @@ urlpatterns = [
     ),
     path("transactions/sync/", BulkTransactionSyncView.as_view(), name="bulk-sync"),
     # 📂 Ingestion Router (File Drag & Drop Target Endpoint)
-    path(
-        "statement/ingest/",
-        StatementIngestRouterView.as_view(),
-        name="statement-upload",
-    ),
+    # path(
+    #     "statement/ingest/",
+    #     StatementIngestRouterView_older.as_view(),
+    #     name="statement-upload",
+    # ),
     path(
         "statement/commit-staging/",
         StatementStagingCommitView.as_view(),
         name="statement-ingest-stagging",
+    ),
+    path(
+        "statements/preview/",
+        StatementPreviewAPIView.as_view(),
+        name="statement_preview_api",
+    ),
+    path(
+        "statements/save-template/",
+        StatementTemplateSaveAPIView.as_view(),
+        name="save_template",
+    ),
+    path(
+        "statements/ingestDynamic/",
+        StatementIngestRouterDynamicView.as_view(),
+        name="statement-upload",
+    ),
+    path(
+        "statement/ingestbulk/",
+        StatementBulkIngestPipelineView.as_view(),
+        name="production-ingest",
+    ),
+    path(
+        "statements/available/",
+        AvailableTemplatesListView.as_view(),
+        name="available-templates",
     ),
 ]

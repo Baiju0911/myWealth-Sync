@@ -350,3 +350,37 @@ class StatementIngestRegistry(models.Model):
         if self.report_from_date and self.report_to_date:
             date_span = f" [{self.report_from_date} to {self.report_to_date}]"
         return f"Ingest {self.file_name}{date_span} -> Account: {self.account.name} ({self.ingested_at.date()})"
+
+
+class UserStatementTemplate(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    template_name = models.CharField(max_length=100, help_text="e.g., SIB_Savings_2026")
+
+    # A unique keyword found in the header row to identify this layout automatically next time
+    header_signature = models.CharField(
+        max_length=255, help_text="e.g., Particulars,Txn Date,Balance"
+    )
+
+    # Target zero-indexed column positions chosen by the user in the UI
+    date_index = models.IntegerField(default=0)
+    narration_index = models.IntegerField(default=1)
+    amount_index = models.IntegerField(
+        default=2
+    )  # Used if there's a single amount column
+    balance_index = models.IntegerField(
+        default=3
+    )  # Crucial for determining entry directions
+
+    # Advanced switches for layout variations
+    has_separate_dr_cr_columns = models.BooleanField(default=False)
+    debit_index = models.IntegerField(null=True, blank=True)
+    credit_index = models.IntegerField(null=True, blank=True)
+
+    date_format = models.CharField(
+        max_length=50, default="%d-%m-%Y"
+    )  # e.g., DD-MM-YYYY
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.template_name}"
