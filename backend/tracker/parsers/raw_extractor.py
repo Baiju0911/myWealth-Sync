@@ -192,11 +192,11 @@ def match_statement_template(uploaded_file, account_id):
                 ) as pdf:
                     if pdf.pages:
                         file_text_sample = (pdf.pages[0].extract_text() or "").upper()
-                        break  # Unlocked! Escape loop
+                        # 🟢 SAVE THE WINNER KEY
+                        unlocked_password = current_key
+                        break
             except Exception:
                 continue
-            finally:
-                uploaded_file.seek(0)
 
         # 🔍 PHASE 1: Scan for template blueprint matches via distinct string contexts
         for template in available_templates:
@@ -223,6 +223,7 @@ def match_statement_template(uploaded_file, account_id):
                     return {
                         "type": "UNIVERSAL_PDF",
                         "template": template,
+                        "unlocked_password": unlocked_password,
                         "bounds": {
                             "date_max": int(template.date_index or 0),
                             "value_date_max": int(template.narration_index or 0),

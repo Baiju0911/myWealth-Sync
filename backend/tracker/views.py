@@ -50,6 +50,7 @@ from .parsers.FED_format import process_FED_pdf_statement
 from .parsers.unified_csv_format import process_unified_csv_statement
 from .parsers.raw_extractor import extract_spatial_preview, match_statement_template
 from .parsers.universal_format import UniversalStatementIngestionProcessor
+from .parsers.utils import generate_row_fingerprint
 
 User = get_user_model()
 
@@ -546,9 +547,8 @@ class StatementIngestRouterView_older1(APIView):
 class StatementStagingCommitView(APIView):
     """
     🔒 CORE TRANSACTION COMMIT ENGINE (LEDGER CONNECTED):
-    Filters out duplicates in memory using centralized SHA-256 fingerprint strings,
-    executes an atomic bulk write directly into the master ledger table, and
-    saves incoming records EXACTLY as they were extracted by the parsing engine.
+    Natively computes deterministic SHA-256 fingerprint strings to neutralize
+    frontend mutations, drop duplicates, and perform transactional atomic writes.
     """
 
     permission_classes = [AllowAny]
@@ -576,6 +576,7 @@ class StatementStagingCommitView(APIView):
         account = get_object_or_404(Account, id=account_id)
         bank = account.bank
 
+        # Pull historical true 64-character signatures to check collisions
         existing_hashes = set(
             StatementStagingLine.objects.filter(account_id=account.id).values_list(
                 "row_identifier", flat=True
@@ -612,19 +613,26 @@ class StatementStagingCommitView(APIView):
         report_to_date = None
 
         if from_date_raw:
-            report_from_date = datetime.datetime.strptime(
-                from_date_raw.split("T")[0], "%Y-%m-%d"
-            ).date()
+            try:
+                report_from_date = datetime.datetime.strptime(
+                    from_date_raw.split("T")[0], "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                pass
         if to_date_raw:
-            report_to_date = datetime.datetime.strptime(
-                to_date_raw.split("T")[0], "%Y-%m-%d"
-            ).date()
+            try:
+                report_to_date = datetime.datetime.strptime(
+                    to_date_raw.split("T")[0], "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                pass
 
         production_tx_pool = []
         duplicate_skip_count = 0
 
         try:
             with transaction.atomic():
+                # ─── TABLE 1 WRITER: Ingest Registry Entry Header Record ───
                 registry_entry = StatementIngestRegistry.objects.create(
                     account=account,
                     file_name=file_name,
@@ -648,25 +656,18 @@ class StatementStagingCommitView(APIView):
                     ingested_at=timezone.now(),
                 )
 
-                # 🏁 STEP 2: LOOP AND BULK ASSIGN CHILD ROWS AS EXTRACTED NATIVELY
+                # ─── TABLE 2 WRITER: Atomic Child Row Generation Pass Loop ───
                 for index, item in enumerate(preview_dataset):
-                    # 🟢 TRUST INGESTION SIGNATURE: Pull the exact calculated preview hash directly
-                    row_hex = (
-                        item.get("id") or item.get("Hex") or item.get("row_identifier")
-                    )
-                    if not row_hex:
-                        raise ValueError(
-                            f"Missing row footprint signature identifier at index {index}"
-                        )
-
                     raw_amt = item.get("amount", 0.00)
                     amt_val = decimal.Decimal(
                         str(raw_amt if raw_amt is not None else 0.00)
                     )
 
-                    # 🟢 TRUST INGESTION BALANCES: Read directly from incoming payload props
                     raw_incoming_balance = (
-                        item.get("balance") or item.get("running_balance") or 0.00
+                        item.get("amount")
+                        or item.get("balance")
+                        or item.get("running_balance")
+                        or 0.00
                     )
                     bal_val = decimal.Decimal(
                         str(raw_incoming_balance).replace(",", "").strip()
@@ -700,7 +701,26 @@ class StatementStagingCommitView(APIView):
                     )
                     cheque_reference_id = item.get("cheque_ref") or None
 
-                    # 🛡️ GATEKEEPER DUPLICATE MATCH EVALUATION FILTER
+                    # ─── 🟢 HEXA HERO ZERO-TRUST NATIVE GENERATION pass ───
+                    # Re-calculates hash directly from validated data structures.
+                    # This neutralizes client payload mutation quirks completely!
+                    account = get_object_or_404(Account, id=account_id)
+                    bank = account.bank
+                    row_hex = generate_row_fingerprint(
+                        bank_id=bank.id,
+                        account_id=account.id,
+                        narration=pure_database_narration,
+                        cheque_ref=cheque_reference_id,
+                        amount=float(
+                            raw_cr if raw_cr else (raw_dr if raw_dr else 0.00)
+                        ),
+                        running_balance=float(raw_incoming_balance),
+                        debit=dr_val,
+                        credit=cr_val,
+                        date_str=str(tx_date),  # Standardized YYYY-MM-DD
+                    )
+
+                    # 🛡️ THE SECURITY PASS GATE: Evaluate calculated fingerprint matching database state bounds
                     if row_hex in existing_hashes or item.get("status") == "DUPLICATE":
                         duplicate_skip_count += 1
                         continue
@@ -717,15 +737,17 @@ class StatementStagingCommitView(APIView):
                         credit=cr_val,
                         bank_transaction_id=item.get("bank_transaction_id") or "",
                         cheque_ref_number=cheque_reference_id,
-                        row_identifier=row_hex,  # 🔒 Saves the exact hash displayed on preview screen
+                        row_identifier=row_hex,  # 🔒 Saves the true 64-character SHA-256 string
                         routing_status="COMMITTED",
                     )
                     production_tx_pool.append(staging_obj)
                     existing_hashes.add(row_hex)
 
+                # Execute atomic bulk create
                 if production_tx_pool:
                     StatementStagingLine.objects.bulk_create(production_tx_pool)
 
+                # Update the header metadata table record with the count of skipped rows
                 if duplicate_skip_count > 0:
                     registry_entry.skipped_duplicate_count = duplicate_skip_count
                     registry_entry.save(update_fields=["skipped_duplicate_count"])
