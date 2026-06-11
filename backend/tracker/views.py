@@ -1,3 +1,6 @@
+##########################
+
+
 # S:\_BaijSoft\myWealth-Sync\backend\tracker\views.py
 import csv
 import datetime
@@ -1187,10 +1190,15 @@ class StatementIngestRouterDynamicView(APIView):
 
 
 class StatementBulkIngestPipelineView(APIView):
+    """
+    🚀 HIGH-THROUGHPUT VOLUME INTERFACE:
+    Processes full multi-page document tokens directly using the unified core parser,
+    formatting payloads to satisfy strict client-side verification constraints.
+    """
+
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        # 🟢 Matches the frontend Form Key parameter tracking variables exactly
         uploaded_file = request.FILES.get("statement_file")
         account_id = request.data.get("account_id")
 
@@ -1204,7 +1212,6 @@ class StatementBulkIngestPipelineView(APIView):
             )
 
         try:
-            # 🟢 Instantiate service orchestrator block with NO row constraints
             processor = UniversalStatementIngestionProcessor(uploaded_file, account_id)
             result = processor.execute_full_parse()
 
@@ -1214,8 +1221,34 @@ class StatementBulkIngestPipelineView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Return the fully compiled double-trust ledger dataset array structure cleanly
-            return Response(result["data"], status=status.HTTP_200_OK)
+            # ─── 🟢 THE CRITICAL RESPONSE ALIGNMENT HANDSHAKE ───
+            # Explicitly injects 'status': 'SUCCESS' and maps fallback
+            # nested fields to keep your frontend conditional engine happy!
+            inner_data = result.get("data", {})
+
+            return Response(
+                {
+                    "status": "SUCCESS",  # ✨ This satisfies: if (res.data.status === 'SUCCESS')
+                    "preview_dataset": inner_data.get("preview_dataset", []),
+                    "total_debit": inner_data.get("total_debit", 0.0),
+                    "total_credit": inner_data.get("total_credit", 0.0),
+                    "opening_balance": inner_data.get("opening_balance", 0.0),
+                    "closing_balance": inner_data.get("closing_balance", 0.0),
+                    "count": inner_data.get("count", 0),
+                    # 🛡️ Fallback data block layer for flexible frontend extraction
+                    "data": {
+                        "preview_dataset": inner_data.get("preview_dataset", []),
+                        "file_type": "UNIVERSAL_PDF",
+                        "decrypted": True,
+                        "count": inner_data.get("count", 0),
+                        "opening_balance": inner_data.get("opening_balance", 0.0),
+                        "closing_balance": inner_data.get("closing_balance", 0.0),
+                        "total_debit": inner_data.get("total_debit", 0.0),
+                        "total_credit": inner_data.get("total_credit", 0.0),
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except Exception as e:
             return Response(

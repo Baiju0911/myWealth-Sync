@@ -135,8 +135,51 @@ class UniversalStatementIngestionProcessor:
             "power of attorney",
             "last transaction date and time appearing",
             "*---end",
+            "statement summary",
+            # "brought forward",
+            # "dr count",
+            # "cr count",
+            "total debits",
+            "total credits",
+            # "letter of authority",
+            # "power of attorney",
         ]
         return any(indicator in row_text_lower for indicator in noise_indicators)
+
+    @staticmethod
+    def _safe_float(value):
+        try:
+            if not value:
+                return None
+            # Strip anything that isn't a number or decimal point
+            clean_str = re.sub(r"[^\d.-]", "", value.replace(",", ""))
+            return float(clean_str) if clean_str else None
+        except:
+            return None
+
+    def _finalize_txn(self, txn, bank_id, existing_hashes):
+        """
+        Calculates the unique cryptographic row fingerprint, running dupe-checking
+        subroutines, and flags the transaction status before committing to the dataset.
+        """
+        amount_val = float(
+            (txn["credit"] or 0.0) if txn["credit"] else (txn["debit"] or 0.0)
+        )
+
+        txn["Hex"] = generate_row_fingerprint(
+            bank_id=bank_id,
+            account_id=self.account_id,
+            narration=txn["description"],
+            cheque_ref="",
+            amount=amount_val,
+            running_balance=float(txn["amount"]),
+            debit=txn.get("debit"),
+            credit=txn.get("credit"),
+            date_str=str(txn["date"]),
+        )
+
+        txn["status"] = "DUPLICATE" if txn["Hex"] in existing_hashes else "NEW"
+        return txn
 
     def execute_full_parse(self):
         routing_match = match_statement_template(self.uploaded_file, self.account_id)
@@ -160,7 +203,6 @@ class UniversalStatementIngestionProcessor:
             "withdrawals_max": int(raw_bounds.get("withdrawals_max") or 0),
             "deposits_max": int(raw_bounds.get("deposits_max") or 0),
             "balance_max": int(raw_bounds.get("balance_max") or 0),
-            "indicator_max": int(raw_bounds.get("indicator_max") or 100),
         }
 
         preview_dataset = []
@@ -169,14 +211,10 @@ class UniversalStatementIngestionProcessor:
         debit_line_count = 0
         credit_line_count = 0
         duplicate_count = 0
-
         pdf_opening_balance = 0.0
         pdf_opening_captured = False
-
-        # Extract parent relation model properties safely to pass down to SSOT hasher
         target_bank_id = self.account.bank_id if hasattr(self.account, "bank_id") else 1
 
-        # ─── 🟢 DYNAMIC LIVE PREVIEW DUPLICATE DETECTOR INDICES ───
         existing_hashes = set(
             StatementStagingLine.objects.filter(account_id=self.account_id).values_list(
                 "row_identifier", flat=True
@@ -184,48 +222,55 @@ class UniversalStatementIngestionProcessor:
         )
 
         active_txn = None
-
-        print(
-            f"⚙️ [ENGINE TRACKING RUN] Running multi-line memory buffer parse compilation with Hexa Hero..."
-        )
         self.uploaded_file.seek(0)
 
         try:
             with pdfplumber.open(
-                self.uploaded_file,
-                password=verified_password if verified_password else None,
+                self.uploaded_file, password=verified_password or None
             ) as pdf:
-                for page_idx, page in enumerate(pdf.pages):
-                    words = page.extract_words()
-                    if not words:
-                        continue
-
+                for page in pdf.pages:
                     lines_dict = {}
-                    for w in words:
-                        top_rounded = round(float(w["top"]), 1)
-                        if top_rounded not in lines_dict:
-                            lines_dict[top_rounded] = []
-                        lines_dict[top_rounded].append(
-                            {
-                                "text": w["text"],
-                                "x_pct": (float(w["x0"]) / float(page.width)) * 100,
-                            }
-                        )
+                    tolerance = 5
 
-                    sorted_vertical_keys = sorted(lines_dict.keys())
+                    # ─── VERTICAL SNAPPING ALGORITHM REGION ───
+                    for w in page.extract_words():
+                        w_top = float(w["top"])
+                        w_text = w["text"]
+                        w_x_pct = (float(w["x0"]) / float(page.width)) * 100
 
-                    for v_pos in sorted_vertical_keys:
+                        # Find an existing horizontal lane group within the pixel tolerance
+                        matched_lane = None
+                        for assigned_top in lines_dict.keys():
+                            if abs(w_top - assigned_top) <= tolerance:
+                                matched_lane = assigned_top
+                                break
+
+                        if matched_lane is not None:
+                            lines_dict[matched_lane].append(
+                                {"text": w_text, "x_pct": w_x_pct}
+                            )
+                        else:
+                            # Create a brand new horizontal lane anchor key entry point
+                            lines_dict[round(w_top, 1)] = [
+                                {"text": w_text, "x_pct": w_x_pct}
+                            ]
+
+                    # ─── ROW PROCESSING STREAM REGION ───
+                    for v_pos in sorted(lines_dict.keys()):
                         row_tokens = sorted(lines_dict[v_pos], key=lambda t: t["x_pct"])
-
-                        # ─── 🟢 STEP 1: INTERCEPT RAW STRING NOISE BEFORE FILLING COLUMNS ───
                         raw_line_text = " ".join(
                             [t["text"] for t in row_tokens]
                         ).strip()
 
+                        # --- DEBUG GATEWAY DISPLAY ---
+                        print(
+                            f"DEBUG: Processing row: '{raw_line_text}' | Tokens found: {len(row_tokens)}"
+                        )
+
                         if self._is_header_row(
                             raw_line_text
                         ) or self._is_metadata_noise(raw_line_text):
-                            continue  # 🛡️ Hard-drop footer strings instantly! Bypasses Case 1 & Case 2 completely.
+                            continue
 
                         cols = {
                             k: []
@@ -238,14 +283,14 @@ class UniversalStatementIngestionProcessor:
                                 "wth",
                                 "dep",
                                 "bal",
-                                "ind",
                             ]
                         }
 
                         for token in row_tokens:
-                            x = token["x_pct"]
-                            txt = token["text"].strip()
+                            x, txt = token["x_pct"], token["text"].strip()
                             if not txt:
+                                continue
+                            if len(txt) > 25 and ("," in txt or " " in txt):
                                 continue
 
                             if bounds["date_max"] > 0 and x <= bounds["date_max"]:
@@ -281,210 +326,114 @@ class UniversalStatementIngestionProcessor:
                                 bounds["balance_max"] > 0 and x <= bounds["balance_max"]
                             ):
                                 cols["bal"].append(txt)
-                            else:
-                                cols["ind"].append(txt)
 
-                        f_date = " ".join(cols["date"]).strip()
+                        # 🟢 CRITICAL ARCHITECTURAL REFIX: Isolate strictly the first date token item
+                        f_date = cols["date"][0].strip() if cols["date"] else ""
                         f_part = " ".join(cols["part"]).strip()
-                        f_vdate = " ".join(cols["v_date"]).strip() or None
-                        f_type = " ".join(cols["type"]).strip() or None
-                        f_chq = " ".join(cols["chq"]).strip() or None
 
-                        raw_debit = (
-                            " ".join(cols["wth"])
-                            .replace(",", "")
-                            .replace(" ", "")
-                            .strip()
-                        )
-                        raw_credit = (
-                            " ".join(cols["dep"])
-                            .replace(",", "")
-                            .replace(" ", "")
-                            .strip()
-                        )
-                        raw_balance = (
-                            " ".join(cols["bal"])
-                            .replace(",", "")
-                            .replace(" ", "")
-                            .strip()
-                        )
+                        raw_debit = "".join(cols["wth"])
+                        raw_credit = "".join(cols["dep"])
+                        raw_bal = "".join(cols["bal"])
 
-                        val_debit, val_credit, val_balance = None, None, 0.0
-                        try:
-                            val_debit = float(raw_debit) if raw_debit else None
-                        except ValueError:
-                            pass
-                        try:
-                            val_credit = float(raw_credit) if raw_credit else None
-                        except ValueError:
-                            pass
-                        try:
-                            val_balance = float(raw_balance) if raw_balance else 0.0
-                        except ValueError:
-                            pass
+                        val_debit = self._safe_float(raw_debit)
+                        val_credit = self._safe_float(raw_credit)
+                        val_bal = self._safe_float(raw_bal) or 0.0
 
-                        combined_context = f"{f_date} {f_part}".strip()
-                        if self._is_header_row(
-                            combined_context
-                        ) or self._is_metadata_noise(combined_context):
-                            continue
-
-                        f_part_upper = f_part.upper()
-                        if (
-                            "B/F" in f_part_upper
-                            or "BROUGHT FORWARD" in f_part_upper
-                            or "OPENING BALANCE" in f_part_upper
-                        ):
+                        # Handle Opening Balance Sequences
+                        if any(k in f_part.upper() for k in ["B/F", "OPENING BALANCE"]):
                             if not pdf_opening_captured:
-                                pdf_opening_balance = val_balance
-                                pdf_opening_captured = True
+                                pdf_opening_balance, pdf_opening_captured = (
+                                    val_bal,
+                                    True,
+                                )
                             continue
 
-                        # ─── CASE 1: START OF A NEW ROW (Valid Date Found) ───
+                        # Case 1: Start of a New Transaction Record Row
+                        # ─── CASE 1: START OF A NEW TRANSACTION RECORD ROW ───
                         if re.match(r"^\d{2}-\d{2}-\d{4}$", f_date):
-                            if (
-                                active_txn
-                                and isinstance(active_txn, dict)
-                                and active_txn.get("date")
-                            ):
-                                # 🟢 FIX: Use the standardized YYYY-MM-DD 'date' field for hashing alignment
-                                row_hex = generate_row_fingerprint(
-                                    bank_id=target_bank_id,
-                                    account_id=self.account_id,
-                                    narration=active_txn["description"],
-                                    cheque_ref=active_txn["cheque_ref"],
-                                    amount=float(
-                                        (active_txn["credit"] or 0.0)
-                                        if active_txn["credit"]
-                                        else (active_txn["debit"] or 0.0)
-                                    ),
-                                    running_balance=float(active_txn["amount"]),
-                                    debit=active_txn["debit"],
-                                    credit=active_txn["credit"],
-                                    date_str=str(
-                                        active_txn["date"]
-                                    ),  # 🚀 Changed from display_date to date
-                                )
-                                active_txn["Hex"] = row_hex
+                            if val_debit or val_credit:
+                                if active_txn and (
+                                    active_txn.get("debit") or active_txn.get("credit")
+                                ):
+                                    # Finalize and capture the state output directly
+                                    finalized = self._finalize_txn(
+                                        active_txn, target_bank_id, existing_hashes
+                                    )
+                                    preview_dataset.append(finalized)
+                                    if finalized.get("status") == "DUPLICATE":
+                                        duplicate_count += 1
 
-                                if row_hex in existing_hashes:
-                                    active_txn["status"] = "DUPLICATE"
-                                    duplicate_count += 1
+                                active_txn = {
+                                    "date": f"{f_date[6:]}-{f_date[3:5]}-{f_date[:2]}",
+                                    "description": f_part,
+                                    "debit": val_debit,
+                                    "credit": val_credit,
+                                    "amount": val_bal,
+                                }
+                                if val_debit:
+                                    total_debit += val_debit
+                                    debit_line_count += 1
+                                if val_credit:
+                                    total_credit += val_credit
+                                    credit_line_count += 1
+                            else:
+                                # Date matched but no transaction values found: skip tracking noise row
+                                active_txn = None
 
-                                preview_dataset.append(active_txn)
+                        # ─── CASE 2: MULTI-LINE NARRATIVE DESCRIPTION CONTINUATION ───
+                        elif active_txn and f_part:
+                            # 🛡️ THE UNIVERSAL FINANCIAL ISOLATION SHIELD:
+                            # If a line has no date, but has numeric transactional values, it's
+                            # a footer summary summary deck block—NOT a narrative continuation.
+                            if val_debit or val_credit:
+                                if active_txn.get("debit") or active_txn.get("credit"):
+                                    finalized = self._finalize_txn(
+                                        active_txn, target_bank_id, existing_hashes
+                                    )
+                                    preview_dataset.append(finalized)
+                                    if finalized.get("status") == "DUPLICATE":
+                                        duplicate_count += 1
+                                active_txn = None  # Instantly break memory buffer tracking connection
+                                continue
 
-                            # ISO transformation for standard DB DateField validation
-                            d_parts = f_date.split("-")
-                            db_date_format = f"{d_parts[2]}-{d_parts[1]}-{d_parts[0]}"
+                            # Safe narration text string line. Stitch it!
+                            active_txn["description"] += f" {f_part}"
 
-                            db_vdate_format = None
-                            if f_vdate and re.match(r"^\d{2}-\d{2}-\d{4}$", f_vdate):
-                                vd_parts = f_vdate.split("-")
-                                db_vdate_format = (
-                                    f"{vd_parts[2]}-{vd_parts[1]}-{vd_parts[0]}"
-                                )
-
-                            active_txn = {
-                                "id": get_random_string(8),
-                                "date": db_date_format,  # 🚀 Standard YYYY-MM-DD
-                                "display_date": f_date,
-                                "value_date": db_vdate_format or f_vdate,
-                                "description": f_part,
-                                "tran_type": f_type,
-                                "cheque_ref": f_chq,
-                                "debit": val_debit,
-                                "credit": val_credit,
-                                "amount": val_balance,
-                                "status": "NEW",
-                                "Hex": "",
-                            }
-
-                            if val_debit:
-                                total_debit += val_debit
-                                debit_line_count += 1
-                            if val_credit:
-                                total_credit += val_credit
-                                credit_line_count += 1
-                            continue
-
-                        # ─── CASE 2: MULTI-LINE DESCRIPTION WRAPPER TEXT (No Date) ───
-                        if active_txn and isinstance(active_txn, dict) and f_part:
-                            active_txn["description"] = (
-                                f"{active_txn['description']} {f_part}".strip()
-                            )
+                            if val_bal:
+                                active_txn["amount"] = val_bal
 
                             if val_debit and not active_txn.get("debit"):
                                 active_txn["debit"] = val_debit
                                 total_debit += val_debit
                                 debit_line_count += 1
+
                             if val_credit and not active_txn.get("credit"):
                                 active_txn["credit"] = val_credit
                                 total_credit += val_credit
                                 credit_line_count += 1
 
-                            if val_balance:
-                                active_txn["amount"] = val_balance
-
-                # ─── SAFE LOOP EXIT AGGREGATION: Final Row Signature Assignment ───
-                if (
-                    active_txn
-                    and isinstance(active_txn, dict)
-                    and active_txn.get("date")
-                ):
-                    row_hex = generate_row_fingerprint(
-                        bank_id=target_bank_id,
-                        account_id=self.account_id,
-                        narration=active_txn["description"],
-                        cheque_ref=active_txn["cheque_ref"],
-                        amount=float(
-                            (active_txn["credit"] or 0.0)
-                            if active_txn["credit"]
-                            else (active_txn["debit"] or 0.0)
-                        ),
-                        running_balance=float(active_txn["amount"]),
-                        debit=active_txn["debit"],
-                        credit=active_txn["credit"],
-                        date_str=str(
-                            active_txn["date"]
-                        ),  # 🚀 Changed from display_date to date
+                # ─── LOOP EXIT: APPEND FINAL DANGLING BUFFERED TRANSACTION SAFELY ───
+                if active_txn and (active_txn.get("debit") or active_txn.get("credit")):
+                    finalized = self._finalize_txn(
+                        active_txn, target_bank_id, existing_hashes
                     )
-                    active_txn["Hex"] = row_hex
-
-                    if row_hex in existing_hashes:
-                        active_txn["status"] = "DUPLICATE"
+                    preview_dataset.append(finalized)
+                    if finalized.get("status") == "DUPLICATE":
                         duplicate_count += 1
 
-                    preview_dataset.append(active_txn)
-
         except Exception as e:
-            print(f"❌ CRITICAL PARSING LOOP FAILURE TRACE: {str(e)}")
-            return {
-                "success": False,
-                "error_message": f"Core stream processing crash: {str(e)}",
-            }
-
-        self.uploaded_file.seek(0)
-        print(
-            f"🏁 [PIPELINE OUTPUT SUMMARY] Packed {len(preview_dataset)} immaculate transaction records with deterministic hex fingerprinting."
-        )
-
-        pdf_closing_balance = pdf_opening_balance + total_credit - total_debit
+            return {"success": False, "error_message": str(e)}
 
         return {
             "success": True,
             "data": {
-                "status": "SUCCESS",
-                "file_type": template_model.template_name,
-                "decrypted": bool(verified_password),
-                "count": len(preview_dataset),
-                "opening_balance": pdf_opening_balance,
-                "closing_balance": pdf_closing_balance,
-                "total_debit": total_debit,
-                "total_credit": total_credit,
-                "raw_match_count": len(preview_dataset),
-                "debit_line_count": debit_line_count,
-                "credit_line_count": credit_line_count,
-                "duplicate_count": duplicate_count,
                 "preview_dataset": preview_dataset,
+                "total_debit": round(total_debit, 2),
+                "total_credit": round(total_credit, 2),
+                "opening_balance": round(pdf_opening_balance, 2),
+                "closing_balance": round(
+                    pdf_opening_balance + total_credit - total_debit, 2
+                ),
+                "count": len(preview_dataset),
             },
         }

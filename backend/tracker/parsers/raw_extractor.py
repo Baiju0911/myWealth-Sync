@@ -294,53 +294,42 @@ def match_statement_template(uploaded_file, account_id):
 
 # ─── 🟢 INJECTED SERVICE HELPER METHOD CORE ───
 def extract_raw_text_stream(uploaded_file, filename, password_pool, account_name):
-    """
-    Helper function extracting string content from multi-page PDFs or CSV entries.
-    Iterates over decryption vault parameters dynamically to unlock encrypted binaries.
-    """
     was_encrypted = False
     raw_text_stream = ""
+    uploaded_file.seek(0)
 
     if filename.lower().endswith(".pdf"):
-        uploaded_file.seek(0)
-        pdf_bytes = io.BytesIO(uploaded_file.read())
-        reader = PdfReader(pdf_bytes)
-
-        if reader.is_encrypted:
+        # Try without password first
+        try:
+            with pdfplumber.open(uploaded_file) as pdf:
+                raw_text_stream = "\n".join(
+                    [page.extract_text() or "" for page in pdf.pages]
+                )
+        except Exception:
+            # If it fails, try the password vault
             was_encrypted = True
             if not password_pool:
                 raise PermissionError(
-                    f"PDF is encrypted, but no password vault configured for {account_name}."
+                    f"PDF encrypted for {account_name}, no vault keys."
                 )
 
             decryption_successful = False
-            for current_passphrase in password_pool:
+            for key in password_pool:
                 try:
-                    if reader.decrypt(str(current_passphrase).strip()):
-                        decryption_successful = True
-                        print(
-                            "🔓 [VAULT UNLOCKED] Clean match found using password variant indicator."
+                    with pdfplumber.open(uploaded_file, password=str(key)) as pdf:
+                        raw_text_stream = "\n".join(
+                            [page.extract_text() or "" for page in pdf.pages]
                         )
+                        decryption_successful = True
                         break
-                except Exception:
+                except:
                     continue
 
             if not decryption_successful:
-                raise LookupError(
-                    f"Tried {len(password_pool)} historical keys, but all variants were rejected."
-                )
-
-        all_pages_text = [
-            page.extract_text() for page in reader.pages if page.extract_text()
-        ]
-        raw_text_stream = "\n".join(all_pages_text)
-        uploaded_file.seek(0)
+                raise LookupError("All provided keys failed decryption.")
     else:
-        uploaded_file.seek(0)
-        file_stream = io.StringIO(uploaded_file.read().decode("utf-8"), newline=None)
-        csv_reader = csv.reader(file_stream)
-        csv_lines = [" ".join(row) for row in csv_reader if row]
-        raw_text_stream = "\n".join(csv_lines)
-        uploaded_file.seek(0)
+        # CSV Handling
+        raw_text_stream = uploaded_file.read().decode("utf-8")
 
+    uploaded_file.seek(0)
     return raw_text_stream, was_encrypted
