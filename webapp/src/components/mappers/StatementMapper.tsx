@@ -101,13 +101,13 @@ export default function StatementMapper() {
       return {
         date: fDate,
         vDate: fVDate,
-        particulars: fPart,
+        narration_description: fPart, // 🟢 UNIFIED
         type: cols.type.join(" ").trim(),
         chqRef: cols.chq.join(" ").trim(),
-        debit: cols.wth.join(" ").trim(),
-        credit: cols.dep.join(" ").trim(),
+        debit: cols.wth.join(" ").trim(),   // 🟢 UNIFIED
+        credit: cols.dep.join(" ").trim(),  // 🟢 UNIFIED
         balance: cols.bal.join(" ").trim(),
-        indicator: cols.ind.join(" ").trim()
+        status: cols.ind.join(" ").trim()  // 🟢 UNIFIED
       };
     }).filter(Boolean);
 
@@ -243,7 +243,7 @@ export default function StatementMapper() {
             <td style={{ width: '33%', verticalAlign: 'top', padding: '0 16px 0 0' }}>
               <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl space-y-3.5 h-full">
                 
-                {/* 🛠️ Template Workspace Mode Selector dropdown card element */}
+                {/* Workspace Mode Selector */}
                 <div className="bg-zinc-950/50 p-3 rounded-lg border border-zinc-800 space-y-1.5">
                   <label className="block text-[11px] font-bold text-emerald-400 uppercase tracking-wider">🛠️ Workspace Mode</label>
                   <select
@@ -315,7 +315,8 @@ export default function StatementMapper() {
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex justify-between text-[11px] font-mono text-purple-400"><span>3. Particulars Bound</span><span className="font-bold">{particularsBounds}%</span></div>
+                      {/* ─── 🟢 SLIDER LABEL UNIFIED ─── */}
+                      <div className="flex justify-between text-[11px] font-mono text-purple-400"><span>3. Narration Description Bound</span><span className="font-bold">{particularsBounds}%</span></div>
                       <input type="range" min="0" max="65" value={particularsBounds} onChange={(e) => setParticularsBounds(Number(e.target.value))} className="w-full accent-purple-500 h-1" />
                     </div>
 
@@ -325,17 +326,19 @@ export default function StatementMapper() {
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex justify-between text-[11px] font-mono text-sky-400"><span>5. Cheque Details Bound</span><span className="font-bold">{chequeBounds}%</span></div>
+                      <div className="flex justify-between text-[11px] font-mono text-sky-400"><span>5. Chq/Ref Bound</span><span className="font-bold">{chequeBounds}%</span></div>
                       <input type="range" min="0" max="75" value={chequeBounds} onChange={(e) => setChequeBounds(Number(e.target.value))} className="w-full accent-sky-500 h-1" />
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex justify-between text-[11px] font-mono text-red-400"><span>6. Withdrawals (Dr) Bound</span><span className="font-bold">{withdrawalsBounds}%</span></div>
+                      {/* ─── 🟢 SLIDER LABEL UNIFIED ─── */}
+                      <div className="flex justify-between text-[11px] font-mono text-red-400"><span>6. Debit (-) Bound</span><span className="font-bold">{withdrawalsBounds}%</span></div>
                       <input type="range" min="0" max="86" value={withdrawalsBounds} onChange={(e) => setWithdrawalsBounds(Number(e.target.value))} className="w-full accent-red-500 h-1" />
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex justify-between text-[11px] font-mono text-emerald-400"><span>7. Deposits (Cr) Bound</span><span className="font-bold">{depositsBounds}%</span></div>
+                      {/* ─── 🟢 SLIDER LABEL UNIFIED ─── */}
+                      <div className="flex justify-between text-[11px] font-mono text-emerald-400"><span>7. Credit (+) Bound</span><span className="font-bold">{depositsBounds}%</span></div>
                       <input type="range" min="0" max="93" value={depositsBounds} onChange={(e) => setDepositsBounds(Number(e.target.value))} className="w-full accent-emerald-500 h-1" />
                     </div>
 
@@ -429,7 +432,7 @@ export default function StatementMapper() {
         </tbody>
       </table>
 
-      {/* 🟢 RE-ENGINEERED VIEWPORT: Reads directly from computedTransactions with zero reload overhead */}
+      {/* ─── 🟢 UNIFIED SIMULATION GRID VIEWPORT HEADERS & CELLS ─── */}
       {computedTransactions.length > 0 && !loading && (
         <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl space-y-3 w-full">
           <div>
@@ -443,15 +446,15 @@ export default function StatementMapper() {
             <table className="text-left text-xs font-mono table-fixed border-collapse" style={{ width: "1200px", minWidth: "1200px" }}>
               <thead>
                 <tr className="border-b border-zinc-800 text-zinc-500 bg-zinc-900/40 text-[10px] uppercase font-bold tracking-wider">
-                  <th className="p-2 border-r border-zinc-800/60 text-blue-400" style={{ width: "105px" }}>Date</th>
+                  <th className="p-2 border-r border-zinc-800/60 text-blue-400" style={{ width: "105px" }}>Txn Date</th>
                   <th className="p-2 border-r border-zinc-800/60 text-orange-400" style={{ width: "105px" }}>Val Date</th>
-                  <th className="p-2 border-r border-zinc-800/60 text-purple-400" style={{ width: "420px" }}>Particulars Narration</th>
+                  <th className="p-2 border-r border-zinc-800/60 text-purple-400" style={{ width: "420px" }}>Narration Description</th>
                   <th className="p-2 border-r border-zinc-800/60 text-indigo-400 text-center" style={{ width: "80px" }}>Type</th>
                   <th className="p-2 border-r border-zinc-800/60 text-sky-400" style={{ width: "130px" }}>Chq/Ref</th>
-                  <th className="p-2 border-r border-zinc-800/60 text-right text-red-400" style={{ width: "115px" }}>Withdrawals (-)</th>
-                  <th className="p-2 border-r border-zinc-800/60 text-right text-emerald-400" style={{ width: "115px" }}>Deposits (+)</th>
+                  <th className="p-2 border-r border-zinc-800/60 text-right text-red-400" style={{ width: "115px" }}>Debit (-)</th>
+                  <th className="p-2 border-r border-zinc-800/60 text-right text-emerald-400" style={{ width: "115px" }}>Credit (+)</th>
                   <th className="p-2 border-r border-zinc-800/60 text-right text-cyan-400" style={{ width: "115px" }}>Balance</th>
-                  <th className="p-2 text-zinc-400 text-center" style={{ width: "45px" }}>Ind</th>
+                  <th className="p-2 text-zinc-400 text-center" style={{ width: "45px" }}>Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800 text-zinc-300">
@@ -459,7 +462,7 @@ export default function StatementMapper() {
                   <tr key={rowIndex} className="hover:bg-zinc-900/40 transition-colors border-b border-zinc-800/50">
                     <td className="p-2 border-r border-blue-500/20 text-blue-300 bg-blue-950/5">{renderCell(tx.date)}</td>
                     <td className="p-2 border-r border-orange-500/20 text-orange-300 bg-orange-950/5">{renderCell(tx.vDate)}</td>
-                    <td className="p-2 border-r border-purple-500/20 text-zinc-100 truncate">{renderCell(tx.particulars, false, "text-zinc-200")}</td>
+                    <td className="p-2 border-r border-purple-500/20 text-zinc-100 truncate">{renderCell(tx.narration_description, false, "text-zinc-200")}</td>
                     <td className="p-2 border-r border-indigo-500/20 text-center bg-indigo-950/5" style={{ textAlign: 'center' }}>
                       {tx.type ? <span className="inline-block px-1 py-0.5 text-[8px] bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 rounded font-bold uppercase">{tx.type}</span> : renderCell("")}
                     </td>
@@ -467,7 +470,7 @@ export default function StatementMapper() {
                     <td className="p-2 border-r border-red-500/20 bg-red-950/5" style={{ textAlign: 'right' }}>{renderCell(tx.debit, true, "text-red-400 font-bold")}</td>
                     <td className="p-2 border-r border-emerald-500/20 bg-emerald-950/5" style={{ textAlign: 'right' }}>{renderCell(tx.credit, true, "text-emerald-400 font-bold")}</td>
                     <td className="p-2 border-r border-cyan-500/20 bg-cyan-950/5" style={{ textAlign: 'right' }}>{renderCell(tx.balance, true, "text-cyan-300 font-bold")}</td>
-                    <td className="p-1 text-center font-bold text-zinc-400" style={{ textAlign: 'center' }}>{tx.indicator || '-'}</td>
+                    <td className="p-1 text-center font-bold text-zinc-400" style={{ textAlign: 'center' }}>{tx.status || '-'}</td>
                   </tr>
                 ))}
               </tbody>

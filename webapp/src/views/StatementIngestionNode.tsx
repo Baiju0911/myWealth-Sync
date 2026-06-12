@@ -7,19 +7,32 @@ import type { DragEvent } from 'react';
 interface ParsedTxnRow {
   date: string;
   value_date: string;
-  particulars: string;
+  narration_description: string; 
   type: string;
-  cheque_details: string;
-  debit: string;
-  credit: string;
+  chq_ref: string;               
+  debit: string;                 
+  credit: string;                
   balance: string;
-  indicator: string;
+  status: string;                
 }
 
 interface TemplateMetadata {
   id: number;
   template_name: string;
   is_universal: boolean;
+}
+
+// ─── 🟢 UNIFIED METRIC OBJECT INTERFACE ───
+interface AuditSummaryDeck {
+  calculated_opening: number;
+  calculated_debit: number;
+  calculated_credit: number;
+  calculated_closing: number;
+  document_opening: number | null;
+  document_debit: number | null;
+  document_credit: number | null;
+  document_closing: number | null;
+  audit_passed: boolean;
 }
 
 interface IngestionNodeProps {
@@ -33,7 +46,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
   const [loading, setLoading] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   
-  // 🟢 NEW: Active blueprint metadata array pools
   const [availableTemplates, setAvailableTemplates] = useState<TemplateMetadata[]>([]);
   const [forcedTemplateId, setForcedTemplateId] = useState<string>('');
 
@@ -41,9 +53,13 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
   const [statusMode, setStatusMode] = useState<'IDLE' | 'PARSED_SUCCESS' | 'REQUIRES_MAPPING' | 'ERROR'>('IDLE');
   const [appliedTemplate, setAppliedTemplate] = useState<string>('');
   const [transactions, setTransactions] = useState<ParsedTxnRow[]>([]);
+  const [debitLineCount, setDebitLineCount] = useState<number>(0);
+  const [creditLineCount, setCreditLineCount] = useState<number>(0);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  
+  // ─── 🟢 ACTIVE BALANCE VERIFICATION STATE MATRIX ───
+  const [auditDeck, setAuditDeck] = useState<AuditSummaryDeck | null>(null);
 
-  // Hydrate Bank Accounts and Database Blueprints
   useEffect(() => {
     accountApi.getAccounts()
       .then((res: any) => {
@@ -52,10 +68,9 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
       })
       .catch((err) => console.error("Failed loading account profiles:", err));
 
-    // 🟢 Fetch active blueprint layout list models
     api.get('/statements/available/')
       .then((res) => setAvailableTemplates(res.data || []))
-      .catch((err) => console.error("Failed downloading configuration blueprint map registers:", err));
+      .catch((err) => console.error("Failed downloading configuration blueprints:", err));
   }, []);
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -93,7 +108,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
     formData.append('file', targetFile);
     formData.append('account_id', selectedAccountId);
     
-    // 🟢 Pass manual override constraint token parameter if designated by choice block
     if (forcedTemplateId) {
       formData.append('forced_template_id', forcedTemplateId);
     }
@@ -106,10 +120,28 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
 
       const data = response.data;
 
-      if (data.status === 'PARSED_SUCCESS') {
+      if (data.status === 'SUCCESS' || data.status === 'PARSED_SUCCESS') {
         setStatusMode('PARSED_SUCCESS');
-        setAppliedTemplate(data.applied_template || 'Unknown Template');
-        setTransactions(data.transactions || []);
+        setAppliedTemplate(data.applied_template || 'Universal Engine Parser');
+       // setTransactions(data.preview_dataset || []);
+        setTransactions(data.preview_dataset || data.transactions || []);
+        setDebitLineCount(data.debit_line_count || 0);
+        setCreditLineCount(data.credit_line_count || 0);
+        
+        // Map payload calculations metrics down into the audit layout deck hooks
+        if (data.data) {
+          setAuditDeck({
+            calculated_opening: data.data.calculated_opening || 0,
+            calculated_debit: data.data.calculated_debit || 0,
+            calculated_credit: data.data.calculated_credit || 0,
+            calculated_closing: data.data.calculated_closing || 0,
+            document_opening: data.data.document_opening,
+            document_debit: data.data.document_debit,
+            document_credit: data.data.document_credit,
+            document_closing: data.data.document_closing,
+            audit_passed: data.data.audit_passed || false,
+          });
+        }
       } else if (data.status === 'REQUIRES_MAPPING') {
         setStatusMode('REQUIRES_MAPPING');
       } else {
@@ -127,11 +159,16 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
     setStatusMode('IDLE');
     setErrorMessage('');
     setTransactions([]);
+    setAuditDeck(null);
+  };
+
+  const formatCurrency = (val: number | null | undefined) => {
+    if (val === null || val === undefined) return '₹-';
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(val);
   };
 
   return (
     <div className="w-full space-y-5 text-zinc-100 px-1 text-left animate-fade-in">
-      {/* Header */}
       <div>
         <h2 className="text-xl font-bold tracking-tight text-white">Automated Ledger Ingestion Node</h2>
         <p className="text-xs text-zinc-400 mt-1">Ingest binary document streams to parse transactions directly into ledger states using dynamic layout blue-printing templates.</p>
@@ -139,9 +176,49 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
 
       <hr className="border-zinc-800" />
 
-      {/* Main Grid Viewport Layout */}
+      {/* ─── 🟢 SECURITY STATUS SUMMATION DECK BLOCK ─── */}
+      {statusMode === 'PARSED_SUCCESS' && auditDeck && (
+        <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-4 animate-fade-in shadow-2xl">
+          <div className="flex justify-between items-center border-b border-zinc-900 pb-2.5">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              ⚖️ Automated Engine Verification Summary Deck
+            </h3>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight ${
+              auditDeck.audit_passed ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'
+            }`}>
+              {auditDeck.audit_passed ? '🟢 Balance: MATCHED' : '🟡 Audit Variance Detected'}
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-mono">
+            <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/60">
+              <span className="text-[10px] uppercase font-bold tracking-tight text-zinc-500 block mb-1">Opening Balance</span>
+              <div className="text-sm font-bold text-blue-400">{formatCurrency(auditDeck.calculated_opening)}</div>
+              <span className="text-[9px] text-zinc-500 block mt-0.5">Baseline Anchor</span>
+            </div>
+            
+            <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/60">
+              <span className="text-[10px] uppercase font-bold tracking-tight text-zinc-500 block mb-1">Total Debits (-)</span>
+              <div className="text-sm font-bold text-red-400">{formatCurrency(auditDeck.calculated_debit)}</div>
+              <span className="text-[9px] text-zinc-400 block mt-0.5">📂 {debitLineCount} debits</span>
+            </div>
+            
+            <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/60">
+              <span className="text-[10px] uppercase font-bold tracking-tight text-zinc-500 block mb-1">Total Credits (+)</span>
+              <div className="text-sm font-bold text-emerald-400">{formatCurrency(auditDeck.calculated_credit)}</div>
+              <span className="text-[9px] text-zinc-400 block mt-0.5">📂 {creditLineCount} credits</span>
+            </div>
+            
+            <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/60">
+              <span className="text-[10px] uppercase font-bold tracking-tight text-zinc-500 block mb-1">Statement Closing</span>
+              <div className="text-sm font-bold text-cyan-400">{formatCurrency(auditDeck.calculated_closing)}</div>
+              <span className="text-[9px] text-zinc-500 block mt-0.5">Mathematical Result</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        
         {/* Left Control Column Panel */}
         <div className="space-y-4">
           <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl space-y-4">
@@ -163,7 +240,7 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
               </select>
             </div>
 
-            {/* 🟢 NEW: Blueprint Selector Dropdown Field Layer Override */}
+            {/* Blueprint Selector */}
             <div>
               <div className="flex justify-between items-center mb-1.5">
                 <label className="block text-[11px] font-medium text-zinc-400">Parsing Engine Execution Blueprint</label>
@@ -213,7 +290,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
         <div className="lg:col-span-2">
           <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[300px] flex flex-col justify-between">
             
-            {/* IDLE VIEWPORT STATE */}
             {statusMode === 'IDLE' && !loading && (
               <div className="my-auto text-center p-6 space-y-2">
                 <div className="text-2xl opacity-40">🧬</div>
@@ -222,7 +298,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
               </div>
             )}
 
-            {/* PROCESSING LOADING ANIMATION ENGINE STATE */}
             {loading && (
               <div className="my-auto text-center p-6 space-y-3">
                 <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
@@ -230,7 +305,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
               </div>
             )}
 
-            {/* CRITICAL EXCEPTION ERROR HANDLING NOTIFICATION PANEL */}
             {statusMode === 'ERROR' && (
               <div className="my-auto p-4 bg-red-950/20 border border-red-900/50 rounded-xl space-y-2 text-center max-w-md mx-auto">
                 <div className="text-lg">⚠️</div>
@@ -239,7 +313,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
               </div>
             )}
 
-            {/* UNKNOWN FORMAT DETECTED */}
             {statusMode === 'REQUIRES_MAPPING' && (
               <div className="my-auto text-center p-6 space-y-4 max-w-sm mx-auto animate-fade-in">
                 <div className="text-3xl">🧩</div>
@@ -248,8 +321,7 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
                   <p className="text-[11px] text-zinc-400 mt-1">This document structure matches no recorded profiles. We need to create a custom geometric cutting matrix layer blueprint for this format before processing.</p>
                 </div>
                 <button
-                  type="button"
-                  onClick={onRedirectToMapper}
+                  type="button" onClick={onRedirectToMapper}
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-xs font-bold rounded-lg text-black transition-all shadow-md cursor-pointer"
                 >
                   Launch Universal Coordinate Box Mapper
@@ -257,7 +329,6 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
               </div>
             )}
 
-            {/* SUCCESS VIEWPORT MATRIX RENDER GRID SYSTEM */}
             {statusMode === 'PARSED_SUCCESS' && (
               <div className="space-y-3 w-full animate-fade-in">
                 <div className="flex justify-between items-center bg-zinc-950 p-2.5 rounded-lg border border-zinc-800">
@@ -271,20 +342,20 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
                   </div>
                 </div>
 
-                {/* SCROLLABLE TABLE OVERHAUL CONTAINER */}
+                {/* SCROLLABLE TABLE CONTAINMENT LANE */}
                 <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950 w-full custom-scrollbar">
                   <table className="text-left text-xs font-mono table-fixed border-collapse" style={{ width: '1200px', minWidth: '1200px' }}>
                     <thead className="sticky top-0 z-10 bg-zinc-900 text-[10px] uppercase font-bold border-b border-zinc-800 text-zinc-400">
                       <tr>
-                        <th className="p-2 border-r border-zinc-800/60" style={{ width: '100px' }}>Date</th>
+                        <th className="p-2 border-r border-zinc-800/60" style={{ width: '100px' }}>Txn Date</th>
                         <th className="p-2 border-r border-zinc-800/60 text-orange-400" style={{ width: '100px' }}>Val Date</th>
-                        <th className="p-2 border-r border-zinc-800/60 text-purple-400" style={{ width: '420px' }}>Particulars Description Narration</th>
+                        <th className="p-2 border-r border-zinc-800/60 text-purple-400" style={{ width: '420px' }}>Narration Description</th>
                         <th className="p-2 border-r border-zinc-800/60 text-center text-indigo-400" style={{ width: '80px' }}>Type</th>
                         <th className="p-2 border-r border-zinc-800/60 text-sky-400" style={{ width: '120px' }}>Chq/Ref</th>
-                        <th className="p-2 border-r border-zinc-800/60 text-right text-red-400" style={{ width: '115px' }}>Withdrawals (-)</th>
-                        <th className="p-2 border-r border-zinc-800/60 text-right text-emerald-400" style={{ width: '115px' }}>Deposits (+)</th>
+                        <th className="p-2 border-r border-zinc-800/60 text-right text-red-400" style={{ width: '115px' }}>Debit (-)</th>
+                        <th className="p-2 border-r border-zinc-800/60 text-right text-emerald-400" style={{ width: '115px' }}>Credit (+)</th>
                         <th className="p-2 border-r border-zinc-800/60 text-right text-cyan-400" style={{ width: '120px' }}>Balance</th>
-                        <th className="p-2 text-center text-zinc-500" style={{ width: '50px' }}>Ind</th>
+                        <th className="p-2 text-center text-zinc-500" style={{ width: '50px' }}>Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-900 text-zinc-300">
@@ -292,7 +363,7 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
                         <tr key={idx} className="hover:bg-zinc-900/40 transition-colors">
                           <td className="p-2 border-r border-zinc-900/60 text-blue-300 font-medium whitespace-nowrap">{tx.date || '-'}</td>
                           <td className="p-2 border-r border-zinc-900/60 text-orange-300/90 whitespace-nowrap">{tx.value_date || '-'}</td>
-                          <td className="p-2 border-r border-zinc-900/60 truncate text-zinc-200" title={tx.particulars}>{tx.particulars || '-'}</td>
+                          <td className="p-2 border-r border-zinc-900/60 truncate text-zinc-200" title={tx.narration_description}>{tx.narration_description || '-'}</td>
                           <td className="p-2 border-r border-zinc-900/60 text-center" style={{ textAlign: 'center' }}>
                             {tx.type ? (
                               <span className="inline-block px-1 py-0.5 text-[8px] bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 rounded font-bold uppercase">{tx.type}</span>
@@ -300,11 +371,11 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
                               <span className="text-zinc-800 opacity-20">-</span>
                             )}
                           </td>
-                          <td className="p-2 border-r border-zinc-900/60 text-sky-300 font-mono truncate">{tx.cheque_details || '-'}</td>
+                          <td className="p-2 border-r border-zinc-900/60 text-sky-300 font-mono truncate">{tx.chq_ref || '-'}</td>
                           <td className="p-2 border-r border-zinc-900/60 text-right text-red-400 font-bold whitespace-nowrap" style={{ textAlign: 'right' }}>{tx.debit || '-'}</td>
                           <td className="p-2 border-r border-zinc-900/60 text-right text-emerald-400 font-bold whitespace-nowrap" style={{ textAlign: 'right' }}>{tx.credit || '-'}</td>
                           <td className="p-2 border-r border-zinc-900/60 text-right text-cyan-300 font-bold whitespace-nowrap" style={{ textAlign: 'right' }}>{tx.balance || '-'}</td>
-                          <td className="p-1 text-center font-bold text-zinc-400" style={{ textAlign: 'center' }}>{tx.indicator || '-'}</td>
+                          <td className="p-1 text-center font-bold text-zinc-400" style={{ textAlign: 'center' }}>{tx.status || '-'}</td>
                         </tr>
                       ))}
                     </tbody>
