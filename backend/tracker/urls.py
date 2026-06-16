@@ -8,7 +8,6 @@ from .views import (
     BulkTransactionSyncView,
     BankViewSet,
     BankCredentialViewSet,
-    StatementIngestRouterView_older1,
     StatementStagingCommitView,
     StatementPreviewAPIView,
     StatementTemplateSaveAPIView,

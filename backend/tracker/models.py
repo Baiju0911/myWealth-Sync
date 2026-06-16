@@ -353,34 +353,75 @@ class StatementIngestRegistry(models.Model):
 
 
 class UserStatementTemplate(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    template_name = models.CharField(max_length=100, help_text="e.g., SIB_Savings_2026")
 
-    # A unique keyword found in the header row to identify this layout automatically next time
-    header_signature = models.CharField(
-        max_length=255, help_text="e.g., Particulars,Txn Date,Balance"
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.CASCADE,
+        related_name="statement_templates",
+        null=True,
+        blank=True,
+        help_text="Direct link to a specific bank account configuration.",
     )
 
-    # Target zero-indexed column positions chosen by the user in the UI
+    template_name = models.CharField(
+        max_length=100, help_text="e.g., SBI_NRI_Stacked_2026"
+    )
+    matching_keyword = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Lookup search anchor signature",
+    )
+
+    # ─── 📐 HORIZONTAL CANVAS POSITION CHANNELS ───
+    date_x = models.FloatField(
+        default=10.0, help_text="Horizontal percentage start point for Date"
+    )
+    narration_x = models.FloatField(
+        default=18.0, help_text="Horizontal percentage start point for Description"
+    )
+    debit_x = models.FloatField(
+        default=52.0, help_text="Horizontal percentage start point for Debits"
+    )
+    credit_x = models.FloatField(
+        default=60.0, help_text="Horizontal percentage start point for Credits"
+    )
+    balance_x = models.FloatField(
+        default=98.0, help_text="Horizontal percentage start point for Running Balances"
+    )
+
+    # ─── ⚖️ FALLBACK INDEX TRACKERS (FOR MULTI-COLUMN GRID FAMILIES) ───
     date_index = models.IntegerField(default=0)
     narration_index = models.IntegerField(default=1)
-    amount_index = models.IntegerField(
-        default=2
-    )  # Used if there's a single amount column
-    balance_index = models.IntegerField(
-        default=3
-    )  # Crucial for determining entry directions
-
-    # Advanced switches for layout variations
-    has_separate_dr_cr_columns = models.BooleanField(default=False)
+    balance_index = models.IntegerField(default=3)
     debit_index = models.IntegerField(null=True, blank=True)
     credit_index = models.IntegerField(null=True, blank=True)
 
-    date_format = models.CharField(
-        max_length=50, default="%d-%m-%Y"
-    )  # e.g., DD-MM-YYYY
+    # ─── ⚙️ TUNING VARIABLES & CONFIG FLAGS ───
+    date_format = models.CharField(max_length=50, default="%d-%m-%Y")
+    y_tolerance = models.FloatField(
+        default=3.0, help_text="Vertical line baseline grouping tolerance windows"
+    )
+    multiline_enabled = models.BooleanField(
+        default=True,
+        help_text="Toggles the multi-line narration accumulator logic loop",
+    )
+    header_lines_to_skip = models.IntegerField(
+        default=0, help_text="Rows to discard at top of pages"
+    )
+    footer_lines_to_skip = models.IntegerField(
+        default=0, help_text="Rows to discard at bottom of pages"
+    )
+
+    # ─── 🛡️ THE DYNAMIC ARCHITECTURAL ESCAPE HATCH ───
+    signature_json = models.TextField(
+        blank=True,
+        default="{}",
+        help_text="Dynamic parameters payload box, e.g., {'force_negative_balances': false, 'strip_all_zeros': true}",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.user.username} - {self.template_name}"
+        return f"{self.template_name} -> {self.account.name if self.account else 'Unlinked'}"

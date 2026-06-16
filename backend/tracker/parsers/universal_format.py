@@ -1,759 +1,543 @@
-import json
-import os
+import fitz  # PyMuPDF
 import re
-import datetime
-import pdfplumber
-from django.shortcuts import get_object_or_404
-from ..models import Account, StatementStagingLine
-from .raw_extractor import match_statement_template
+from datetime import datetime
 
-# ─── 🟢 INJECTED CRYPTOGRAPHIC UTILITY ROOT HOOK ───
+# NATIVE TABLE CONFIGURATION AND UTILITY IMPORTS
+from .raw_extractor import match_statement_template
 from .utils import generate_row_fingerprint
 
 
-class UniversalStatementIngestionProcessor:
-    """
-    Production-grade processing engine parsing data tokens dynamically using
-    database blueprint schemas, automating multi-line continuation stitches based
-    on column state evaluations.
-    """
+class UniversalStatementParser:
+    DATE_MATCH_REGEX = re.compile(
+        r"\b\d{2}-\d{2}-\d{4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{2}/\d{2}/\d{4}\b"
+    )
+    CLEAN_NUM_REGEX = re.compile(r"[^\d.]")
+    NUMERIC_FINDER_REGEX = re.compile(
+        r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})(?:CR|DR)?\b", re.I
+    )
+    BALANCE_SIGN_REGEX = re.compile(r"(CR|DR)$", re.I)
+    ACCOUNT_REF_REGEX = re.compile(r"\b\d{9,18}\b")
+
+    INLINE_CREDIT_REGEX = re.compile(r"\b([\d,]+\.\d{2})CR\b", re.I)
+    RAW_DECIMAL_REGEX = re.compile(r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})\b")
+
+    OPENING_BALANCE_MARKERS = [
+        r"\bBROUGHT\s+FORWARD\b",
+        r"\bOPENING\s+BALANCE\b",
+        r"\bB/F\b",
+        r"\bO/B\b",
+        r"\bBAL\s+BF\b",
+    ]
+    OPENING_BALANCE_REGEX = [re.compile(p, re.I) for p in OPENING_BALANCE_MARKERS]
+
+    SYSTEM_NOISE_PATTERNS = [
+        r"\bPAGE\s+NO\b",
+        r"\bVALUE\s+DATE\b",
+        r"\bCHEQUE\b",
+        r"\bPOST\s+DATE\b",
+        r"\bDESCRIPTION\b",
+        r"\bDEBIT\b",
+        r"\bCREDIT\b",
+        r"\bBALANCE\b",
+        r"\bNO/REFERENCE\b",
+    ]
+    SYSTEM_NOISE_REGEX = [re.compile(p, re.I) for p in SYSTEM_NOISE_PATTERNS]
 
     def __init__(self, uploaded_file, account_id):
         self.uploaded_file = uploaded_file
         self.account_id = account_id
-        self.account = get_object_or_404(Account, id=account_id)
+        self.bounds = {}
+        self.password = None
+        self.template_obj = None
+        self.calculated_opening_balance = 0.0
+        self.calculated_closing_balance = 0.0
+        self.running_tally_debits = 0.0
+        self.running_tally_credits = 0.0
+        self.count_debits = 0
+        self.count_credits = 0
+        self.count_empty_memo_lines = 0
+        self.reconciliation_status = "PENDING"
+        self.audit_warning_message = None
 
-    @staticmethod
-    def _is_header_row(row_text: str) -> bool:
-        if not row_text:
-            return True
-
-        metadata_garbage = [
-            "drawing power",
-            "account open date",
-            "interest rate",
-            "branch code",
-            "branch email",
-            "statement from",
-            "cleared balance",
-            "uncleared amount",
-            "operated by a letter",
-            "extra care",
-            "last transaction date",
-        ]
-        if any(garbage in row_text for garbage in metadata_garbage):
-            return True
-
-        row_text_lower = row_text.lower()
-        if "summary" in row_text_lower and (
-            "page" in row_text_lower or "statement" in row_text_lower
-        ):
-            return True
-        if "total debit" in row_text_lower and (
-            "closing" in row_text_lower or "balance" in row_text_lower
-        ):
-            return True
-        if "total credit" in row_text_lower and (
-            "closing" in row_text_lower or "balance" in row_text_lower
-        ):
-            return True
-
-        return False
-
-    @staticmethod
-    def _is_metadata_noise(row_text: str) -> bool:
-        if not row_text or not row_text.strip():
-            return True
-
-        row_text_lower = row_text.lower().strip()
-        noise_indicators = [
-            "statement of account",
-            "date value date particulars chq",
-            "date particulars tran",
-            "cheque details withdrawals",
-            "deposits cr/dr",
-            "withdrawals deposits",
-            "balancetran id",
-            "page total",
-            "grand total",
-            "system-generated statement",
-            "page no",
-            "visit us at",
-            "customer id:",
-            "ckyc no:",
-            "a/c no:",
-            "mode of opr:",
-            "communication address",
-            "regd. mobile number",
-            "type of account",
-            "scheme :",
-            "swift code",
-            "ifsc",
-            "date of issue",
-            "customer id",
-            "branch name",
-            "currency inr",
-            "nomination",
-            "effective available",
-            "address last updated",
-            "micr code",
-            "account open date",
-            "email id",
-            "branch sol id",
-            "account status",
-            "page 1 of",
-            "page 2 of",
-            "page 3 of",
-            "abbreviations used:",
-            "cash     : cash",
-            "ft       : fund transfer",
-            "sbint    :",
-            "tdint    :",
-            "disclaimer:",
-            "this is a computer generated",
-            "statement date.",
-            "**** end of statement ****",
-            "page 10 of",
-            ".bank.in",
-            "br. mail id:",
-            "(cid:",
-            "trf : transfer transaction",
-            "clg : clearing transaction",
-            "mb : mobile banking",
-            "tds : tax deducted",
-            "statement which need not normally be signed",
-            "bank ltd. branch:",
-            # "sasthamanga",
-            "federalbank.co.in",
-            "cin:l65191kl1931plc000368",
-            "closing balance",
-            "dr count",
-            "cr count",
-            "letter of authority",
-            "power of attorney",
-            "last transaction date and time appearing",
-            "*---end",
-            "statement summary",
-            "total debits",
-            "total credits",
-            # fed
-            "PAGE",
-            "THE FEDERAL BANK",
-            "BRANCH:THIRUVANANTHAPURAM",
-            "SASTHAMANGALAM",
-            "FEDERALBANK.CO.IN",
-            "CIN:L65191KL1931PLC000368",
-            "WEBSITE: WWW.FEDERALBANK.CO.IN",
-            "BR. ADDRESS",
-            "STATEMENT OF ACCOUNT",
-            "GENERATED ON",
-        ]
-        return any(indicator in row_text_lower for indicator in noise_indicators)
-
-    @staticmethod
-    def _safe_float(value):
+    def _parse_float(self, value):
+        if not value:
+            return 0.0
+        clean = self.CLEAN_NUM_REGEX.sub("", str(value))
         try:
-            if not value:
-                return None
-            clean_str = re.sub(r"[^\d.-]", "", value.replace(",", ""))
-            return float(clean_str) if clean_str else None
-        except:
-            return None
+            if clean and clean != ".":
+                return float(clean)
+        except (TypeError, ValueError):
+            pass
+        return 0.0
 
-    def _finalize_txn(self, txn, bank_id, existing_hashes):
-        """
-        Calculates the unique cryptographic row fingerprint, running dupe-checking
-        subroutines, and flags the transaction status before committing to the dataset.
-        """
-        amount_val = float(
-            (txn["credit"] or 0.0) if txn["credit"] else (txn["debit"] or 0.0)
-        )
-
-        txn["Hex"] = generate_row_fingerprint(
-            bank_id=bank_id,
-            account_id=self.account_id,
-            narration=txn["description"],
-            cheque_ref="",
-            amount=amount_val,
-            running_balance=float(txn["amount"]),
-            debit=txn.get("debit"),
-            credit=txn.get("credit"),
-            date_str=str(txn["date"]),
-        )
-
-        txn["status"] = "DUPLICATE" if txn["Hex"] in existing_hashes else "NEW"
-        return txn
-
-    def _process_page_tokens(self, page, tolerance=5):
-        """
-        MODULE A: Executes the vertical snapping algorithm across page coordinates
-        to build clustered spatial line dictionaries.
-        """
-        lines_dict = {}
-        page_height = float(page.height)
-
-        vertical_floor_cutoff = page_height * 0.94
-        vertical_ceiling_cutoff = page_height * 0.05
-
-        for w in page.extract_words():
-            w_top = float(w["top"])
-
-            if w_top > vertical_floor_cutoff or w_top < vertical_ceiling_cutoff:
-                continue
-
-            w_text = w["text"]
-            w_x_pct = (float(w["x0"]) / float(page.width)) * 100
-
-            matched_lane = None
-            for assigned_top in lines_dict.keys():
-                if abs(w_top - assigned_top) <= tolerance:
-                    matched_lane = assigned_top
-                    break
-
-            if matched_lane is not None:
-                lines_dict[matched_lane].append({"text": w_text, "x_pct": w_x_pct})
-            else:
-                lines_dict[round(w_top, 1)] = [{"text": w_text, "x_pct": w_x_pct}]
-
-        return lines_dict
-
-    def _extract_document_summary(self, raw_line_upper, numbers_in_row, state):
-        """
-        MODULE B: Captures official summary meta values declared by the bank document.
-        """
-        if "BROUGHT FORWARD" in raw_line_upper or "OPENING BALANCE" in raw_line_upper:
-            if numbers_in_row:
-                state["doc_opening_balance"] = numbers_in_row[0]
-                if not state["pdf_opening_captured"]:
-                    state["pdf_opening_balance"] = numbers_in_row[0]
-                    state["pdf_opening_captured"] = True
-
-        elif (
-            "CLOSING BALANCE" in raw_line_upper and state["doc_closing_balance"] is None
-        ):
-            if numbers_in_row:
-                state["doc_closing_balance"] = numbers_in_row[0]
-
-        elif "TOTAL DEBITS" in raw_line_upper or (
-            "TOTAL" in raw_line_upper and "DEBIT" in raw_line_upper
-        ):
-            if len(numbers_in_row) >= 2:
-                state["doc_total_debit"] = numbers_in_row[0]
-                state["doc_total_credit"] = numbers_in_row[1]
-            elif len(numbers_in_row) == 1:
-                state["doc_total_debit"] = numbers_in_row[0]
-
-        elif "TOTAL CREDITS" in raw_line_upper or (
-            "TOTAL" in raw_line_upper and "CREDIT" in raw_line_upper
-        ):
-            if numbers_in_row:
-                state["doc_total_credit"] = numbers_in_row[0]
-
-        if (
-            len(numbers_in_row) >= 5
-            and "BALANCE" in raw_line_upper
-            and "COUNT" in raw_line_upper
-        ):
-            state["doc_opening_balance"] = numbers_in_row[0]
-            state["doc_total_debit"] = numbers_in_row[3]
-            state["doc_total_credit"] = numbers_in_row[4]
-            if len(numbers_in_row) > 5:
-                state["doc_closing_balance"] = numbers_in_row[5]
-
-    def _parse_columns1(self, row_tokens, bounds):
-        """
-        MODULE C: Slices spatial text line tokens straight into column bins based on boundary mappings.
-        """
-        cols = {
-            k: []
-            for k in ["date", "v_date", "part", "type", "chq", "wth", "dep", "bal"]
-        }
-
-        for token in row_tokens:
-            x, txt = token["x_pct"], token["text"].strip()
-            if not txt:
-                continue
-            if len(txt) > 25 and ("," in txt or " " in txt):
-                continue
-
-            if bounds["date_max"] > 0 and x <= bounds["date_max"]:
-                cols["date"].append(txt)
-            elif bounds["value_date_max"] > 0 and x <= bounds["value_date_max"]:
-                cols["v_date"].append(txt)
-            elif bounds["particulars_max"] > 0 and x <= bounds["particulars_max"]:
-                cols["part"].append(txt)
-            elif bounds["trantype_max"] > 0 and x <= bounds["trantype_max"]:
-                cols["type"].append(txt)
-            elif bounds["cheque_max"] > 0 and x <= bounds["cheque_max"]:
-                cols["chq"].append(txt)
-            elif bounds["withdrawals_max"] > 0 and x <= bounds["withdrawals_max"]:
-                cols["wth"].append(txt)
-            elif bounds["deposits_max"] > 0 and x <= bounds["deposits_max"]:
-                cols["dep"].append(txt)
-            elif bounds["balance_max"] > 0 and x <= bounds["balance_max"]:
-                cols["bal"].append(txt)
-
-        return cols
-
-    def _parse_columns(self, row_tokens, bounds):
-        """
-        MODULE C: Slices spatial text line tokens straight into column bins.
-        🛡️ UNIFORM SAFE LAYER: Automatically provides strict fallback defaults
-        if a database record schema lacks specific geometric keys.
-        """
-        cols = {
-            k: []
-            for k in ["date", "v_date", "part", "type", "chq", "wth", "dep", "bal"]
-        }
-
-        # ─── 🟢 UNIFORM SCHEMA SHIELD ───
-        # Safely extracts the key if it exists, otherwise falls back to a safe baseline coordinate
-        date_max = int(bounds.get("date_max") or 10)
-        v_date_max = int(bounds.get("value_date_max") or 18)
-        part_max = int(bounds.get("particulars_max") or 45)
-        type_max = int(bounds.get("trantype_max") or 52)
-        chq_max = int(bounds.get("cheque_max") or 0)
-        wth_max = int(
-            bounds.get("withdrawals_max") or 74
-        )  # Aligned to 74 to cover Federal Bank ATM tokens
-        dep_max = int(bounds.get("deposits_max") or 84)
-        bal_max = int(bounds.get("balance_max") or 94)
-
-        for token in row_tokens:
-            x, txt = token["x_pct"], token["text"].strip()
-            if not txt:
-                continue
-            if len(txt) > 25 and ("," in txt or " " in txt):
-                continue
-
-            # Route tokens strictly into their standardized geometric coordinate lanes
-            if date_max > 0 and x <= date_max:
-                cols["date"].append(txt)
-            elif v_date_max > 0 and x <= v_date_max:
-                cols["v_date"].append(txt)
-            elif part_max > 0 and x <= part_max:
-                cols["part"].append(txt)
-            elif type_max > 0 and x <= type_max:
-                cols["type"].append(txt)
-            elif chq_max > 0 and x <= chq_max:
-                cols["chq"].append(txt)
-            elif wth_max > 0 and x <= wth_max:
-                cols["wth"].append(txt)
-            elif dep_max > 0 and x <= dep_max:
-                cols["dep"].append(txt)
-            elif bal_max > 0 and x <= bal_max:
-                cols["bal"].append(txt)
-
-        return cols
-
-    def _reconcile_transaction_stream(
-        self,
-        cols,
-        metrics,
-        target_bank_id,
-        existing_hashes,
-        row_tokens=None,
-        bounds=None,
-    ):
-        """
-        MODULE D: Manages streaming ledger entries, multi-line description stitching,
-        and backward-merges for transactions split across duplicate dates.
-        """
-        # ─── DOUBLE-DATE SAFEGUARD ───
-        raw_date_list = cols.get("date", [])
-        raw_date = raw_date_list[0].strip() if raw_date_list else ""
-        if len(raw_date.split()) > 1:
-            raw_date = raw_date.split()[0]
-
-        f_date = raw_date
-        f_part = " ".join(cols.get("part", [])).strip()
-
-        raw_wth_tokens = [
-            t for t in cols.get("wth", []) if t.strip() and t.strip() != "-"
-        ]
-        raw_dep_tokens = [
-            t for t in cols.get("dep", []) if t.strip() and t.strip() != "-"
-        ]
-        raw_bal_tokens = [
-            t for t in cols.get("bal", []) if t.strip() and t.strip() != "-"
-        ]
-
-        # ─── 🟢 THE NUMERIC LANE FILTER SHIELD ───
-        # Bypasses reference text like 'S28234606' by prioritizing the token with a decimal dot!
-        def extract_true_amount_string(tokens_list):
-            if not tokens_list:
-                return ""
-            decimal_matches = [t for t in tokens_list if "." in t]
-            if decimal_matches:
-                return decimal_matches[0]
-            digit_matches = [t for t in tokens_list if any(c.isdigit() for c in t)]
-            return digit_matches[0] if digit_matches else tokens_list[0]
-
-        clean_wth = extract_true_amount_string(raw_wth_tokens)
-        clean_dep = extract_true_amount_string(raw_dep_tokens)
-        clean_bal = raw_bal_tokens[0] if raw_bal_tokens else ""
-
-        # ─── BULLETPROOF GHOST PAGE NUMBER NEUTRALIZER ───
-        line_full_text = " ".join(
-            [str(t.get("text", "")) for t in (row_tokens or [])]
-        ).upper()
-        if "PAGE" in line_full_text or "OF" in line_full_text:
-            clean_wth = ""
-            clean_dep = ""
-            clean_bal = ""
-
-        val_debit = self._safe_float(clean_wth)
-        val_credit = self._safe_float(clean_dep)
-        val_bal = self._safe_float(clean_bal) if clean_bal else 0.0
-
-        # ─── CASE 1: INITIALIZE NEW RECORD ON VALID DATE BOUNDARY ───
-        if re.match(r"^\d{2}-\d{2}-\d{4}$", f_date) or re.match(
-            r"^\d{2}-[A-Za-z]{3}-\d{4}$", f_date.upper()
-        ):
-            has_financial_data = (
-                (val_debit or 0.0) > 0.0
-                or (val_credit or 0.0) > 0.0
-                or (val_bal or 0.0) > 0.0
-            )
-
-            if (
-                metrics.get("active_txn")
-                and metrics["active_txn"].get("raw_date_key") == f_date
-                and not has_financial_data
-            ):
-                if val_debit and not metrics["active_txn"].get("debit"):
-                    metrics["active_txn"]["debit"] = val_debit
-                    metrics["total_debit"] += val_debit
-                    metrics["debit_line_count"] += 1
-                if val_credit and not metrics["active_txn"].get("credit"):
-                    metrics["active_txn"]["credit"] = val_credit
-                    metrics["total_credit"] += val_credit
-                    metrics["credit_line_count"] += 1
-                if f_part:
-                    metrics["active_txn"]["description"] += f" {f_part}"
-                return
-
-            # ─── 🟢 FIX: UNIFORM MULTI-LANE COMMIT GATE ───
-            # Commit the record if it contains a financial value, a balance, or an explicit transaction type code!
-            if metrics.get("active_txn") and (
-                metrics["active_txn"].get("debit")
-                or metrics["active_txn"].get("credit")
-                or metrics["active_txn"].get("amount")
-                or metrics["active_txn"].get("type")
-            ):
-                finalized = self._finalize_txn(
-                    metrics["active_txn"], target_bank_id, existing_hashes
-                )
-                metrics["preview_dataset"].append(finalized)
-                if finalized.get("status") == "DUPLICATE":
-                    metrics["duplicate_count"] += 1
-
-            # Initialize the next transaction container cleanly
-            metrics["active_txn"] = {
-                "raw_date_key": f_date,
-                "date": f_date,  # Preserves the format directly
-                "description": f_part,
-                "type": " ".join(cols.get("type", [])).strip(),
-                "debit": val_debit if val_debit else None,
-                "credit": val_credit if val_credit else None,
-                "amount": val_bal,
-            }
-            if val_debit:
-                metrics["total_debit"] += val_debit
-                metrics["debit_line_count"] += 1
-            if val_credit:
-                metrics["total_credit"] += val_credit
-                metrics["credit_line_count"] += 1
-
-            metrics["count"] = metrics.get("count", 0) + 1
-
-        # ─── CASE 2: STREAM DATA EXTENSION INTO OPEN CONTINUATION BUFFER ───
-        elif metrics.get("active_txn"):
-            if f_part or val_debit or val_credit or val_bal:
-                if (val_debit and metrics["active_txn"].get("debit")) or (
-                    val_credit and metrics["active_txn"].get("credit")
-                ):
-                    finalized = self._finalize_txn(
-                        metrics["active_txn"], target_bank_id, existing_hashes
-                    )
-                    metrics["preview_dataset"].append(finalized)
-                    if finalized.get("status") == "DUPLICATE":
-                        metrics["duplicate_count"] += 1
-                    metrics["active_txn"] = None
-                    return
-
-                if f_part:
-                    metrics["active_txn"]["description"] += f" {f_part}"
-                if val_bal:
-                    metrics["active_txn"]["amount"] = val_bal
-
-                if val_debit and not metrics["active_txn"].get("debit"):
-                    metrics["active_txn"]["debit"] = val_debit
-                    metrics["total_debit"] += val_debit
-                    metrics["debit_line_count"] += 1
-                if val_credit and not metrics["active_txn"].get("credit"):
-                    metrics["active_txn"]["credit"] = val_credit
-                    metrics["total_credit"] += val_credit
-                    metrics["credit_line_count"] += 1
+    def _normalize_date(self, date_str):
+        target_fmt = self.bounds.get("date_format", "%d-%m-%Y")
+        for fmt in (target_fmt, "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+        return date_str
 
     def execute_full_parse(self):
-        routing_match = match_statement_template(self.uploaded_file, self.account_id)
-
-        if routing_match["type"] == "UNKNOWN":
+        payload = match_statement_template(self.uploaded_file, self.account_id)
+        if not payload or payload.get("template") is None:
             return {
                 "success": False,
-                "error_message": "Document layout profile signature missing Layout Template.",
+                "error_message": "Document template mapping parameters could not be resolved.",
             }
 
-        raw_bounds = routing_match["bounds"]
-        verified_password = routing_match.get("unlocked_password", "")
+        self.template_obj = payload["template"]
+        self.password = payload["unlocked_password"]
+        self.bounds = payload["bounds"]
 
-        bounds = {
-            k: int(raw_bounds.get(k) or 0)
-            for k in [
-                "date_max",
-                "value_date_max",
-                "particulars_max",
-                "trantype_max",
-                "cheque_max",
-                "withdrawals_max",
-                "deposits_max",
-                "balance_max",
-            ]
-        }
-
-        state = {
-            "doc_opening_balance": None,
-            "doc_closing_balance": None,
-            "doc_total_debit": None,
-            "doc_total_credit": None,
-            "pdf_opening_balance": 0.0,
-            "pdf_opening_captured": False,
-        }
-
-        metrics = {
-            "preview_dataset": [],
-            "active_txn": None,
-            "total_debit": 0.0,
-            "total_credit": 0.0,
-            "debit_line_count": 0,
-            "credit_line_count": 0,
-            "duplicate_count": 0,
-        }
-
-        target_bank_id = self.account.bank_id if hasattr(self.account, "bank_id") else 1
-        existing_hashes = set(
-            StatementStagingLine.objects.filter(account_id=self.account_id).values_list(
-                "row_identifier", flat=True
-            )
-        )
-
-        self.uploaded_file.seek(0)
-
-        try:
-            with pdfplumber.open(
-                self.uploaded_file, password=verified_password or None
-            ) as pdf:
-                for page in pdf.pages:
-                    lines_dict = self._process_page_tokens(page, tolerance=5)
-                    table_started = False
-
-                    for v_pos in sorted(lines_dict.keys()):
-                        row_tokens = sorted(lines_dict[v_pos], key=lambda t: t["x_pct"])
-                        raw_line_text = " ".join(
-                            [t["text"] for t in row_tokens]
-                        ).strip()
-                        raw_line_upper = raw_line_text.upper()
-
-                        tokens_split = raw_line_text.split()
-                        numbers_in_row = [
-                            self._safe_float(t)
-                            for t in tokens_split
-                            if any(c.isdigit() for c in t)
-                        ]
-                        numbers_in_row = [n for n in numbers_in_row if n is not None]
-
-                        self._extract_document_summary(
-                            raw_line_upper, numbers_in_row, state
-                        )
-
-                        if not table_started:
-                            if any(
-                                h in raw_line_upper
-                                for h in [
-                                    "POST DATE",
-                                    "VALUE DATE",
-                                    "DESCRIPTION",
-                                    "PARTICULARS",
-                                    "DEBIT",
-                                    "CREDIT",
-                                    "BALANCE",
-                                ]
-                            ):
-                                table_started = True
-                            continue
-
-                        if self._is_header_row(
-                            raw_line_text
-                        ) or self._is_metadata_noise(raw_line_text):
-                            continue
-
-                        cols = self._parse_columns(row_tokens, bounds)
-                        if page.page_number == 1:
-                            print("\n" + "╠" + "═" * 90 + "╣")
-                            print(
-                                f"║ 🎯 ENGINE TELEMETRY SCAN | V-POS: {v_pos:<6} | FULL STRING: {raw_line_text[:50]:<40} ║"
-                            )
-                            print("╠" + "═" * 90 + "╣")
-                            print(
-                                f"║ {'Token ID':<10} | {'X-Pct Coordinate':<18} | {'Assigned Column Lane Target':<30} | {'Text String':<20} ║"
-                            )
-                            print("╠" + "─" * 90 + "╢")
-
-                            for idx, tok in enumerate(row_tokens):
-                                x_val = tok["x_pct"]
-                                txt_val = tok["text"].strip()
-
-                                # Evaluate which boundary lane is swallowing this specific token
-                                target_lane = "PARTICULARS / DESCRIPTION (Fallback)"
-                                if (
-                                    bounds["date_max"] > 0
-                                    and x_val <= bounds["date_max"]
-                                ):
-                                    target_lane = f"DATE (<= {bounds['date_max']}%)"
-                                elif (
-                                    bounds["value_date_max"] > 0
-                                    and x_val <= bounds["value_date_max"]
-                                ):
-                                    target_lane = (
-                                        f"VALUE DATE (<= {bounds['value_date_max']}%)"
-                                    )
-                                elif (
-                                    bounds["particulars_max"] > 0
-                                    and x_val <= bounds["particulars_max"]
-                                ):
-                                    target_lane = (
-                                        f"PARTICULARS (<= {bounds['particulars_max']}%)"
-                                    )
-                                elif (
-                                    bounds["trantype_max"] > 0
-                                    and x_val <= bounds["trantype_max"]
-                                ):
-                                    target_lane = (
-                                        f"TRAN TYPE (<= {bounds['trantype_max']}%)"
-                                    )
-                                elif (
-                                    bounds["withdrawals_max"] > 0
-                                    and x_val <= bounds["withdrawals_max"]
-                                ):
-                                    target_lane = f"WITHDRAWAL / DEBIT (<= {bounds['withdrawals_max']}%)"
-                                elif (
-                                    bounds["deposits_max"] > 0
-                                    and x_val <= bounds["deposits_max"]
-                                ):
-                                    target_lane = f"DEPOSIT / CREDIT (<= {bounds['deposits_max']}%)"
-                                elif (
-                                    bounds["balance_max"] > 0
-                                    and x_val <= bounds["balance_max"]
-                                ):
-                                    target_lane = (
-                                        f"RUNNING BALANCE (<= {bounds['balance_max']}%)"
-                                    )
-
-                                print(
-                                    f"║ Token [{idx}]:<10 | {x_val:>14.4f}%     | {target_lane:<30} | '{txt_val}' ║"
-                                )
-                            print("╚" + "═" * 90 + "╝" + "\n")
-
-                        self._reconcile_transaction_stream(
-                            cols,
-                            metrics,
-                            target_bank_id,
-                            existing_hashes,
-                            row_tokens,
-                            bounds,
-                        )
-
-                # Flush residual dangling entries
-                if metrics["active_txn"] and (
-                    metrics["active_txn"].get("debit")
-                    or metrics["active_txn"].get("credit")
-                    or metrics["active_txn"].get("amount")
-                    or metrics["active_txn"].get("type")
-                ):
-                    finalized = self._finalize_txn(
-                        metrics["active_txn"], target_bank_id, existing_hashes
-                    )
-                    metrics["preview_dataset"].append(finalized)
-                    if finalized.get("status") == "DUPLICATE":
-                        metrics["duplicate_count"] += 1
-
-        except Exception as e:
-            return {"success": False, "error_message": str(e)}
-
-        # ─── ⚖️ UNIVERSAL HARMONIZATION OVERRIDE (FUTURE PROOF) ───
-        calculated_opening = 0.0
-        calculated_closing = 0.0
-
-        if metrics["preview_dataset"]:
-            first_txn = metrics["preview_dataset"][0]
-            last_txn = metrics["preview_dataset"][-1]
-
-            # Formulate structural ledger bounds sequentially
-            calculated_closing = round(float(last_txn.get("amount", 0.0)), 2)
-            calculated_opening = round(
-                float(first_txn.get("amount") or 0.0)
-                + float(first_txn.get("debit") or 0.0)
-                - float(first_txn.get("credit") or 0.0),
-                2,
-            )
-
-        # 🛡️ THE AUTOMATED ANCHOR SHIELD
-        # If the statement layout forces a zero baseline but the internal bank ledger ledger runs
-        # on an inherent offset, automatically compute the delta variance and reconcile the deck.
-        raw_computed_diff = round((metrics["total_credit"] - metrics["total_debit"]), 2)
-        target_doc_closing = float(
-            state["doc_closing_balance"]
-            if state["doc_closing_balance"] is not None
-            else calculated_closing
-        )
-
-        # Determine the structural timeline discrepancy automatically
-        statement_drift_delta = round(target_doc_closing - raw_computed_diff, 2)
-
-        if (
-            state["doc_opening_balance"] is None
-            or float(state["doc_opening_balance"]) == 0.0
-        ):
-            # Safely assigns the calculated delta balance to eliminate timeline offsets across ALL future sheets
-            state["doc_opening_balance"] = (
-                statement_drift_delta
-                if statement_drift_delta != target_doc_closing
-                else calculated_opening
-            )
-
-        expected_closing = target_doc_closing
-
-        # 🏁 GLOBAL RADICAL TOLERANCE CHECK
-        # If the internal row sequence ledger successfully links up from row-to-row, the parse passes automatically!
-        audit_passed = True if len(metrics["preview_dataset"]) > 0 else False
+        raw_rows = self._extract_pdf_rows()
+        final_clean_dataset = self._process_stream_buffer(raw_rows)
 
         return {
             "success": True,
             "data": {
-                "preview_dataset": metrics["preview_dataset"],
-                "count": len(metrics["preview_dataset"]),
-                "duplicate_count": metrics["duplicate_count"],
-                "debit_line_count": metrics["debit_line_count"],
-                "credit_line_count": metrics["credit_line_count"],
-                "calculated_opening": round(float(state["doc_opening_balance"]), 2),
-                "calculated_debit": round(metrics["total_debit"], 2),
-                "calculated_credit": round(metrics["total_credit"], 2),
-                "calculated_closing": calculated_closing,
-                "document_opening": round(float(state["doc_opening_balance"]), 2),
-                "document_debit": round(metrics["total_debit"], 2),
-                "document_credit": round(metrics["total_credit"], 2),
-                "document_closing": round(expected_closing, 2),
-                "audit_passed": audit_passed,
+                "count": len(final_clean_dataset),
+                "preview_dataset": final_clean_dataset,
+                "opening_balance": self.calculated_opening_balance,
+                "closing_balance": self.calculated_closing_balance,
+                "total_debit": round(self.running_tally_debits, 2),
+                "total_credit": round(self.running_tally_credits, 2),
+                "debit_line_count": self.count_debits,
+                "credit_line_count": self.count_credits,
+                "empty_memo_line_count": self.count_empty_memo_lines,
+                "reconciliation_status": self.reconciliation_status,
+                "audit_warning": self.audit_warning_message,
             },
         }
+
+    def _extract_pdf_rows(self):
+        self.uploaded_file.seek(0)
+        pdf_bytes = self.uploaded_file.read()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        output = []
+        y_tolerance = float(self.bounds.get("y_tolerance", 3.0))
+
+        for page_idx, page in enumerate(doc, start=1):
+            page_width = float(page.rect.width or 1)
+            words = page.get_text("words")
+            if not words:
+                continue
+
+            lines_pool = []
+            for w in words:
+                x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4].strip()
+                if not text:
+                    continue
+                x_pct = round((x0 / page_width) * 100, 2)
+
+                matched = False
+                for line in lines_pool:
+                    if not (
+                        y1 < (line["y0"] - y_tolerance)
+                        or y0 > (line["y1"] + y_tolerance)
+                    ):
+                        line["tokens"].append({"text": text, "x": x_pct, "y": y0})
+                        line["y0"], line["y1"] = min(line["y0"], y0), max(
+                            line["y1"], y1
+                        )
+                        matched = True
+                        break
+                if not matched:
+                    lines_pool.append(
+                        {
+                            "y0": y0,
+                            "y1": y1,
+                            "tokens": [{"text": text, "x": x_pct, "y": y0}],
+                        }
+                    )
+
+            for line in sorted(lines_pool, key=lambda l: l["y0"]):
+                sorted_tokens = sorted(line["tokens"], key=lambda t: (t["y"], t["x"]))
+                output.append(
+                    {
+                        "tokens": sorted_tokens,
+                        "full_line_text": " ".join(t["text"] for t in sorted_tokens),
+                        "page_source": page_idx,
+                    }
+                )
+        return output
+
+    def _process_stream_buffer(self, raw_rows):
+        explicit_opening_balance = None
+        for row in raw_rows:
+            text_upper = row["full_line_text"].upper()
+            if any(regex.search(text_upper) for regex in self.OPENING_BALANCE_REGEX):
+                decimal_candidates = self.NUMERIC_FINDER_REGEX.findall(
+                    row["full_line_text"]
+                )
+                if decimal_candidates:
+                    explicit_opening_balance = self._parse_float(decimal_candidates[-1])
+                    break
+
+        intermediate_txns = []
+        debit_target_x = float(self.bounds.get("debit_x", 66.0))
+        credit_target_x = float(self.bounds.get("credit_x", 78.5))
+
+        i = 0
+        while i < len(raw_rows):
+            row = raw_rows[i]
+            text = row["full_line_text"].strip()
+            text_upper = text.upper()
+            page_idx = row.get("page_source", 1)
+
+            if any(
+                m in text_upper
+                for m in (
+                    "STATEMENT SUMMARY",
+                    "TOTAL DEBITS",
+                    "TOTAL CREDITS",
+                    "CLOSING BALANCE",
+                )
+            ):
+                i += 1
+                continue
+
+            line_dates = []
+            for token in row["tokens"]:
+                t_text = token["text"].strip()
+                if self.DATE_MATCH_REGEX.match(t_text):
+                    line_dates.append({"text": t_text, "x": token["x"]})
+
+            primary_anchor_found = any(dt["x"] <= 12.0 for dt in line_dates)
+            if not primary_anchor_found:
+                i += 1
+                continue
+
+            active_post_date = None
+            active_value_date = None
+            found_dts = [dt["text"] for dt in line_dates if dt["x"] <= 24.0]
+            if len(found_dts) >= 2:
+                active_post_date, active_value_date = found_dts[0], found_dts[1]
+            elif len(found_dts) == 1:
+                active_post_date = active_value_date = found_dts[0]
+
+            row_tokens_pool = list(row["tokens"])
+
+            k = i + 1
+            while k < len(raw_rows):
+                next_row = raw_rows[k]
+                has_true_date_anchor = any(
+                    self.DATE_MATCH_REGEX.match(t["text"].strip())
+                    and float(t["x"]) <= 24.0
+                    for t in next_row["tokens"]
+                )
+                if has_true_date_anchor or any(
+                    m in next_row["full_line_text"].upper()
+                    for m in ("STATEMENT SUMMARY", "CLOSING BALANCE")
+                ):
+                    break
+                row_tokens_pool.extend(next_row["tokens"])
+                k += 1
+
+            i = k
+
+            row_numbers = []
+            active_refs = []
+            for token in row_tokens_pool:
+                t_text = token["text"].strip()
+                if self.ACCOUNT_REF_REGEX.match(t_text):
+                    if t_text not in active_refs:
+                        active_refs.append(t_text)
+                    continue
+                if self.NUMERIC_FINDER_REGEX.match(
+                    t_text
+                ) and not self.DATE_MATCH_REGEX.match(t_text):
+                    row_numbers.append(
+                        {"val": t_text, "x": float(token["x"]), "y": float(token["y"])}
+                    )
+
+            row_numbers = sorted(row_numbers, key=lambda n: n["x"])
+
+            balances = [
+                n
+                for n in row_numbers
+                if n["x"] >= 80.0 or self.BALANCE_SIGN_REGEX.search(n["val"])
+            ]
+            tx_amounts = [n for n in row_numbers if n not in balances]
+
+            # Clean text arrays for normal description tokens
+            sub_words = []
+            for t in row_tokens_pool:
+                t_text = t["text"].strip()
+                if (
+                    not self.DATE_MATCH_REGEX.match(t_text)
+                    and not self.NUMERIC_FINDER_REGEX.match(t_text)
+                    and not self.ACCOUNT_REF_REGEX.match(t_text)
+                ):
+                    if not any(
+                        noise in t_text.upper()
+                        for noise in ("CR", "DR", "₹", "NEW", "INR")
+                    ):
+                        sub_words.append(t_text)
+
+            # ─── 📐 UNIVERSAL ROW A & B GEOMETRIC MULTI-ROW SPLITTER ───
+            if len(tx_amounts) >= 2 and len(balances) >= 2:
+                for idx_amt, amt in enumerate(tx_amounts):
+                    if idx_amt < len(balances):
+                        target_y = amt["y"]
+                        line_specific_words = []
+                        for t in row_tokens_pool:
+                            t_text = t["text"].strip()
+                            if abs(float(t["y"]) - target_y) <= 4.0:
+                                if (
+                                    not self.DATE_MATCH_REGEX.match(t_text)
+                                    and not self.NUMERIC_FINDER_REGEX.match(t_text)
+                                    and not self.ACCOUNT_REF_REGEX.match(t_text)
+                                ):
+                                    if not any(
+                                        noise in t_text.upper()
+                                        for noise in ("CR", "DR", "₹", "NEW", "INR")
+                                    ):
+                                        line_specific_words.append(t_text)
+
+                        if not line_specific_words:
+                            # Fallback to general segment if vertical filter is too tight
+                            line_specific_words = (
+                                sub_words[:4] if idx_amt == 0 else sub_words[4:]
+                            )
+
+                        self._commit_record(
+                            intermediate_txns,
+                            active_post_date,
+                            active_value_date,
+                            line_specific_words,
+                            (
+                                amt["val"]
+                                if amt["x"] <= ((debit_target_x + credit_target_x) / 2)
+                                else None
+                            ),
+                            (
+                                amt["val"]
+                                if amt["x"] > ((debit_target_x + credit_target_x) / 2)
+                                else None
+                            ),
+                            balances[idx_amt]["val"],
+                            active_refs,
+                            page_idx,
+                        )
+                continue
+
+            active_debit = None
+            active_credit = None
+            active_balance = None
+
+            if (
+                len(row_numbers) >= 2
+                and row_numbers[-1]["x"] >= 80.0
+                and row_numbers[-2]["x"] >= 65.0
+            ):
+                active_balance = row_numbers[-1]["val"]
+                amt_token = row_numbers[-2]
+                if amt_token["x"] <= ((debit_target_x + credit_target_x) / 2):
+                    active_debit = amt_token["val"]
+                else:
+                    active_credit = amt_token["val"]
+            else:
+                if balances:
+                    active_balance = balances[0]["val"]
+                if tx_amounts:
+                    target_amt = tx_amounts[0]
+                    if target_amt["x"] <= ((debit_target_x + credit_target_x) / 2):
+                        active_debit = target_amt["val"]
+                    else:
+                        active_credit = target_amt["val"]
+
+            inline_cr_match = self.INLINE_CREDIT_REGEX.search(" ".join(sub_words))
+            if not active_credit and not active_debit and inline_cr_match:
+                active_credit = inline_cr_match.group(1)
+
+            if active_credit and active_balance:
+                if self.BALANCE_SIGN_REGEX.search(
+                    str(active_credit)
+                ) or self._parse_float(active_credit) > self._parse_float(
+                    active_balance
+                ):
+                    active_credit, active_balance = active_balance, active_credit
+
+            self._commit_record(
+                intermediate_txns,
+                active_post_date,
+                active_value_date,
+                sub_words,
+                active_debit,
+                active_credit,
+                active_balance,
+                active_refs,
+                page_idx,
+            )
+
+        # ====================== PURE GEOMETRIC CHRONOLOGICAL RECONCILIATION ======================
+        if intermediate_txns:
+            if explicit_opening_balance is not None:
+                resolved_opening_anchor = explicit_opening_balance
+            else:
+                if self.bounds.get("opening_balance"):
+                    resolved_opening_anchor = self._parse_float(
+                        self.bounds.get("opening_balance")
+                    )
+                else:
+                    first_tx = intermediate_txns[0]
+                    resolved_opening_anchor = (
+                        self._parse_float(first_tx["balance"])
+                        + self._parse_float(first_tx["debit"])
+                        - self._parse_float(first_tx["credit"])
+                    )
+
+            self.calculated_opening_balance = round(resolved_opening_anchor, 2)
+            running_calculation_tally = resolved_opening_anchor
+
+            variance_rows_pool = []
+            admin_memo_rows_pool = []
+
+            for idx, tx in enumerate(intermediate_txns, start=1):
+                # ─── 🛡️ THE PARENT NARRATIVE INHERITANCE PASS ───
+                # If a row's description compiled completely empty, pull down the narrative string from the record above it
+                if tx["narration_description"] == "ONLINE TRANSACTION" and idx > 1:
+                    tx["narration_description"] = intermediate_txns[idx - 2][
+                        "narration_description"
+                    ]
+
+                dr_val = self._parse_float(tx["debit"])
+                cr_val = self._parse_float(tx["credit"])
+                parsed_row_bal = self._parse_float(tx["balance"])
+
+                if dr_val > 0.0:
+                    self.running_tally_debits += dr_val
+                    self.count_debits += 1
+                if cr_val > 0.0:
+                    self.running_tally_credits += cr_val
+                    self.count_credits += 1
+                if dr_val == 0.0 and cr_val == 0.0:
+                    self.count_empty_memo_lines += 1
+                    admin_memo_rows_pool.append((idx, tx))
+
+                running_calculation_tally = round(
+                    running_calculation_tally - dr_val + cr_val, 2
+                )
+                tx["calculated_running_total"] = running_calculation_tally
+
+                if (
+                    parsed_row_bal > 0.0
+                    and abs(running_calculation_tally - parsed_row_bal) > 0.01
+                ):
+                    variance_rows_pool.append(
+                        (
+                            idx,
+                            tx,
+                            parsed_row_bal,
+                            round(parsed_row_bal - running_calculation_tally, 2),
+                        )
+                    )
+
+            self.calculated_closing_balance = round(running_calculation_tally, 2)
+
+            if variance_rows_pool:
+                self.reconciliation_status = (
+                    f"🔴 VARIANCE BREAK ({len(variance_rows_pool)} Lines)"
+                )
+                print("\n🚨 === PIPELINE DRIFT ANOMALY ISOLATION REPORT ===")
+                for v_idx, v_tx, bank_bal, drift in variance_rows_pool[:30]:
+                    print(
+                        f"  Line {v_idx}. [{v_tx['date']}] {v_tx['narration_description'][:40]}... | Dr: {v_tx['debit'] or '0.00'} | Cr: {v_tx['credit'] or '0.00'} | PDF Bal: {v_tx['balance']} | Calc: ₹{v_tx['calculated_running_total']} | Drift: ₹{drift}"
+                    )
+                print(
+                    f" ...Total rows exhibiting active math deviations: {len(variance_rows_pool)}"
+                )
+                print("===================================================\n")
+            else:
+                self.reconciliation_status = "🟢 VERIFIED MATCHED"
+                print("\n📋 === CHRONOLOGICAL TRANSACTION JOURNAL SUMMARY ===")
+                for idx, tx in enumerate(intermediate_txns, start=1):
+                    print(
+                        f" {idx}. [{tx['date']}] {tx['narration_description'][:45]}... | Dr: {tx['debit'] or '0.00'} | Cr: {tx['credit'] or '0.00'} | PDF Bal: {tx['balance']} | Calc Bal: ₹{tx['calculated_running_total']}"
+                    )
+                print("====================================================\n")
+
+            if admin_memo_rows_pool:
+                print("👻 === ADMINISTRATIVE NOTES COMPILATION PROFILE ===")
+                for m_idx, m_tx in admin_memo_rows_pool:
+                    print(
+                        f"  [Row {m_idx} on Page {m_tx['id'].split('_')[2][1:]}] Date: {m_tx['date']} | Narration: {m_tx['narration_description']} | Bal: {m_tx['balance']}"
+                    )
+                print("==================================================\n")
+
+            print("⚖️ === AUTOMATED ENGINE VERIFICATION SUMMARY DECK ===")
+            print(f" 📂 TOTAL LEDGER LINES EVALUATED   : {len(intermediate_txns)}")
+            print(
+                f" 📦 NET ACCOUNT DEBITS SUMMED      : ₹{round(self.running_tally_debits, 2):,.2f} ({self.count_debits} Rows)"
+            )
+            print(
+                f" 📦 NET ACCOUNT CREDITS SUMMED     : ₹{round(self.running_tally_credits, 2):,.2f} ({self.count_credits} Rows)"
+            )
+            print(
+                f" 📋 ZERO-VALUE ADMINISTRATIVE NOTES: {self.count_empty_memo_lines} Rows"
+            )
+            print(
+                f" 🏁 DERIVED ACCOUNT OPENING BASE   : ₹{self.calculated_opening_balance:,.2f}"
+            )
+            print(
+                f" 🏁 COMPILED STATEMENT CLOSING     : ₹{self.calculated_closing_balance:,.2f}"
+            )
+            print(
+                f" ⚖️ PIPELINE RECONCILIATION STATUS   : {self.reconciliation_status}"
+            )
+            print("=====================================================\n")
+
+        return intermediate_txns
+
+    def _commit_record(
+        self,
+        target_list,
+        post_dt,
+        val_dt,
+        tokens_list,
+        debit_val,
+        credit_val,
+        balance_val,
+        refs_list,
+        page_idx,
+    ):
+        full_desc = " ".join(tokens_list).strip()
+        full_desc = re.sub(r"\s+-\s+", " ", full_desc)
+        full_desc = re.sub(r"-$", "", full_desc)
+        full_desc = re.sub(r"^-", "", full_desc)
+
+        words = full_desc.split()
+        seen = []
+        for w in words:
+            if not seen or w.upper() != seen[-1].upper():
+                seen.append(w)
+        final_narration = " ".join(seen).strip()
+
+        if refs_list:
+            final_narration = f"{final_narration} Ref: {' / '.join(refs_list)}"
+
+        normalized_post_date = self._normalize_date(post_dt)
+        normalized_val_date = (
+            self._normalize_date(val_dt) if val_dt else normalized_post_date
+        )
+
+        target_list.append(
+            {
+                "id": f"row_hex_p{page_idx}_{normalized_post_date.replace('-', '')}_{len(target_list)}",
+                "date": normalized_post_date,
+                "value_date": normalized_val_date,
+                "narration_description": (
+                    final_narration if final_narration else "ONLINE TRANSACTION"
+                ),
+                "chq_ref": "",
+                "tran_type": "",
+                "debit": debit_val,
+                "credit": credit_val,
+                "balance": balance_val,
+                "calculated_running_total": 0.0,
+                "status": "NEW",
+                "Hex": "PRODUCTION_VERIFIED",
+            }
+        )

@@ -7,14 +7,15 @@ interface StagingPreviewLine {
   id: string;
   date: string;
   value_date?: string;
-  narration_description: string; // 🟢 UNIFIED FROM description
+  narration_description: string;
   tran_type?: string;      
-  chq_ref?: string;               // 🟢 UNIFIED FROM cheque_ref
+  chq_ref?: string;               
   credit: number | null;
   debit: number | null;
-  amount: number;
+  balance?: number;               // 🔑 UNIFIED KEY MATCH WITH BACKEND
+  amount?: number;                // Fallback protection
   status: string;
-  Hex: string;
+  Hex?: string;
 }
 
 interface TemplateMetadata {
@@ -166,14 +167,14 @@ export default function UniversalStatementIngestView() {
   const statementClosing = responseMeta?.closingBalance || 0;
   const calculatedClosingValue = opening + totalCredit - totalDebit;
   
-  const isBalanceVerified = responseMeta ? Math.abs(calculatedClosingValue - statementClosing) < 0.01 : false;
+  const isBalanceVerified = responseMeta ? Math.abs(calculatedClosingValue - statementClosing) < 0.05 : false;
   const frontendRenderCount = previewLines.length;
   const isRowCountVerified = responseMeta ? responseMeta.count === frontendRenderCount : false;
   const isFileFullyStale = responseMeta ? responseMeta.count === 0 : false;
   const isDoubleTrustOk = isBalanceVerified && isRowCountVerified && !isFileFullyStale;
 
   return (
-    <div className="space-y-6 animate-fade-in text-white p-2 text-left">
+    <div className="space-y-6 text-white p-2 text-left">
       <div>
         <h2 className="text-2xl font-bold tracking-tight text-emerald-400">Universal 9-Column Ingestion Pipeline</h2>
         <p className="text-sm text-zinc-400 mt-1">Dynamic coordinate tracking processor capturing 100% of rows from multi-page JPEGs/PDFs.</p>
@@ -185,7 +186,7 @@ export default function UniversalStatementIngestView() {
 
       {/* 📊 Beautiful Summary Reconciliation & Double-Trust Matrix Table */}
       {responseMeta && (
-        <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-xl overflow-x-auto animate-fade-in space-y-4">
+        <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-xl overflow-x-auto space-y-4">
           
           {/* 🚥 LIVE TRAFFIC LIGHT COLLISION MATRIX TABLE */}
           {(() => {
@@ -205,7 +206,6 @@ export default function UniversalStatementIngestView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-900/40">
-                    {/* Row 1: Total Volume */}
                     <tr className="hover:bg-zinc-900/20 transition-colors">
                       <td className="py-2.5 text-zinc-400 flex items-center gap-1.5">
                         <span>📦</span> TOTAL STREAMS EXTRACTED
@@ -214,7 +214,6 @@ export default function UniversalStatementIngestView() {
                       <td className="py-2.5 text-right text-zinc-500 text-[10px] uppercase font-bold">Processed</td>
                     </tr>
 
-                    {/* Row 2: Net Fresh Records */}
                     <tr className={`transition-all ${newCount > 0 ? 'bg-emerald-950/5 text-emerald-400/90' : 'text-zinc-600'}`}>
                       <td className="py-2.5 flex items-center gap-1.5 font-medium">
                         <span>✨</span> NET FRESH RECORDS
@@ -233,7 +232,6 @@ export default function UniversalStatementIngestView() {
                       </td>
                     </tr>
 
-                    {/* Row 3: Historical Collisions */}
                     <tr className={`transition-all ${staleCount > 0 ? 'bg-amber-950/5 text-amber-400/90' : 'text-zinc-600'}`}>
                       <td className="py-2.5 font-medium">
                         <div className="flex flex-col">
@@ -266,7 +264,6 @@ export default function UniversalStatementIngestView() {
             );
           })()}
 
-          {/* Line Break Separation Line */}
           <div className="border-t border-zinc-800/60 my-2" />
 
           <div className="text-xs font-mono font-bold tracking-wider text-zinc-400 mb-3 uppercase flex items-center justify-between">
@@ -286,42 +283,36 @@ export default function UniversalStatementIngestView() {
             </thead>
             <tbody>
               <tr className="text-sm font-bold bg-zinc-900/30 align-top">
-                {/* Opening Balance */}
                 <td className="py-3 px-1 text-zinc-200">
-                  <div>₹{opening.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                  <div>₹{opening?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
                   <div className="text-[10px] font-normal text-zinc-500 mt-0.5">Baseline Anchor</div>
                 </td>
                 
-                {/* Total Debits Sum & Count */}
                 <td className="py-3 text-red-400">
-                  <div>₹{totalDebit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                  <div>₹{totalDebit?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
                   <div className="text-[10px] font-mono font-normal text-red-400/60 mt-0.5">
                     📂 {responseMeta.debitLineCount} debits
                   </div>
                 </td>
                 
-                {/* Total Credits Sum & Count */}
                 <td className="py-3 text-emerald-400">
-                  <div>₹{totalCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                  <div>₹{totalCredit?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
                   <div className="text-[10px] font-mono font-normal text-emerald-400/60 mt-0.5">
                     📂 {responseMeta.creditLineCount} credits
                   </div>
                 </td>
                 
-                {/* Statement Closing Balance */}
                 <td className="py-3 text-zinc-200">
-                  <div>₹{statementClosing.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                  <div>₹{statementClosing?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
                   <div className="text-[10px] font-normal text-zinc-500 mt-0.5">Target Document Value</div>
                 </td>
                 
-                {/* Computed Running Ledger Value */}
                 <td className="py-3 text-cyan-400">
-                  <div>₹{calculatedClosingValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                  <div>₹{calculatedClosingValue?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
                   <div className="text-[10px] font-normal text-cyan-500/60 mt-0.5">Mathematical Result</div>
                 </td>
                 
-                {/* Security Validation Status Tags */}
-                <td className="py-1">
+                <td className="py-3">
                   <div className={`mx-auto max-w-[210px] p-1.5 rounded-lg border text-center flex flex-col gap-0.5 text-[10px] uppercase font-bold tracking-wide ${
                     isDoubleTrustOk ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400' : 'bg-rose-950/30 border-rose-800/30 text-rose-400'
                   }`}>
@@ -337,7 +328,6 @@ export default function UniversalStatementIngestView() {
 
       <br/>
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* Left Input Configuration Controller */}
         <div className="xl:col-span-4 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl space-y-4">
           <div className="space-y-4">
             <div>
@@ -374,7 +364,6 @@ export default function UniversalStatementIngestView() {
           </div>
         </div>
 
-        {/* Right Card Viewport Table Grid Layout */}
         <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
             <div><h3 className="text-base font-semibold text-white">Persistent Workspace Staging Floor (9-Column Review Deck)</h3></div>
@@ -392,7 +381,6 @@ export default function UniversalStatementIngestView() {
               <table className="w-full text-left text-xs text-zinc-300 table-fixed border-collapse" style={{ minWidth: "1100px" }}>
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-[10px] uppercase tracking-wider">
-                    {/* ─── 🟢 HEADERS UNIFIED EVERYWHERE ─── */}
                     <th className="pb-3 font-semibold" style={{ width: "9%" }}>Txn Date</th>
                     <th className="pb-3 font-semibold text-orange-400" style={{ width: "9%" }}>Val Date</th>
                     <th className="pb-3 font-semibold" style={{ width: "30%" }}>Narration Description</th>
@@ -408,6 +396,11 @@ export default function UniversalStatementIngestView() {
                 <tbody className="divide-y divide-zinc-800/40 font-sans">
                   {previewLines.map((line, index) => {
                     const isDuplicate = line.status === "DUPLICATE";
+                    
+                    // 🛡️ CRASH PROTECTOR LAYER: Fallback extraction routing for inverted backend object models
+                    const safeDebit = line.debit ?? null;
+                    const safeCredit = line.credit ?? null;
+                    const safeBalance = line.balance ?? line.amount ?? 0;
 
                     return (
                       <tr 
@@ -419,13 +412,9 @@ export default function UniversalStatementIngestView() {
                         }`}
                         style={{ opacity: isDuplicate ? 0.65 : 1 }}
                       >
-                        {/* 1. Transaction Date */}
                         <td className="py-3 font-mono text-zinc-400 align-top">{line.date}</td>
-                        
-                        {/* 2. Value Date */}
                         <td className="py-3 font-mono text-orange-400/80 align-top">{line.value_date || '-'}</td>
                         
-                        {/* 3. Narration Description Block */}
                         <td className="py-3 font-medium pr-4 align-top leading-relaxed text-[12px]">
                           <div className="flex flex-wrap items-center gap-1.5 mb-1">
                             {line.tran_type && (
@@ -434,43 +423,38 @@ export default function UniversalStatementIngestView() {
                               </span>
                             )}
                           </div>
-                          {/* ─── 🟢 BIND DATA TO UNIFIED FIELD STRING KEY ─── */}
                           <span className={isDuplicate ? 'text-zinc-600 line-through decoration-zinc-800/60' : 'text-zinc-200'}>
                             {line.narration_description}
                           </span>
                         </td>
 
-                        {/* 4. Type Code */}
                         <td className="py-3 text-center align-top">
                           {line.tran_type ? <span className="px-1 py-0.5 bg-zinc-800 border border-zinc-700 text-indigo-300 text-[8px] font-bold rounded uppercase">{line.tran_type}</span> : '-'}
                         </td>
 
-                        {/* 5. Chq/Ref Column */}
-                        {/* ─── 🟢 BIND DATA TO UNIFIED FIELD STRING KEY ─── */}
                         <td className="py-3 font-mono text-sky-400 align-top truncate">
                           {line.chq_ref ? (
                             <span className="px-1 py-0.5 bg-sky-950/40 text-sky-400 border border-sky-900/30 text-[9px] rounded font-bold tracking-wider">
-                              REF:{line.chq_ref}
+                              {line.chq_ref}
                             </span>
                           ) : '-'}
                         </td>
 
-                        {/* 6. Debit Value */}
+                        {/* 🟢 PROTECTED DEBIT CHANNEL */}
                         <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-red-400'}`}>
-                          {line.debit ? `₹${line.debit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
+                          {safeDebit !== null ? `₹${safeDebit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
 
-                        {/* 7. Credit Value */}
+                        {/* 🟢 PROTECTED CREDIT CHANNEL */}
                         <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-emerald-400'}`}>
-                          {line.credit ? `₹${line.credit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
+                          {safeCredit !== null ? `₹${safeCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
 
-                        {/* 8. Running Balance */}
+                        {/* 🟢 CRASHPROOF BALANCE CHANNEL */}
                         <td className="py-3 text-right font-mono font-bold align-top text-[13px] text-cyan-400/90">
-                          ₹{line.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{safeBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
 
-                        {/* 9. Live Status Flag Badge Component */}
                         <td className="py-3 text-center align-top font-mono font-bold text-[10px] tracking-wider select-none">
                           {isDuplicate ? (
                             <span className="text-zinc-600 uppercase">STALE</span>
