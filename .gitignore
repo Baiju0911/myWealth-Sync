@@ -25,6 +25,12 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+Lib/
+site-packages/
+__pycache__/
+*.pyc
+*.lib
+*.dll
 
 # ====================================================================
 # 📦 NODE / NPM FRONTEND LAYER (Dynamic UI Mapping System)
