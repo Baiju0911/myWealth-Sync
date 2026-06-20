@@ -1,6 +1,11 @@
+# Strict_Matrix V2
+
 import re
 import json
+import logging
 from ..utils import normalizer as norm
+
+logger = logging.getLogger(__name__)
 
 
 def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
@@ -18,7 +23,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     db_regex_patterns = config_payload.get("regex_patterns", {})
 
-    # 🎯 DYNAMIC DATABASE REGEX FETCHING
+    # 🎯 DYNAMIC DATABASE REGEX FETCHING WITH BULLETPROOF FALLBACKS
     DATE_MATCH_RAW = db_regex_patterns.get(
         "DATE_MATCH", r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}"
     )
@@ -28,8 +33,23 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     DATE_MATCH_RAW = DATE_MATCH_RAW.replace(r"\b", "")
     NUMERIC_FINDER_RAW = NUMERIC_FINDER_RAW.replace(r"\b", "")
 
-    DATE_RE = re.compile(DATE_MATCH_RAW)
-    NUMERIC_RE = re.compile(NUMERIC_FINDER_RAW, re.I)
+    # 🛡️ SAFE REGEX COMPILATION CRASH-BARRIER
+    try:
+        DATE_RE = re.compile(DATE_MATCH_RAW)
+    except Exception as regex_err:
+        logger.warning(
+            f"⚠️ Corrupt DATE_MATCH pattern in DB for SIB. Using core fallback. Error: {str(regex_err)}"
+        )
+        DATE_RE = re.compile(r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}")
+
+    try:
+        NUMERIC_RE = re.compile(NUMERIC_FINDER_RAW, re.I)
+    except Exception as regex_err:
+        logger.warning(
+            f"⚠️ Corrupt NUMERIC_FINDER pattern in DB for SIB. Using core fallback. Error: {str(regex_err)}"
+        )
+        # Standardized, robust matching pattern that completely avoids regex extensions
+        NUMERIC_RE = re.compile(r"^[0-9\.,\-+\s]+$", re.I)
 
     db_summary_markers = config_payload.get("summary_markers") or []
     db_noise = config_payload.get("system_noise_patterns") or []
