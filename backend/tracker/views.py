@@ -56,6 +56,19 @@ from .parsers.universal_format import (
 )
 from .parsers.utils import generate_row_fingerprint
 
+
+from .parsers.parsers_v1.engine import extract_raw_tokens
+from .parsers.parsers_v1.strategies import strict_matrix
+from .parsers.parsers_v1.utils import normalizer as norm
+from .parsers.parsers_v1.strategies.registry import get_strategy_by_identifier
+from .parsers.parsers_v1.utils import validator
+
+# If you decide to pull in the resolver/profiler/registry/validator modules later:
+# from .parsers.parsers_v1.profiler import create_profile
+# from .parsers.parsers_v1.resolver import resolve_strategy
+# from .parsers.parsers_v1.strategies import registry
+# from .parsers.parsers_v1.utils import validator
+
 User = get_user_model()
 
 # ==========================================
@@ -469,7 +482,7 @@ class BankCredentialViewSet(viewsets.ModelViewSet):
 # ──────────────────────────────────────────────────────────────────────────
 
 
-class StatementStagingCommitView(APIView):
+class StatementStagingCommitView_olderOne(APIView):
     """
     🔒 CORE TRANSACTION COMMIT ENGINE (LEDGER CONNECTED):
     Natively computes deterministic SHA-256 fingerprint strings to neutralize
@@ -673,6 +686,252 @@ class StatementStagingCommitView(APIView):
                         bank_transaction_id=item.get("bank_transaction_id") or "",
                         cheque_ref_number=cheque_reference_id,
                         row_identifier=row_hex,  # 🟢 Writes the correct hash seamlessly!
+                        routing_status="COMMITTED",
+                    )
+                    production_tx_pool.append(staging_obj)
+                    existing_hashes.add(row_hex)
+
+                # Execute atomic bulk create
+                if production_tx_pool:
+                    StatementStagingLine.objects.bulk_create(production_tx_pool)
+
+                # Update header metadata with skipped duplicate counts
+                if duplicate_skip_count > 0:
+                    registry_entry.skipped_duplicate_count = duplicate_skip_count
+                    registry_entry.save(update_fields=["skipped_duplicate_count"])
+
+            return Response(
+                {
+                    "status": "SUCCESS",
+                    "registry_id": str(registry_entry.id),
+                    "message": f"Sync run complete. Saved {len(production_tx_pool)} new rows, safely skipped {duplicate_skip_count} duplicate records.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as batch_err:
+            print(f"❌ RECONCILIATION DATA COMMIT CRASHED: {str(batch_err)}")
+            return Response(
+                {"message": f"Ledger write failure: {str(batch_err)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class StatementStagingCommitView(APIView):
+    """
+    🔒 CORE TRANSACTION COMMIT ENGINE (LEDGER CONNECTED):
+    Natively computes deterministic SHA-256 fingerprint strings to neutralize
+    frontend mutations, drop duplicates, and perform transactional atomic writes.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        account_id = request.data.get("account_id")
+        preview_dataset = request.data.get("preview_dataset", [])
+        meta_summary = request.data.get("meta_summary", {})
+
+        fallback_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        file_name = (
+            request.data.get("file_name")
+            or request.data.get("fileName")
+            or f"STATEMENT_UPLOAD_{fallback_time}.PDF"
+        )
+
+        if not account_id or not preview_dataset:
+            return Response(
+                {
+                    "message": "Required parameters missing or empty payload array received."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        account = get_object_or_404(Account, id=account_id)
+        bank = account.bank
+
+        # Pull historical true 64-character signatures to check collisions
+        existing_hashes = set(
+            StatementStagingLine.objects.filter(account_id=account.id).values_list(
+                "row_identifier", flat=True
+            )
+        )
+
+        def extract_clean_decimal(camel_key, snake_key):
+            extracted_val = meta_summary.get(camel_key)
+            if extracted_val is None:
+                extracted_val = meta_summary.get(snake_key, 0.00)
+            return decimal.Decimal(
+                str(extracted_val if extracted_val is not None else 0.00)
+            )
+
+        op_bal = extract_clean_decimal("openingBalance", "opening_balance")
+        cl_bal = extract_clean_decimal("closingBalance", "closing_balance")
+        tot_dr = extract_clean_decimal("totalDebit", "total_debit")
+        tot_cr = extract_clean_decimal("totalCredit", "total_credit")
+
+        from_date_raw = (
+            request.data.get("report_from_date")
+            or request.data.get("reportFromDate")
+            or meta_summary.get("report_from_date")
+            or meta_summary.get("reportFromDate")
+        )
+        to_date_raw = (
+            request.data.get("report_to_date")
+            or request.data.get("reportToDate")
+            or meta_summary.get("report_to_date")
+            or meta_summary.get("reportToDate")
+        )
+
+        report_from_date = None
+        report_to_date = None
+
+        if from_date_raw:
+            try:
+                report_from_date = datetime.datetime.strptime(
+                    from_date_raw.split("T")[0], "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                pass
+        if to_date_raw:
+            try:
+                report_to_date = datetime.datetime.strptime(
+                    to_date_raw.split("T")[0], "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                pass
+
+        raw_file_type = meta_summary.get("fileType") or meta_summary.get(
+            "file_type", "PDF"
+        )
+        clean_file_type = (
+            "PDF" if raw_file_type == "UNIVERSAL_PDF" else str(raw_file_type)[:10]
+        )
+
+        production_tx_pool = []
+        duplicate_skip_count = 0
+
+        try:
+            with transaction.atomic():
+                # ─── TABLE 1 WRITER: Ingest Registry Entry Record ───
+                registry_entry = StatementIngestRegistry.objects.create(
+                    account=account,
+                    file_name=file_name,
+                    file_type=clean_file_type,
+                    vault_decrypted=meta_summary.get("decrypted")
+                    or meta_summary.get("vault_decrypted", False),
+                    report_from_date=report_from_date,
+                    report_to_date=report_to_date,
+                    opening_balance=op_bal,
+                    closing_balance=cl_bal,
+                    total_debit_amount=tot_dr,
+                    total_credit_amount=tot_cr,
+                    total_row_count=len(preview_dataset),
+                    debit_line_count=meta_summary.get("debitLineCount")
+                    or meta_summary.get("debit_line_count", 0),
+                    credit_line_count=meta_summary.get("creditLineCount")
+                    or meta_summary.get("credit_line_count", 0),
+                    skipped_duplicate_count=0,
+                    source_channel="WEB_DASHBOARD",
+                    ingested_at=timezone.now(),
+                )
+
+                # ─── TABLE 2 WRITER: Atomic Child Row Generation Pass Loop ───
+                for index, item in enumerate(preview_dataset):
+
+                    pure_database_narration = (
+                        item.get("narration_description", "").strip()
+                        or item.get("description", "").strip()
+                    )
+                    cheque_reference_id = (
+                        item.get("chq_ref") or item.get("cheque_ref") or None
+                    )
+                    if cheque_reference_id == "-":
+                        cheque_reference_id = None
+
+                    # ─── 📅 FIXED: ISO DATE ROUTER COUPLING PASS ───
+                    # Pulls the backend standard 'db_date' (YYYY-MM-DD) instead of display string
+                    raw_date = item.get("db_date") or item.get("date")
+                    if not raw_date:
+                        raise ValueError(
+                            f"Missing date signature at row dataset index {index}"
+                        )
+
+                    try:
+                        # Safely processes the ISO standard date layout
+                        tx_date = datetime.datetime.strptime(
+                            str(raw_date).split("T")[0], "%Y-%m-%d"
+                        ).date()
+                    except ValueError:
+                        # Emergency fallback if a row fails pipeline parameter propagation
+                        try:
+                            tx_date = datetime.datetime.strptime(
+                                str(raw_date).strip(), "%d-%m-%Y"
+                            ).date()
+                        except ValueError:
+                            raise ValueError(
+                                f"Row date signature structure '{raw_date}' could not be parsed to database schema specs."
+                            )
+
+                    val_debit = item.get("debit")
+                    val_credit = item.get("credit")
+
+                    dr_decimal = (
+                        decimal.Decimal(str(val_debit))
+                        if val_debit is not None
+                        and str(val_debit).strip() not in {"", "-"}
+                        else None
+                    )
+                    cr_decimal = (
+                        decimal.Decimal(str(val_credit))
+                        if val_credit is not None
+                        and str(val_credit).strip() not in {"", "-"}
+                        else None
+                    )
+
+                    raw_txn_magnitude = float(
+                        val_credit if val_credit else (val_debit if val_debit else 0.00)
+                    )
+                    running_balance_float = float(
+                        item.get("amount") or item.get("balance", 0.00)
+                    )
+                    bal_decimal = decimal.Decimal(str(running_balance_float))
+
+                    # 🔒 LOCK IDENTICAL FINGERPRINT FROM PARSER FRONTEND
+                    row_hex = (
+                        item.get("Hex") or item.get("row_identifier") or item.get("id")
+                    )
+
+                    if not row_hex or len(str(row_hex)) < 64:
+                        row_hex = generate_row_fingerprint(
+                            bank_id=bank.id,
+                            account_id=account.id,
+                            narration=pure_database_narration,
+                            cheque_ref="",
+                            amount=raw_txn_magnitude,
+                            running_balance=running_balance_float,
+                            debit=float(val_debit) if val_debit else None,
+                            credit=float(val_credit) if val_credit else None,
+                            date_str=str(tx_date),
+                        )
+
+                    # 🛡️ THE SECURITY PASS GATE
+                    if row_hex in existing_hashes or item.get("status") == "DUPLICATE":
+                        duplicate_skip_count += 1
+                        continue
+
+                    staging_obj = StatementStagingLine(
+                        account=account,
+                        bank=bank,
+                        ingest_registry=registry_entry,
+                        raw_statement_date=tx_date,
+                        narration=pure_database_narration,
+                        amount=decimal.Decimal(str(raw_txn_magnitude)),
+                        running_balance=bal_decimal,
+                        debit=dr_decimal,
+                        credit=cr_decimal,
+                        bank_transaction_id=item.get("bank_transaction_id") or "",
+                        cheque_ref_number=cheque_reference_id,
+                        row_identifier=row_hex,
                         routing_status="COMMITTED",
                     )
                     production_tx_pool.append(staging_obj)
@@ -1244,7 +1503,7 @@ class StatementIngestRouterDynamicView(APIView):
             )
 
 
-class StatementBulkIngestPipelineView(APIView):
+class StatementBulkIngestPipelineView1(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
@@ -1276,46 +1535,103 @@ class StatementBulkIngestPipelineView(APIView):
                 )
 
             inner_data = result.get("data", {})
-            formatted_transactions = inner_data.get("preview_dataset", [])
+            raw_preview_dataset = inner_data.get("preview_dataset", [])
             recon_status = inner_data.get("reconciliation_status", "PENDING")
 
-            # Determine audit verification state cleanly based on engine calculations
-            is_audit_clean = "🟢" in recon_status
+            # ─── 📊 THE FRONTEND KEY TRANSLATION & TOTALS CALCULATOR MATRIX ───
+            frontend_aligned_dataset = []
 
-            # Emit clean JSON object mapping directly out of the parsing engine values
+            # Initialize calculation accumulators
+            calculated_total_debit = 0.0
+            calculated_total_credit = 0.0
+            debit_rows_count = 0
+            credit_rows_count = 0
+
+            for txn in raw_preview_dataset:
+                # Extract raw numeric strings safely
+                raw_deb = txn.get("debit", "-")
+                raw_crd = txn.get("credit", "-")
+
+                # Sanitize and accumulate Debit values
+                if raw_deb and raw_deb != "-":
+                    try:
+                        clean_deb = float(str(raw_deb).replace(",", "").strip())
+                        calculated_total_debit += clean_deb
+                        debit_rows_count += 1
+                    except ValueError:
+                        pass
+
+                # Sanitize and accumulate Credit values
+                if raw_crd and raw_crd != "-":
+                    try:
+                        clean_crd = float(str(raw_crd).replace(",", "").strip())
+                        calculated_total_credit += clean_crd
+                        credit_rows_count += 1
+                    except ValueError:
+                        pass
+
+                # Build clean frontend object mapping
+                frontend_aligned_dataset.append(
+                    {
+                        "post_date": txn.get("post_date"),
+                        "value_date": txn.get("value_date"),
+                        "narration_description": txn.get("narration"),
+                        "type": txn.get("type", "-"),
+                        "chq_ref": txn.get("cheque_ref", "-"),
+                        "debit": txn.get("debit"),
+                        "credit": txn.get("credit"),
+                        "balance": txn.get("balance"),
+                        "status": txn.get("status", "NEW"),
+                        "page_idx": txn.get("page_idx", 1),
+                    }
+                )
+
+            # Grab opening and closing balances safely from parsing engine records
+            op_bal = inner_data.get("opening_balance", 0.0)
+            cl_bal = inner_data.get("closing_balance", 0.0)
+
+            # ─── 🛡️ AUTOMATED RUNNING BALANCE DRIFT CORRECTION ───
+            # Fallback anchor: If closing balance target box defaults to 0.0,
+            # sync it to the final row's running ledger line balance value.
+            if float(cl_bal) == 0.0 and len(frontend_aligned_dataset) > 0:
+                try:
+                    last_row_bal = frontend_aligned_dataset[-1].get("balance", "0")
+                    cl_bal = float(str(last_row_bal).replace(",", "").strip())
+                except ValueError:
+                    cl_bal = calculated_total_credit - calculated_total_debit
+
+            # Compute mathematically exact balance match pipeline verification status
+            is_balance_matched = (
+                abs(
+                    (op_bal - calculated_total_debit + calculated_total_credit) - cl_bal
+                )
+                < 0.05
+            )
+
+            # ─── 🛡️ ASSEMBLE ULTIMATE PRODUCTION RESPONSE PAYLOAD ───
             payload = {
-                "preview_dataset": formatted_transactions,
-                "total_debit": inner_data.get("total_debit", 0.0),  # 🟢 Fixed Key Map
-                "total_credit": inner_data.get("total_credit", 0.0),  # 🟢 Fixed Key Map
-                "opening_balance": inner_data.get(
-                    "opening_balance", 0.0
-                ),  # 🟢 Fixed Key Map
-                "closing_balance": inner_data.get(
-                    "closing_balance", 0.0
-                ),  # 🟢 Fixed Key Map
-                "count": inner_data.get("count", 0),
-                "debit_line_count": inner_data.get("debit_line_count", 0),
-                "credit_line_count": inner_data.get("credit_line_count", 0),
+                "preview_dataset": frontend_aligned_dataset,
+                "total_debit": calculated_total_debit,
+                "total_credit": calculated_total_credit,
+                "opening_balance": op_bal,
+                "closing_balance": cl_bal,
+                "count": len(frontend_aligned_dataset),
+                "debit_line_count": debit_rows_count,
+                "credit_line_count": credit_rows_count,
+                "empty_memo_line_count": inner_data.get("empty_memo_line_count", 0),
                 "data": {
-                    "preview_dataset": formatted_transactions,
+                    "preview_dataset": frontend_aligned_dataset,
                     "file_type": "UNIVERSAL_PDF",
                     "decrypted": True,
-                    "count": inner_data.get("count", 0),
-                    "opening_balance": inner_data.get(
-                        "opening_balance", 0.0
-                    ),  # 🟢 Fixed Key Map
-                    "closing_balance": inner_data.get(
-                        "closing_balance", 0.0
-                    ),  # 🟢 Fixed Key Map
-                    "total_debit": inner_data.get(
-                        "total_debit", 0.0
-                    ),  # 🟢 Fixed Key Map
-                    "total_credit": inner_data.get(
-                        "total_credit", 0.0
-                    ),  # 🟢 Fixed Key Map
-                    "debit_line_count": inner_data.get("debit_line_count", 0),
-                    "credit_line_count": inner_data.get("credit_line_count", 0),
-                    "audit_passed": is_audit_clean,
+                    "count": len(frontend_aligned_dataset),
+                    "opening_balance": op_bal,
+                    "closing_balance": cl_bal,
+                    "total_debit": calculated_total_debit,
+                    "total_credit": calculated_total_credit,
+                    "debit_line_count": debit_rows_count,
+                    "credit_line_count": credit_rows_count,
+                    "empty_memo_line_count": inner_data.get("empty_memo_line_count", 0),
+                    "audit_passed": is_balance_matched,  # 🟢 FIXED: Switches to True when calculations reconcile
                 },
             }
 
@@ -1327,5 +1643,83 @@ class StatementBulkIngestPipelineView(APIView):
                     "status": "ERROR",
                     "message": f"Pipeline view engine trace crash error: {str(e)}",
                 },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+##################################
+
+
+# backend/tracker/views.py
+
+
+class StatementBulkIngestPipelineView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("statement_file")
+        account_id = request.data.get("account_id")
+
+        if not uploaded_file or not account_id:
+            return Response(
+                {"status": "ERROR", "message": "Required parameters are missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # 1. Fetch Account and its hard-linked Template from the DB
+            account = Account.objects.get(id=account_id)
+            # template_obj = getattr(account, "assigned_template", None)
+            template_obj = UserStatementTemplate.objects.filter(
+                account_id=account_id
+            ).first()
+
+            if not template_obj:
+                return Response(
+                    {
+                        "status": "ERROR",
+                        "message": "No parsing template linked to this account.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # 2. 🎯 PIPELINE ROUTING: Read the strategy explicitly stored in the template record
+            # e.g., template_obj.parser_strategy_code = "STRICT_MATRIX"
+            strategy_code = getattr(
+                template_obj, "parser_strategy_code", "STRICT_MATRIX"
+            )
+            strategy = get_strategy_by_identifier(strategy_code)
+
+            # 3. Pull historical staging balances to pass down if needed
+            existing_hashes = set(
+                StatementStagingLine.objects.filter(
+                    account_id=str(account_id)
+                ).values_list("row_identifier", flat=True)
+            )
+
+            # 4. Execute Extraction Engine (Pure text extraction)
+            pages_raw_data = extract_raw_tokens(uploaded_file)
+
+            # 5. Execute Routed Strategy (Using the database configurations)
+            intermediate_txns, op_bal, system_noise = strategy.execute(
+                pages_raw_data=pages_raw_data,
+                template_obj=template_obj,
+                account_id=account_id,
+                existing_database_hashes=existing_hashes,
+            )
+
+            # 6. Run final mathematical accumulations and audits
+            payload = validator.run_final_math(intermediate_txns, op_bal)
+
+            return Response({"status": "SUCCESS", **payload}, status=status.HTTP_200_OK)
+
+        except Account.DoesNotExist:
+            return Response(
+                {"status": "ERROR", "message": "Account context not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            return Response(
+                {"status": "ERROR", "message": f"Pipeline execution crash: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
