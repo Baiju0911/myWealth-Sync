@@ -1,44 +1,53 @@
 import re
+import json
 from ..utils import normalizer as norm
 
 
 def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
-    # ─── 🛠️ REGEX CONFIGURATIONS FROM DB ───
-    signature = (
-        template_obj.signature_json
-        if isinstance(template_obj.signature_json, dict)
-        else {}
-    )
+    """
+    UNIVERSAL DYNAMIC RELATIVE MATRIX ENGINE: Driven entirely by database configurations.
+    Bypasses structural drifting via a layout-agnostic Right-to-Left context router.
+    """
+    # ─── 📦 DYNAMIC DATABASE OVERRIDES UNPACKING ───
+    try:
+        signature = template_obj.signature_json
+        if isinstance(signature, str):
+            signature = json.loads(signature)
+    except Exception:
+        signature = {}
+
     regex_config = signature.get("regex_patterns", {})
 
-    UNIVERSAL_DATE_PATTERN = (
-        r"\b\d{2}-\d{2}-\d{4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{2}/\d{2}/\d{4}\b"
+    # 🎯 DATABASE DRIVEN REGEX: Load and clean pattern classes dynamically
+    DATE_MATCH_RAW = regex_config.get(
+        "DATE_MATCH", r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}"
     )
-    DATE_MATCH_REGEX = re.compile(
-        regex_config.get("DATE_MATCH", UNIVERSAL_DATE_PATTERN)
-    )
-    NUMERIC_FINDER_REGEX = re.compile(
-        regex_config.get(
-            "NUMERIC_FINDER", r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})(?:CR|DR)?\b"
-        )
-    )
-    BALANCE_SIGN_REGEX = re.compile(
-        regex_config.get("BALANCE_SIGN", r"^(CR|DR)$|^(CR|DR)\b|\b(CR|DR)$")
-    )
+    NUMERIC_FINDER_RAW = regex_config.get("NUMERIC_FINDER", r"\d+(?:\.\d{2})")
+    BALANCE_SIGN_RAW = regex_config.get("BALANCE_SIGN", r"(CR|DR)$")
+
+    DATE_MATCH_RAW = DATE_MATCH_RAW.replace(r"\b", "")
+    NUMERIC_FINDER_RAW = NUMERIC_FINDER_RAW.replace(r"\b", "")
+
+    DATE_MATCH_REGEX = re.compile(DATE_MATCH_RAW)
+    NUMERIC_FINDER_REGEX = re.compile(NUMERIC_FINDER_RAW, re.I)
+    BALANCE_SIGN_REGEX = re.compile(BALANCE_SIGN_RAW, re.I)
 
     SYSTEM_NOISE_REGEX = [
-        re.compile(p) for p in signature.get("system_noise_patterns", [])
+        re.compile(p, re.I) for p in signature.get("system_noise_patterns", [])
     ]
     opening_balance_markers = signature.get("opening_balance_markers", [])
+    db_table_headers_noise = signature.get("table_headers_noise") or []
 
     is_absolute_mode = signature.get("absolute_pixel_lanes") is not None
-    debit_target_x = getattr(template_obj, "debit_x", 375.0)
-    credit_target_x = getattr(template_obj, "credit_x", 445.0)
-    balance_target_x = getattr(template_obj, "balance_x", 510.0)
+    debit_target_x = float(getattr(template_obj, "debit_x", 375.0))
+    credit_target_x = float(getattr(template_obj, "credit_x", 445.0))
+    balance_target_x = float(getattr(template_obj, "balance_x", 510.0))
 
-    mid_point = (debit_target_x + credit_target_x) / 2 if is_absolute_mode else 45.0
+    mid_point = (debit_target_x + credit_target_x) / 2
     y_tolerance = (
-        8.5 if is_absolute_mode else float(getattr(template_obj, "y_tolerance", 3.0))
+        float(getattr(template_obj, "y_tolerance", 3.0))
+        if not is_absolute_mode
+        else 8.5
     )
     header_skip_target = int(getattr(template_obj, "header_lines_to_skip", 0))
 
@@ -68,7 +77,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             ]
         )
         if "STATEMENT SUMMARY" in page_text_dump and not any(
-            h in page_text_dump for h in ["NARRATION", "DEBIT", "CREDIT"]
+            h in page_text_dump for h in ["NARRATION", "DEBIT", "CREDIT", "PARTICULARS"]
         ):
             continue
 
@@ -149,7 +158,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             nums = [
                 t["text"]
                 for t in r["tokens"]
-                if NUMERIC_FINDER_REGEX.match(t["text"].strip())
+                if NUMERIC_FINDER_REGEX.search(t["text"].strip())
             ]
             if nums:
                 extracted_opening_balance = norm.parse_float(nums[-1])
@@ -172,12 +181,16 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     filtered_rows = []
     for row in raw_rows:
         text_upper = str(row["full_line_text"]).upper()
-        max_date_x = 95.0 if is_absolute_mode else 15.0
+        max_date_x = 95.0 if is_absolute_mode else 24.0
+
         has_date_anchor = any(
-            DATE_MATCH_REGEX.match(str(t["text"]).strip())
+            DATE_MATCH_REGEX.search(str(t["text"]).strip())
             and float(t["x"]) < max_date_x
             for t in row["tokens"]
         )
+
+        if any(thn.upper() in text_upper for thn in db_table_headers_noise):
+            continue
 
         if not has_date_anchor and (
             any(sig in text_upper for sig in STANDALONE_NOISE_SIGNALS)
@@ -195,11 +208,12 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     for row in filtered_rows:
         page_idx = row["page_source"]
-        max_date_x = 95.0 if is_absolute_mode else 15.0
+        max_date_x = 95.0 if is_absolute_mode else 24.0
+
         line_dates = [
             str(t["text"]).strip()
             for t in row["tokens"]
-            if DATE_MATCH_REGEX.match(str(t["text"]).strip())
+            if DATE_MATCH_REGEX.search(str(t["text"]).strip())
             and float(t["x"]) < max_date_x
         ]
 
@@ -210,64 +224,82 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 line_dates[1] if len(line_dates) >= 2 else active_post_date
             )
 
-            sub_words, sbi_dr, sbi_cr, sbi_bal = [], [], [], []
+            sub_words = []
+            detected_numbers = []
 
-            # Detect whether summary digits are present inline in the parent text string
-            line_text_upper = str(row["full_line_text"]).upper()
-            has_inline_footer_summary = (
-                "IN CASE YOUR ACCOUNT" in line_text_upper
-                or "*---END OF STATEMENT---*" in line_text_upper
+            # Pre-evaluate row description tokens for structural sign signals
+            full_line_upper = str(row["full_line_text"]).upper()
+            has_inline_debit_keyword = any(
+                kw in full_line_upper
+                for kw in ["WDL", "DIRECT", "DR", "CHARGES", "DEBIT", "FEE"]
+            )
+            has_inline_credit_keyword = any(
+                kw in full_line_upper
+                for kw in ["DEP", "CR", "CREDIT", "INTEREST", "INT", "RTGS"]
             )
 
             for token in row["tokens"]:
                 t_text = str(token["text"]).strip()
                 x0 = float(token["x"])
 
-                if DATE_MATCH_REGEX.match(t_text) and x0 < max_date_x:
+                if DATE_MATCH_REGEX.search(t_text) and x0 < max_date_x:
                     continue
 
-                if BALANCE_SIGN_REGEX.search(t_text.upper()):
-                    if t_text.upper() in ("DR", "CR") and x0 < 500.0:
-                        continue
-                    sbi_bal.append(t_text)
-                elif NUMERIC_FINDER_REGEX.search(t_text):
-                    if is_absolute_mode:
-                        if 500.0 <= x0 < 650.0:
-                            sbi_bal.append(t_text)
-                        elif 300.0 <= x0 < 445.0:
-                            sbi_dr.append(t_text)
-                        elif 445.0 <= x0 < 500.0:
-                            sbi_cr.append(t_text)
-                    else:
-                        if abs(x0 - balance_target_x) <= 9.5:
-                            sbi_bal.append(t_text)
-                        elif x0 <= mid_point:
-                            sbi_dr.append(t_text)
-                        else:
-                            sbi_cr.append(t_text)
+                if NUMERIC_FINDER_REGEX.search(t_text) or BALANCE_SIGN_REGEX.search(
+                    t_text.upper()
+                ):
+                    clean_num = (
+                        t_text.replace("CR", "")
+                        .replace("DR", "")
+                        .replace("Cr", "")
+                        .replace("Dr", "")
+                        .strip()
+                    )
+                    if clean_num:
+                        detected_numbers.append({"val": clean_num, "x": x0})
                 else:
-                    # 🎯 CRITICAL REPAIR: If inline summary tokens bleed into narration tokens, drop them immediately
-                    if has_inline_footer_summary and (
-                        t_text.isdigit()
-                        or "," in t_text
-                        or t_text.upper()
-                        in ("DR", "CR", "COUNT", "TOTAL", "DEBITS", "CREDITS")
-                    ):
-                        continue
                     if not any(n in t_text.upper() for n in ("CR", "DR", "₹", "INR")):
                         sub_words.append(t_text)
 
-            raw_narration = " ".join(sub_words).strip()
+            # ─── 🎯 RIGHT-TO-LEFT SORTING ROUTER ───
+            debit_val = "-"
+            credit_val = "-"
+            balance_val = "-"
 
-            # Flush any trailing inline sentences out cleanly
-            INLINE_TRUNCATION_PATTERNS = [
-                r"\b682\s+387\b.*$",
-                r"\bIN\s+CASE\s+YOUR\s+ACCOUNT\b.*$",
-                r"\bLAST\s+TRANSACTION\s+DATE\b.*$",
-                r"\*---END OF STATEMENT---\*.*$",
-            ]
-            for pattern in INLINE_TRUNCATION_PATTERNS:
-                raw_narration = re.sub(pattern, "", raw_narration, flags=re.IGNORECASE)
+            detected_numbers = sorted(
+                detected_numbers, key=lambda n: n["x"], reverse=True
+            )
+
+            if len(detected_numbers) >= 1:
+                # Far-right token captures the actual running Balance
+                balance_val = detected_numbers[0]["val"]
+                remaining_tx_amts = detected_numbers[1:]
+
+                if len(remaining_tx_amts) >= 1:
+                    target_amt = remaining_tx_amts[0]
+                    t_x_val = target_amt["x"]
+
+                    # Compute normalized horizontal percentage bounds if layout is spatial
+                    date_cutoff = 24.0 if not is_absolute_mode else (page_width * 0.24)
+
+                    # Contextual Routing pass for items embedded left inside narration
+                    if t_x_val <= date_cutoff + 25.0:
+                        if has_inline_debit_keyword and not has_inline_credit_keyword:
+                            debit_val = target_amt["val"]
+                        elif has_inline_credit_keyword and not has_inline_debit_keyword:
+                            credit_val = target_amt["val"]
+                        else:
+                            if t_x_val <= mid_point:
+                                debit_val = target_amt["val"]
+                            else:
+                                credit_val = target_amt["val"]
+                    else:
+                        if t_x_val <= mid_point:
+                            debit_val = target_amt["val"]
+                        else:
+                            credit_val = target_amt["val"]
+
+            raw_narration = " ".join(sub_words).strip()
 
             intermediate_txns.append(
                 {
@@ -276,9 +308,9 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     "post_date": auto_clean_date(active_post_date),
                     "value_date": auto_clean_date(active_value_date),
                     "narration": re.sub(r"\s+", " ", raw_narration).strip(),
-                    "debit": " ".join(sbi_dr).strip() if sbi_dr else "-",
-                    "credit": " ".join(sbi_cr).strip() if sbi_cr else "-",
-                    "balance": " ".join(sbi_bal).strip() if sbi_bal else "-",
+                    "debit": debit_val,
+                    "credit": credit_val,
+                    "balance": balance_val,
                     "page_idx": page_idx,
                 }
             )
@@ -292,7 +324,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 "IN CASE YOUR ACCOUNT",
                 "*---END OF STATEMENT---*",
                 "END OF STATEMENT",
-                "682 387",
             ]
             if any(term in text_upper for term in FOOTER_TERMINATORS):
                 continue
@@ -308,21 +339,11 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
             extra_text = " ".join(append_words).strip()
             if extra_text:
-                INLINE_TRUNCATION_PATTERNS = [
-                    r"\bLAST\s+TRANSACTION\s+DATE\b.*$",
-                    r"\bIN\s+CASE\s+YOUR\s+ACCOUNT\b.*$",
-                    r"\*---END OF STATEMENT---\*",
-                ]
-                for pattern in INLINE_TRUNCATION_PATTERNS:
-                    extra_text = re.sub(pattern, "", extra_text, flags=re.IGNORECASE)
-
-                extra_text = extra_text.strip()
-                if extra_text:
-                    intermediate_txns[-1]["narration"] = re.sub(
-                        r"\s+",
-                        " ",
-                        (intermediate_txns[-1]["narration"] + " " + extra_text).strip(),
-                    )
+                intermediate_txns[-1]["narration"] = re.sub(
+                    r"\s+",
+                    " ",
+                    (intermediate_txns[-1]["narration"] + " " + extra_text).strip(),
+                )
 
     final_clean_txns = [
         tx
@@ -330,39 +351,5 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         if not (tx["debit"] == "-" and tx["credit"] == "-" and tx["balance"] == "-")
     ]
     final_clean_txns.sort(key=lambda x: (x["page_idx"], x["internal_sequence_idx"]))
-
-    # ─── ⚖️ HIGH-VISIBILITY MISMATCH DETECTOR ───
-    running_balance = extracted_opening_balance
-    mismatch_counter = 0
-
-    print("\n🚨 DETECTED LEDGER BALANCE SHEET MISMATCHES:")
-    print("─" * 110)
-
-    for tx in final_clean_txns:
-        dr = norm.parse_float(tx["debit"])
-        cr = norm.parse_float(tx["credit"])
-
-        running_balance = running_balance + cr - dr
-        parsed_bal = norm.parse_float(tx["balance"])
-
-        if parsed_bal != round(running_balance, 2):
-            mismatch_counter += 1
-            if mismatch_counter <= 15:
-                print(
-                    f"❌ Pg: {tx['page_idx']:<4} | Date: {tx['post_date']} | Dr: {tx['debit']:<11} | Cr: {tx['credit']:<11} | StmtBal: {tx['balance']:<13} | Calc: {running_balance:.2f}"
-                )
-                print(f"     ↳ Narration: \"{tx['narration'][:90]}\"")
-                print("─" * 110)
-
-    print(f"\n📊 Extracted Rows Count: {len(final_clean_txns)}")
-    print(
-        f"📊 Total Row Mismatches Logged: {mismatch_counter} / {len(final_clean_txns)}"
-    )
-    print("─" * 110 + "\n")
-
-    print("⚠️" * 10)
-    print(f"Calculated Final Balance: {running_balance:.2f}")
-    print(f"Statement Target Balance: {extracted_opening_balance:.2f}")
-    print("⚠️" * 10 + "\n")
 
     return final_clean_txns, extracted_opening_balance, system_noise_records

@@ -57,11 +57,8 @@ from .parsers.universal_format import (
 from .parsers.utils import generate_row_fingerprint
 
 
-from .parsers.parsers_v1.engine import extract_raw_tokens
-from .parsers.parsers_v1.strategies import strict_matrix
-from .parsers.parsers_v1.utils import normalizer as norm
-from .parsers.parsers_v1.strategies.registry import get_strategy_by_identifier
 from .parsers.parsers_v1.utils import validator
+from .parsers.parsers_v1.orchestrator import process_bank_statement
 
 # If you decide to pull in the resolver/profiler/registry/validator modules later:
 # from .parsers.parsers_v1.profiler import create_profile
@@ -1669,7 +1666,6 @@ class StatementBulkIngestPipelineView(APIView):
         try:
             # 1. Fetch Account and its hard-linked Template from the DB
             account = Account.objects.get(id=account_id)
-            # template_obj = getattr(account, "assigned_template", None)
             template_obj = UserStatementTemplate.objects.filter(
                 account_id=account_id
             ).first()
@@ -1683,35 +1679,46 @@ class StatementBulkIngestPipelineView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # 2. 🎯 PIPELINE ROUTING: Read the strategy explicitly stored in the template record
-            # e.g., template_obj.parser_strategy_code = "STRICT_MATRIX"
-            strategy_code = getattr(
-                template_obj, "parser_strategy_code", "STRICT_MATRIX"
-            )
-            strategy = get_strategy_by_identifier(strategy_code)
-
-            # 3. Pull historical staging balances to pass down if needed
+            # 2. Pull historical staging balances to pass down for de-duplication hashes
             existing_hashes = set(
                 StatementStagingLine.objects.filter(
                     account_id=str(account_id)
                 ).values_list("row_identifier", flat=True)
             )
 
-            # 4. Execute Extraction Engine (Pure text extraction)
-            pages_raw_data = extract_raw_tokens(uploaded_file)
+            # ─── 🔑 FETCH DECRYPTION VAULT USING RECTIFIED MODEL ───
+            try:
+                credential_record = BankCredential.objects.filter(
+                    account_id=account_id
+                ).first()
+                # Grab the password vault list string/JSON column
+                password_vault_data = (
+                    credential_record.password_vault if credential_record else "[]"
+                )
+            except Exception as vault_err:
+                password_vault_data = "[]"
 
-            # 5. Execute Routed Strategy (Using the database configurations)
-            intermediate_txns, op_bal, system_noise = strategy.execute(
-                pages_raw_data=pages_raw_data,
+            # 3. 🏁 UNIFIED ORCHESTRATOR PASS: Sends file + configuration + passwords down
+            intermediate_txns, op_bal, system_noise = process_bank_statement(
+                uploaded_file=uploaded_file,
                 template_obj=template_obj,
                 account_id=account_id,
                 existing_database_hashes=existing_hashes,
+                password_vault=password_vault_data,  # 🔓 Cracks the encrypted PDF bytes stream
             )
 
-            # 6. Run final mathematical accumulations and audits
+            # 4. Run final mathematical accumulations and audits
             payload = validator.run_final_math(intermediate_txns, op_bal)
 
-            return Response({"status": "SUCCESS", **payload}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "status": "SUCCESS",
+                    "strategy_processed": template_obj.parser_strategy_code,
+                    "system_noise_records_cleared": len(system_noise),
+                    **payload,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except Account.DoesNotExist:
             return Response(

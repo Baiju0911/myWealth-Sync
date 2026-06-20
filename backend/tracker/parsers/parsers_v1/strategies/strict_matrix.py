@@ -5,11 +5,11 @@ from ..utils import normalizer as norm
 
 def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     """
-    Executes 2D structural analysis using database parameters.
+    UNIVERSAL DYNAMIC MATRIX ENGINE: Loads tracking metrics, boundary coordinates,
+    and extraction filters directly from database template schema objects.
     """
     # ─── 📦 DYNAMIC DATABASE OVERRIDES UNPACKING ───
     try:
-        # Since your DB uses a real JSONField, it might already arrive as a dict
         config_payload = template_obj.signature_json
         if isinstance(config_payload, str):
             config_payload = json.loads(config_payload)
@@ -18,41 +18,35 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     db_regex_patterns = config_payload.get("regex_patterns", {})
 
-    # Compile dynamic regexes from your structural database payload with a safe hardcoded fallback
+    # 🎯 DYNAMIC DATABASE REGEX FETCHING
     DATE_MATCH_RAW = db_regex_patterns.get(
-        "DATE_MATCH", r"\b\d{2}-\d{2}-\d{4}\b|\b\d{4}-\d{2}-\d{2}\b"
+        "DATE_MATCH", r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}"
     )
-    NUMERIC_FINDER_RAW = db_regex_patterns.get(
-        "NUMERIC_FINDER", r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})(?:CR|DR)?\b"
-    )
-    ACCOUNT_REF_RAW = db_regex_patterns.get("ACCOUNT_REF", r"\b\d{9,18}\b")
-    BALANCE_SIGN_RAW = db_regex_patterns.get("BALANCE_SIGN", r"(CR|DR)$")
+    NUMERIC_FINDER_RAW = db_regex_patterns.get("NUMERIC_FINDER", r"\d+(?:\.\d{2})")
 
-    # Compiled Engines
-    DATE_MATCH_REGEX = re.compile(DATE_MATCH_RAW)
-    NUMERIC_FINDER_REGEX = re.compile(NUMERIC_FINDER_RAW, re.I)
-    ACCOUNT_REF_REGEX = re.compile(ACCOUNT_REF_RAW)
-    BALANCE_SIGN_REGEX = re.compile(BALANCE_SIGN_RAW, re.I)
+    # Clean off strict word boundary tokens (\b) to avoid truncation inside lookaheads
+    DATE_MATCH_RAW = DATE_MATCH_RAW.replace(r"\b", "")
+    NUMERIC_FINDER_RAW = NUMERIC_FINDER_RAW.replace(r"\b", "")
 
-    db_summary_markers = config_payload.get("summary_markers") or [
-        "STATEMENT SUMMARY",
-        "TOTAL DEBITS",
-        "TOTAL CREDITS",
-        "CLOSING BALANCE",
-        "GRAND TOTAL",
-    ]
-    db_opening = config_payload.get("opening_balance_markers") or [
-        r"\bOPENING\s+BALANCE\b"
-    ]
+    DATE_RE = re.compile(DATE_MATCH_RAW)
+    NUMERIC_RE = re.compile(NUMERIC_FINDER_RAW, re.I)
+
+    db_summary_markers = config_payload.get("summary_markers") or []
     db_noise = config_payload.get("system_noise_patterns") or []
+    db_table_headers_noise = config_payload.get("table_headers_noise") or []
 
-    OPENING_BALANCE_REGEX = [re.compile(p, re.I) for p in db_opening]
     SYSTEM_NOISE_REGEX = [re.compile(p, re.I) for p in db_noise]
 
-    # Extract line processing attributes directly from the database template columns
     base_y_tolerance = float(getattr(template_obj, "y_tolerance", 3.0))
     is_fed = getattr(template_obj, "template_name", "SBI") == "FED"
-    active_delta = 4.2 if is_fed else base_y_tolerance
+    active_delta = 7.5 if is_fed else base_y_tolerance
+
+    # Dynamic column parameters mapped directly from database table properties
+    date_bound_x = float(getattr(template_obj, "date_x", 12.0))
+    debit_bound_x = float(getattr(template_obj, "debit_x", 65.0))
+    credit_bound_x = float(getattr(template_obj, "credit_x", 76.0))
+    balance_bound_x = float(getattr(template_obj, "balance_x", 86.0))
+    mid_point = (debit_bound_x + credit_bound_x) / 2
 
     raw_rows = []
 
@@ -62,27 +56,45 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         page_width = page_data["page_width"]
         words = page_data["words"]
 
-        date_baselines = []
+        filtered_words = []
         for w in words:
+            w_text_upper = w[4].strip().upper()
+            HEADER_NOISE_WORDS = (
+                "ACCOUNT OPEN DATE",
+                "REGD. MOBILE",
+                "MODE OF OPERATION",
+                "SCHEME :",
+                "SWIFT CODE",
+                "EFFECTIVE AVAILABLE",
+                "STATEMENT OF ACCOUNT",
+                "LAST UPDATED ON",
+                "SINGLE EMAIL ID",
+                "JOINT HOLDERS",
+            )
+            if any(hnw in w_text_upper for hnw in HEADER_NOISE_WORDS):
+                continue
+            filtered_words.append(w)
+
+        date_baselines = []
+        for w in filtered_words:
             x0, y0, text = w[0], w[1], w[4].strip()
             x_pct = (x0 / page_width) * 100
-            if DATE_MATCH_REGEX.match(text) and x_pct <= 10.0:
-                date_baselines.append(y0)
+
+            if (DATE_RE.search(text) and x_pct <= 24.0) or (
+                text.upper() in ("CR", "DR") and x_pct >= 85.0
+            ):
+                if not any(abs(y0 - d_y) <= active_delta for d_y in date_baselines):
+                    date_baselines.append(y0)
 
         lines_pool = []
-        for w in words:
+        for w in filtered_words:
             x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4].strip()
             if not text:
                 continue
             x_pct = round((x0 / page_width) * 100, 2)
-            belongs_to_date_row = any(
-                abs(y0 - d_y) <= active_delta for d_y in date_baselines
-            )
 
             matched = False
             for line in lines_pool:
-                if belongs_to_date_row != line["belongs_to_date_row"]:
-                    continue
                 if abs(y0 - line["base_y"]) <= active_delta:
                     line["tokens"].append({"text": text, "x": x_pct, "y": y0})
                     matched = True
@@ -92,7 +104,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 lines_pool.append(
                     {
                         "base_y": y0,
-                        "belongs_to_date_row": belongs_to_date_row,
                         "tokens": [{"text": text, "x": x_pct, "y": y0}],
                     }
                 )
@@ -109,35 +120,9 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 }
             )
 
-    # ─── 📊 STEP 2: FIELD BOUNDS ANCHOR MAPPING ───
-    detected_header_indices = {
-        "date": float(getattr(template_obj, "date_x", 4.5)),
-        "narration": float(getattr(template_obj, "narration_x", 23.0)),
-        "debit": float(getattr(template_obj, "debit_x", 66.0)),
-        "credit": float(getattr(template_obj, "credit_x", 78.5)),
-        "balance": float(getattr(template_obj, "balance_x", 87.5)),
-    }
-
-    # ─── 🟢 STEP 3: INITIAL OPENING BALANCE SCANNER ───
-    extracted_opening_balance = 0.0
-    for row in raw_rows[:15]:
-        text_upper = row["full_line_text"].upper()
-        if any(regex.search(text_upper) for regex in OPENING_BALANCE_REGEX):
-            decimal_candidates = NUMERIC_FINDER_REGEX.findall(row["full_line_text"])
-            if decimal_candidates:
-                extracted_opening_balance = norm.parse_float(decimal_candidates[-1])
-                break
-
-    # ─── 🟢 STEP 4: PROCESSING STREAM BUFFER ───
+    # ─── 📊 STEP 2: FIXED POSITION FIELD LANES ───
     intermediate_txns = []
     system_noise_records = []
-
-    debit_target_x = detected_header_indices["debit"]
-    credit_target_x = detected_header_indices["credit"]
-    balance_target_x = detected_header_indices["balance"]
-    date_bound_x = detected_header_indices["date"]
-
-    mid_point = (debit_target_x + credit_target_x) / 2
 
     idx = 0
     while idx < len(raw_rows):
@@ -145,6 +130,10 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         text = row["full_line_text"].strip()
         text_upper = text.upper()
         page_idx = row.get("page_source", 1)
+
+        if any(thn.upper() in text_upper for thn in db_table_headers_noise):
+            idx += 1
+            continue
 
         if any(m in text_upper for m in db_summary_markers) or any(
             regex.search(text_upper) for regex in SYSTEM_NOISE_REGEX
@@ -162,124 +151,183 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         line_dates = [
             {"text": t["text"], "x": t["x"]}
             for t in row["tokens"]
-            if DATE_MATCH_REGEX.match(t["text"].strip())
+            if DATE_RE.search(t["text"].strip())
         ]
-        primary_anchor_found = any(dt["x"] <= (date_bound_x + 8.0) for dt in line_dates)
+
+        primary_anchor_found = False
+        for dt in line_dates:
+            dt_x = float(dt["x"])
+            if dt_x > 100.0:
+                dt_x = (dt_x / page_width) * 100
+            if dt_x <= (date_bound_x + 20.0):
+                primary_anchor_found = True
+                break
 
         if not primary_anchor_found:
             idx += 1
             continue
 
         active_post_date = None
-        active_value_date = None
-        found_dts = [dt["text"] for dt in line_dates if dt["x"] <= 24.0]
-        if len(found_dts) >= 2:
-            active_post_date, active_value_date = found_dts[0], found_dts[1]
-        elif len(found_dts) == 1:
-            active_post_date = active_value_date = found_dts[0]
+        found_dts = []
+        for dt in line_dates:
+            dt_x = float(dt["x"])
+            if dt_x > 100.0:
+                dt_x = (dt_x / page_width) * 100
+            if dt_x <= 24.0:
+                found_dts.append(dt["text"])
+
+        if found_dts:
+            active_post_date = found_dts[0]
 
         row_tokens_pool = list(row["tokens"])
         k = idx + 1
         while k < len(raw_rows):
             next_row = raw_rows[k]
-            has_true_date_anchor = any(
-                DATE_MATCH_REGEX.match(t["text"].strip()) and float(t["x"]) <= 24.0
-                for t in next_row["tokens"]
-            )
-            if has_true_date_anchor or any(
-                m in next_row["full_line_text"].upper() for m in db_summary_markers
+            next_text_upper = next_row["full_line_text"].upper()
+
+            has_true_date_anchor = False
+            for t in next_row["tokens"]:
+                if DATE_RE.search(t["text"].strip()):
+                    t_x = float(t["x"])
+                    if t_x > 100.0:
+                        t_x = (t_x / page_width) * 100
+                    if t_x <= 24.0:
+                        has_true_date_anchor = True
+                        break
+
+            STRICT_BLOCK_TERMINATORS = [
+                "PAGE",
+                "THE FEDERAL BANK",
+                "BRANCH:",
+                "ABBREVIATIONS",
+                "DISCLAIMER",
+                "COMPUTER GENERATED",
+                "TRAN CHEQUE BALANCE",
+            ]
+            if (
+                has_true_date_anchor
+                or any(m in next_text_upper for m in db_summary_markers)
+                or any(term in next_text_upper for term in STRICT_BLOCK_TERMINATORS)
             ):
                 break
             row_tokens_pool.extend(next_row["tokens"])
             k += 1
         idx = k
 
-        row_numbers = []
-        active_refs = []
-        for token in row_tokens_pool:
-            t_text = token["text"].strip()
-            if ACCOUNT_REF_REGEX.match(t_text):
-                if t_text not in active_refs:
-                    active_refs.append(t_text)
-                continue
-            if NUMERIC_FINDER_REGEX.match(t_text) and not DATE_MATCH_REGEX.match(
-                t_text
-            ):
-                row_numbers.append(
-                    {"val": t_text, "x": float(token["x"]), "y": float(token["y"])}
-                )
-        print(f"🔍 DEBUG ROW tokens: {[t['text'] for t in row_tokens_pool]}")
-        row_numbers = sorted(row_numbers, key=lambda n: n["x"])
-
-        balances = [
-            n
-            for n in row_numbers
-            if abs(n["x"] - balance_target_x) <= 5.0
-            or BALANCE_SIGN_REGEX.search(n["val"])
-        ]
-        tx_amounts = [n for n in row_numbers if n not in balances]
-
-        sub_words = []
+        all_balances = []
         for t in row_tokens_pool:
-            t_text = t["text"].strip()
-            if (
-                not DATE_MATCH_REGEX.match(t_text)
-                and not NUMERIC_FINDER_REGEX.match(t_text)
-                and not ACCOUNT_REF_REGEX.match(t_text)
-            ):
-                if not any(
-                    noise in t_text.upper() for noise in ("CR", "DR", "₹", "INR")
-                ):
-                    sub_words.append(t_text)
+            if NUMERIC_RE.search(t["text"].strip()):
+                t_x = float(t["x"])
+                if t_x > 100.0:
+                    t_x = (t_x / page_width) * 100
+                if t_x >= balance_bound_x:
+                    all_balances.append(t)
 
-        active_debit = None
-        active_credit = None
-        active_balance = None
+        if len(all_balances) >= 2:
+            split_y = (all_balances[0]["y"] + all_balances[1]["y"]) / 2
+            sub_pools = [
+                [t for t in row_tokens_pool if t["y"] < split_y],
+                [t for t in row_tokens_pool if t["y"] >= split_y],
+            ]
+        else:
+            sub_pools = [row_tokens_pool]
 
-        if len(tx_amounts) >= 1 and balances:
-            active_balance = balances[0]["val"]
-            target_amt = tx_amounts[0]
+        for active_pool in sub_pools:
+            dates_found = []
+            narration_pieces = []
 
-            if target_amt["x"] <= mid_point:
-                active_debit = target_amt["val"]
-            elif abs(target_amt["x"] - debit_target_x) < abs(
-                target_amt["x"] - credit_target_x
-            ):
-                active_debit = target_amt["val"]
+            # Temporary pools to hold numbers and their coordinates
+            detected_numbers = []
+
+            for token in active_pool:
+                t_text = token["text"].strip()
+                x_loc = float(token["x"])
+
+                if x_loc > 100.0:
+                    x_loc = (x_loc / page_width) * 100
+
+                if x_loc <= date_bound_x and DATE_RE.search(t_text):
+                    dates_found.append(t_text)
+                elif date_bound_x < x_loc < debit_bound_x:
+                    narration_pieces.append(t_text)
+                elif x_loc >= debit_bound_x and NUMERIC_RE.search(t_text):
+                    # Clean off common bank text sign qualifiers
+                    clean_val = (
+                        t_text.replace("CR", "")
+                        .replace("DR", "")
+                        .replace("Cr", "")
+                        .replace("Dr", "")
+                        .strip()
+                    )
+                    detected_numbers.append({"val": clean_val, "x": x_loc})
+
+            # ─── 🎯 RIGHT-TO-LEFT COLUMN SORTING PATCH ───
+            debit_val = "-"
+            credit_val = "-"
+            balance_val = "-"
+
+            # Sort all identified numbers horizontally from right to left
+            detected_numbers = sorted(
+                detected_numbers, key=lambda n: n["x"], reverse=True
+            )
+
+            if len(detected_numbers) >= 1:
+                # The rightmost numeric element is ALWAYS the running statement balance
+                balance_val = detected_numbers[0]["val"]
+
+                # If there are remaining numbers, evaluate them against the transaction lanes
+                remaining_tx_amts = detected_numbers[1:]
+                if len(remaining_tx_amts) >= 1:
+                    target_amt = remaining_tx_amts[0]
+                    # Compare against mid_point to distinguish debits from credits
+                    if target_amt["x"] <= mid_point:
+                        debit_val = target_amt["val"]
+                    else:
+                        credit_val = target_amt["val"]
+
+            if debit_val == "-" and credit_val == "-" and balance_val == "-":
+                continue
+
+            raw_narration = " ".join(narration_pieces).strip()
+            raw_narration = raw_narration.replace("/", " ").replace("\\", " ")
+            final_narration = re.sub(r"\s+", " ", raw_narration).strip()
+
+            post_date = dates_found[0] if dates_found else None
+            if not post_date:
+                inline_dates = DATE_RE.findall(final_narration)
+                if inline_dates:
+                    post_date = inline_dates[0]
+
+            if not post_date and len(intermediate_txns) > 0:
+                post_date = intermediate_txns[-1]["post_date"]
             else:
-                active_credit = target_amt["val"]
+                post_date = (
+                    norm.normalize_date(str(post_date), template_obj.date_format)
+                    if post_date
+                    else "-"
+                )
 
-        raw_narration = " ".join(sub_words).strip()
+            intermediate_txns.append(
+                {
+                    "id": f"row_{page_idx}_{len(intermediate_txns)}",
+                    "post_date": post_date,
+                    "value_date": post_date,
+                    "narration": final_narration,
+                    "debit": debit_val,
+                    "credit": credit_val,
+                    "balance": balance_val,
+                    "page_idx": page_idx,
+                }
+            )
 
-        # ─── 🎯 SURGICAL FOOTER & NOISE STRIPPER FOR INLINE BLEED ───
-        INLINE_TRUNCATION_PATTERNS = [
-            r"\bPage\s+\d+\s+of\s+\d+\b.*$",
-            r"\bTHE\s+FEDERAL\s+BANK\s+LTD\b.*$",
-            r"\bBRANCH\s*:\s*THIRUVANANTHAPURAM\b.*$",
-            r"\bTran\s+Cheque\s+Balance\b.*$",
-            r"\bWebsite\s*:\s*www\b.*$",
-            r"\bCIN\s*:\s*[A-Z0-9]+\b.*$",
-        ]
-        for pattern in INLINE_TRUNCATION_PATTERNS:
-            raw_narration = re.sub(pattern, "", raw_narration, flags=re.IGNORECASE)
-
-        final_narration = re.sub(r"\s+", " ", raw_narration).strip()
-
-        intermediate_txns.append(
-            {
-                "id": f"row_{page_idx}_{len(intermediate_txns)}",
-                "post_date": norm.normalize_date(
-                    active_post_date, template_obj.date_format
-                ),
-                "value_date": norm.normalize_date(
-                    active_value_date or active_post_date, template_obj.date_format
-                ),
-                "narration": final_narration,
-                "debit": active_debit if active_debit else "-",
-                "credit": active_credit if active_credit else "-",
-                "balance": active_balance if active_balance else "-",
-                "page_idx": page_idx,
-            }
+    # ─── ⚖️ PRINT BALANCES MAP ───
+    print("\n🚨 UNFILTERED VALUE STREAM SHEET:")
+    print("─" * 120)
+    for tx in intermediate_txns:
+        print(
+            f"Pg {tx['page_idx']} | Date: {tx['post_date']:<10} | Dr: {tx['debit']:<10} | Cr: {tx['credit']:<10} | Bal: {tx['balance']:<12}"
         )
+        print(f"   ↳ Narration: \"{tx['narration']}\"")
+        print("─" * 120)
 
-    return intermediate_txns, extracted_opening_balance, system_noise_records
+    return intermediate_txns, 0.0, system_noise_records
