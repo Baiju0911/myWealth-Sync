@@ -5,15 +5,15 @@ import { type AccountEntity } from '../types/ledger';
 
 interface StagingPreviewLine {
   id: string;
-  date: string;
+  post_date: string;
   value_date?: string;
   narration_description: string;
   tran_type?: string;      
   chq_ref?: string;               
   credit: number | null;
   debit: number | null;
-  balance?: number;               // 🔑 UNIFIED KEY MATCH WITH BACKEND
-  amount?: number;                // Fallback protection
+  balance?: number;               
+  amount?: number;                
   status: string;
   Hex?: string;
 }
@@ -35,6 +35,7 @@ interface ApiResponseMeta {
   rawMatchCount: number;
   debitLineCount: number;
   creditLineCount: number;
+  emptyMemoLineCount: number; // 📋 MAPS DIRECTLY TO API PIPELINE VALUES
   duplicateCount: number; 
   report_from_date?: string | null;
   report_to_date?: string | null;
@@ -131,6 +132,7 @@ export default function UniversalStatementIngestView() {
           rawMatchCount: res.data.data?.raw_match_count || res.data.raw_match_count || 0,
           debitLineCount: res.data.data?.debit_line_count || res.data.debit_line_count || 0,
           creditLineCount: res.data.data?.credit_line_count || res.data.credit_line_count || 0,
+          emptyMemoLineCount: res.data.data?.empty_memo_line_count || res.data.empty_memo_line_count || 0,
           duplicateCount: res.data.data?.duplicate_count || res.data.duplicate_count || 0, 
         });
       }
@@ -138,6 +140,7 @@ export default function UniversalStatementIngestView() {
       console.error(err);
       setErrorMsg(err.response?.data?.message || 'Staging engine processing failure.');
     } finally {
+      setLoading(true); // Keeps layout stable until teardown completes
       setLoading(false);
     }
   };
@@ -184,147 +187,176 @@ export default function UniversalStatementIngestView() {
 
       <br/>
 
-      {/* 📊 Beautiful Summary Reconciliation & Double-Trust Matrix Table */}
-      {responseMeta && (
-        <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-xl overflow-x-auto space-y-4">
-          
-          {/* 🚥 LIVE TRAFFIC LIGHT COLLISION MATRIX TABLE */}
-          {(() => {
-            const totalRows = previewLines.length;
-            const staleCount = previewLines.filter(l => l.status === "DUPLICATE").length;
-            const newCount = totalRows - staleCount;
-            const isFullyStale = staleCount === totalRows;
+{/* 📊 High-Performance Summary Reconciliation & Double-Trust Matrix Deck */}
+{responseMeta && (
+  <div className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-6 shadow-2xl space-y-6 font-mono text-zinc-300 block clear-both" style={{ width: '100%', minWidth: '100%', display: 'block' }}>
+    
+    {/* 📋 SECTION HEADER */}
+    <div className="w-full flex flex-row items-center justify-between border-b border-zinc-800 pb-3 gap-4" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between' }}>
+      <div className="flex items-center gap-2 min-w-0" style={{ display: 'flex', alignItems: 'center' }}>
+        <span className="text-emerald-400 text-base shrink-0">⚖️</span>
+        <h3 className="text-sm tracking-wider uppercase truncate" style={{ fontWeight: 900, color: '#f3f4f6' }}>
+          Automated Engine Verification Summary Deck
+        </h3>
+      </div>
+      <div className="text-[10px] uppercase tracking-widest shrink-0 bg-zinc-900 px-2 py-0.5 border border-zinc-800 rounded hidden sm:inline-block" style={{ fontWeight: 700, color: '#9ca3af' }}>
+        File Mode: {responseMeta.fileType}
+      </div>
+    </div>
 
-            return (
-              <div className="overflow-x-auto w-full">
-                <table className="w-full text-left font-mono text-[11px] border-collapse">
-                  <thead>
-                    <tr className="border-b border-zinc-900 text-zinc-500 uppercase tracking-wider text-[10px]">
-                      <th className="pb-2 font-medium" style={{ width: '40%' }}>Telemetry Stream Metrics</th>
-                      <th className="pb-2 font-medium text-right" style={{ width: '30%' }}>Volume count</th>
-                      <th className="pb-2 font-medium text-right" style={{ width: '30%' }}>Pipeline Action Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-900/40">
-                    <tr className="hover:bg-zinc-900/20 transition-colors">
-                      <td className="py-2.5 text-zinc-400 flex items-center gap-1.5">
-                        <span>📦</span> TOTAL STREAMS EXTRACTED
-                      </td>
-                      <td className="py-2.5 text-right font-bold text-zinc-300">{totalRows}</td>
-                      <td className="py-2.5 text-right text-zinc-500 text-[10px] uppercase font-bold">Processed</td>
-                    </tr>
-
-                    <tr className={`transition-all ${newCount > 0 ? 'bg-emerald-950/5 text-emerald-400/90' : 'text-zinc-600'}`}>
-                      <td className="py-2.5 flex items-center gap-1.5 font-medium">
-                        <span>✨</span> NET FRESH RECORDS
-                      </td>
-                      <td className={`py-2.5 text-right font-bold ${newCount > 0 ? 'text-emerald-400' : 'text-zinc-600'}`}>
-                        +{newCount}
-                      </td>
-                      <td className="py-2.5 text-right font-bold text-[10px] uppercase tracking-wider">
-                        {newCount > 0 ? (
-                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                            READY
-                          </span>
-                        ) : (
-                          <span className="text-zinc-600">-</span>
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={`transition-all ${staleCount > 0 ? 'bg-amber-950/5 text-amber-400/90' : 'text-zinc-600'}`}>
-                      <td className="py-2.5 font-medium">
-                        <div className="flex flex-col">
-                          <div className="flex items-center gap-1.5">
-                            <span>🛡️</span> HISTORICAL COLLISIONS
-                          </div>
-                          {isFullyStale && totalRows > 0 && (
-                            <span className="text-[9px] text-amber-500/50 normal-case font-normal pl-5">
-                              engine will safely pass commit run
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className={`py-2.5 text-right font-bold align-top ${staleCount > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>
-                        {staleCount}
-                      </td>
-                      <td className="py-2.5 text-right font-bold text-[10px] uppercase tracking-wider align-top">
-                        {staleCount > 0 ? (
-                          <span className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                            BLOCKED
-                          </span>
-                        ) : (
-                          <span className="text-zinc-600">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-
-          <div className="border-t border-zinc-800/60 my-2" />
-
-          <div className="text-xs font-mono font-bold tracking-wider text-zinc-400 mb-3 uppercase flex items-center justify-between">
-            <span>⚖️ Automated Engine Verification Summary Deck</span>
-            <span className="text-[10px] text-zinc-500 normal-case font-normal">File Mode: {responseMeta.fileType}</span>
+    {/* 📡 GRID LAYER 1: TELEMETRY MATRIX STRIPS */}
+    <div className="w-full block" style={{ display: 'block', width: '100%' }}>
+      <div className="text-[10px] uppercase tracking-wider mb-3" style={{ fontWeight: 900, color: '#f3f4f6' }}>
+        Telemetry Stream Metrics
+      </div>
+      
+      {/* Expanded Horizontal Grid: Now split into 6 explicit structural slots */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '12px', width: '100%' }}>
+        
+        {/* ACTIVE DEBITS CARD */}
+        <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#9ca3af' }}>
+            <span style={{ display: 'inline-block', width: '6px', height: '6px', backgroundColor: '#f87171', borderRadius: '50%', marginRight: '6px' }}></span> Debits
           </div>
-          <table className="w-full text-left font-mono text-xs text-zinc-300 border-collapse">
-            <thead>
-              <tr className="border-b border-zinc-800 text-[10px] text-zinc-500 uppercase">
-                <th className="py-2 font-semibold">Opening Balance</th>
-                <th className="py-2 font-semibold text-red-400">Total Debits (-)</th>
-                <th className="py-2 font-semibold text-emerald-400">Total Credits (+)</th>
-                <th className="py-2 font-semibold">Statement Closing</th>
-                <th className="py-2 font-semibold text-cyan-400">Computed Run</th>
-                <th className="py-2 font-semibold text-center">Security Status Check</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="text-sm font-bold bg-zinc-900/30 align-top">
-                <td className="py-3 px-1 text-zinc-200">
-                  <div>₹{opening?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
-                  <div className="text-[10px] font-normal text-zinc-500 mt-0.5">Baseline Anchor</div>
-                </td>
-                
-                <td className="py-3 text-red-400">
-                  <div>₹{totalDebit?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
-                  <div className="text-[10px] font-mono font-normal text-red-400/60 mt-0.5">
-                    📂 {responseMeta.debitLineCount} debits
-                  </div>
-                </td>
-                
-                <td className="py-3 text-emerald-400">
-                  <div>₹{totalCredit?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
-                  <div className="text-[10px] font-mono font-normal text-emerald-400/60 mt-0.5">
-                    📂 {responseMeta.creditLineCount} credits
-                  </div>
-                </td>
-                
-                <td className="py-3 text-zinc-200">
-                  <div>₹{statementClosing?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
-                  <div className="text-[10px] font-normal text-zinc-500 mt-0.5">Target Document Value</div>
-                </td>
-                
-                <td className="py-3 text-cyan-400">
-                  <div>₹{calculatedClosingValue?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '0.00'}</div>
-                  <div className="text-[10px] font-normal text-cyan-500/60 mt-0.5">Mathematical Result</div>
-                </td>
-                
-                <td className="py-3">
-                  <div className={`mx-auto max-w-[210px] p-1.5 rounded-lg border text-center flex flex-col gap-0.5 text-[10px] uppercase font-bold tracking-wide ${
-                    isDoubleTrustOk ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400' : 'bg-rose-950/30 border-rose-800/30 text-rose-400'
-                  }`}>
-                    <div>{isBalanceVerified ? "🟢 Balance: MATCHED" : isFileFullyStale ? "⏳ RE-PARSE TIMELINE" : "🔴 Balance: DRIFT"}</div>
-                    <div>{isRowCountVerified ? `🟢 Parsing: ${frontendRenderCount} Rows Verified` : "🔴 Integrity: MISMATCH"}</div>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div className="text-lg font-bold text-red-400 mt-2 font-mono tabular-nums">
+            {responseMeta.debitLineCount} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '10px' }}>Rows</span>
+          </div>
         </div>
-      )}
+
+        {/* ACTIVE CREDITS CARD */}
+        <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#9ca3af' }}>
+            <span style={{ display: 'inline-block', width: '6px', height: '6px', backgroundColor: '#34d399', borderRadius: '50%', marginRight: '6px' }}></span> Credits
+          </div>
+          <div className="text-lg font-bold text-emerald-400 mt-2 font-mono tabular-nums">
+            {responseMeta.creditLineCount} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '10px' }}>Rows</span>
+          </div>
+        </div>
+
+        {/* 🚥 NEW FIELD: LIVE FRESH/NEW LEDGER COUNTER */}
+        <div className="bg-cyan-950/20 border border-cyan-800/30 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#22d3ee' }}>
+            ✨ New Records
+          </div>
+          <div className="text-lg font-bold text-cyan-400 mt-2 font-mono tabular-nums">
+            {previewLines.filter(tx => tx.status === 'NEW').length} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#0891b2', fontSize: '10px' }}>Rows</span>
+          </div>
+        </div>
+
+        {/* 🚥 NEW FIELD: LIVE DUPLICATE/STALE COLLISION COUNTER */}
+        <div className="bg-amber-950/20 border border-amber-800/30 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#fbbf24' }}>
+            ⏳ Stale / Dup
+          </div>
+          <div className="text-lg font-bold text-amber-400 mt-2 font-mono tabular-nums">
+            {previewLines.filter(tx => tx.status === 'DUPLICATE' || tx.status === 'STALE').length} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#d97706', fontSize: '10px' }}>Rows</span>
+          </div>
+        </div>
+
+        {/* ADMINISTRATIVE NOTES CARD */}
+        <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#9ca3af' }}>
+            <span>📝</span> Admin Notes
+          </div>
+          <div className="text-lg font-bold text-amber-500 mt-2 font-mono tabular-nums">
+            {responseMeta.emptyMemoLineCount} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '10px' }}>Row</span>
+          </div>
+        </div>
+
+        {/* GLOBAL SUM TOTAL CARD */}
+        <div className="bg-zinc-900/80 border border-zinc-700/60 rounded-lg p-3 shadow-inner col-span-4 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
+          <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#e4e4e7' }}>
+            📦 Global Total
+          </div>
+          <div className="text-lg font-mono tabular-nums" style={{ fontWeight: 900, color: '#f3f4f6' }}>
+            {previewLines.length} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#a1a1aa', fontSize: '10px' }}>Total</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    {/* 💰 GRID LAYER 2: LEDGER ACCUMULATOR MATH COMPILER */}
+    <div className="w-full block space-y-2.5">
+      <div className="text-[10px] uppercase tracking-wider" style={{ fontWeight: 900, color: '#f3f4f6' }}>
+        Financial Liquidity Ledger Blocks
+      </div>
+      
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '12px', width: '100%' }}>
+        
+        {/* OPENING BASE */}
+        <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
+          <div className="text-[12px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#f3f4f6' }}>Opening Balance</div>
+          <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '11px', letterSpacing: '0.05em', marginTop: '4px' }}>Baseline Anchor</div>
+          <div className="text-sm font-bold text-zinc-200 mt-1 font-mono tabular-nums truncate">
+            ₹{opening?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+
+        {/* TOTAL DEBITS */}
+        <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
+          <div className="text-[12px] text-red-400 uppercase tracking-wider truncate" style={{ fontWeight: 900 }}>Total Debits (-)</div>
+          <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#ef4444', opacity: 0.5, fontSize: '11px', letterSpacing: '0.05em', marginTop: '4px' }}>Cash Vol Outflow</div>
+          <div className="text-sm font-bold text-red-400 mt-1 font-mono tabular-nums truncate">
+            ₹{totalDebit?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+
+        {/* TOTAL CREDITS */}
+        <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
+          <div className="text-[12px] text-emerald-400 uppercase tracking-wider truncate" style={{ fontWeight: 900 }}>Total Credits (+)</div>
+          <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#10b981', opacity: 0.5, fontSize: '11px', letterSpacing: '0.05em', marginTop: '4px' }}>Cash Vol Inflow</div>
+          <div className="text-sm font-bold text-emerald-400 mt-1 font-mono tabular-nums truncate">
+            ₹{totalCredit?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+
+        {/* STATEMENT CLOSING */}
+        <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
+          <div className="text-[12px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#f3f4f6' }}>Statement Closing</div>
+          <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '11px', letterSpacing: '0.05em', marginTop: '4px' }}>Document Target</div>
+          <div className="text-sm font-bold text-zinc-200 mt-1 font-mono tabular-nums truncate">
+            ₹{statementClosing?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+
+        {/* COMPUTED RUN */}
+        <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
+          <div className="text-[10px] text-cyan-400 uppercase tracking-wider truncate" style={{ fontWeight: 900 }}>Computed Run</div>
+          <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#06b6d4', opacity: 0.5, fontSize: '9px', letterSpacing: '0.05em', marginTop: '4px' }}>Calculated Result</div>
+          <div className="text-sm font-bold text-cyan-400 mt-1 font-mono tabular-nums truncate">
+            ₹{calculatedClosingValue?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 🚥 SAFETY SECURITY AUDIT CHECK PANEL */}
+    <div className="w-full p-4 rounded-lg border flex flex-col sm:flex-row items-center justify-between gap-4 text-[10px] font-bold tracking-wider"
+         style={{ 
+           backgroundColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.05)' : 'rgba(239, 68, 68, 0.05)',
+           borderColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+           color: isDoubleTrustOk ? '#34d399' : '#f87171',
+           display: 'flex'
+         }}>
+      <div className="flex items-center gap-2 uppercase shrink-0" style={{ color: '#f3f4f6' }}>
+        <span className="text-xs">🛡️</span> Security Pipeline Verification Status:
+      </div>
+      <div className="flex flex-row flex-wrap gap-2 justify-end w-full sm:w-auto" style={{ display: 'flex' }}>
+        <span className="px-2.5 py-1 rounded border uppercase font-mono font-bold tracking-wide shadow-sm"
+              style={{ backgroundColor: isBalanceVerified ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderColor: isBalanceVerified ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
+          {isBalanceVerified ? "🟢 Balance: MATCHED" : isFileFullyStale ? "⏳ RE-PARSE" : "🔴 Balance: DRIFTED"}
+        </span>
+        <span className="px-2.5 py-1 rounded border uppercase font-mono font-bold tracking-wide shadow-sm"
+              style={{ backgroundColor: isRowCountVerified ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderColor: isRowCountVerified ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
+          {isRowCountVerified ? `🟢 Parsing: ${previewLines.length} Rows Whole` : "🔴 SIZE MISMATCH"}
+        </span>
+      </div>
+    </div>
+
+  </div>
+)}
+
 
       <br/>
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
@@ -377,19 +409,19 @@ export default function UniversalStatementIngestView() {
           {previewLines.length === 0 ? (
             <div className="flex-1 flex items-center justify-center p-12 text-center text-sm text-zinc-500 border border-dashed border-zinc-800 rounded-lg">No active 9-column entries extracted into staging floor yet.</div>
           ) : (
-            <div className="overflow-x-auto w-full">
+            <div className="overflow-x-auto w-full max-h-[600px]">
               <table className="w-full text-left text-xs text-zinc-300 table-fixed border-collapse" style={{ minWidth: "1100px" }}>
-                <thead>
-                  <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-[10px] uppercase tracking-wider">
-                    <th className="pb-3 font-semibold" style={{ width: "9%" }}>Txn Date</th>
-                    <th className="pb-3 font-semibold text-orange-400" style={{ width: "9%" }}>Val Date</th>
-                    <th className="pb-3 font-semibold" style={{ width: "30%" }}>Narration Description</th>
-                    <th className="pb-3 font-semibold text-center text-indigo-400" style={{ width: "6%" }}>Type</th>
-                    <th className="pb-3 font-semibold text-sky-400" style={{ width: "9%" }}>Chq/Ref</th>
-                    <th className="pb-3 font-semibold text-right text-red-400" style={{ width: "9%" }}>Debit (-)</th>
-                    <th className="pb-3 font-semibold text-right text-emerald-400" style={{ width: "9%" }}>Credit (+)</th>
-                    <th className="pb-3 font-semibold text-right text-cyan-400" style={{ width: "9%" }}>Balance</th>
-                    <th className="pb-3 font-semibold text-center" style={{ width: "5%" }}>Status</th>
+                <thead className="sticky top-0 bg-zinc-900 z-10 shadow-md">
+                  <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-[10px] uppercase tracking-wider bg-zinc-900">
+                    <th className="py-3 font-semibold" style={{ width: "9%" }}>Txn Date</th>
+                    <th className="py-3 font-semibold text-orange-400" style={{ width: "9%" }}>Val Date</th>
+                    <th className="py-3 font-semibold" style={{ width: "30%" }}>Narration Description</th>
+                    <th className="py-3 font-semibold text-center text-indigo-400" style={{ width: "6%" }}>Type</th>
+                    <th className="py-3 font-semibold text-sky-400" style={{ width: "9%" }}>Chq/Ref</th>
+                    <th className="py-3 font-semibold text-right text-red-400" style={{ width: "9%" }}>Debit (-)</th>
+                    <th className="py-3 font-semibold text-right text-emerald-400" style={{ width: "9%" }}>Credit (+)</th>
+                    <th className="py-3 font-semibold text-right text-cyan-400" style={{ width: "9%" }}>Balance</th>
+                    <th className="py-3 font-semibold text-center" style={{ width: "5%" }}>Status</th>
                   </tr>
                 </thead>
                 
@@ -397,7 +429,6 @@ export default function UniversalStatementIngestView() {
                   {previewLines.map((line, index) => {
                     const isDuplicate = line.status === "DUPLICATE";
                     
-                    // 🛡️ CRASH PROTECTOR LAYER: Fallback extraction routing for inverted backend object models
                     const safeDebit = line.debit ?? null;
                     const safeCredit = line.credit ?? null;
                     const safeBalance = line.balance ?? line.amount ?? 0;
@@ -410,9 +441,13 @@ export default function UniversalStatementIngestView() {
                             ? 'bg-zinc-950/20 text-zinc-500 hover:bg-zinc-950/30 border-l-2 border-zinc-700' 
                             : 'hover:bg-zinc-950/40 text-zinc-300'
                         }`}
-                        style={{ opacity: isDuplicate ? 0.65 : 1 }}
+                        style={{ 
+                          opacity: isDuplicate ? 0.65 : 1,
+                          contentVisibility: 'auto', // 🚀 NATIVE CSS VIRTUAL DOM OPTIMIZATION
+                          containIntrinsicSize: 'auto 45px'
+                        }}
                       >
-                        <td className="py-3 font-mono text-zinc-400 align-top">{line.date}</td>
+                        <td className="py-3 font-mono text-zinc-400 align-top">{line.post_date}</td>
                         <td className="py-3 font-mono text-orange-400/80 align-top">{line.value_date || '-'}</td>
                         
                         <td className="py-3 font-medium pr-4 align-top leading-relaxed text-[12px]">
@@ -440,17 +475,14 @@ export default function UniversalStatementIngestView() {
                           ) : '-'}
                         </td>
 
-                        {/* 🟢 PROTECTED DEBIT CHANNEL */}
                         <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-red-400'}`}>
                           {safeDebit !== null ? `₹${safeDebit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
 
-                        {/* 🟢 PROTECTED CREDIT CHANNEL */}
                         <td className={`py-3 text-right font-mono font-bold align-top text-[13px] ${isDuplicate ? 'text-zinc-800' : 'text-emerald-400'}`}>
                           {safeCredit !== null ? `₹${safeCredit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : <span className="text-zinc-800 opacity-40 font-normal">-</span>}
                         </td>
 
-                        {/* 🟢 CRASHPROOF BALANCE CHANNEL */}
                         <td className="py-3 text-right font-mono font-bold align-top text-[13px] text-cyan-400/90">
                           ₹{safeBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>

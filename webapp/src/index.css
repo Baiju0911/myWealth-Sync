@@ -109,3 +109,37 @@ code {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #3f3f46; /* zinc-700 */
 }
+
+
+/* ==========================================================================
+   🌊 DYNAMIC HORIZONTAL FLEX-STRETCH OVERRIDE LAYER
+   Forces the ingest telemetry cards to stretch left-to-right across widths.
+   ========================================================================== */
+.pipeline-canvas-container {
+  display: block;
+  width: 100% !important;
+  max-width: 100% !important;
+  clear: both;
+}
+
+.pipeline-canvas-container .grid {
+  display: grid !important;
+}
+
+@media (min-width: 640px) {
+  .pipeline-canvas-container .sm\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 768px) {
+  .pipeline-canvas-container .md\:grid-cols-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .pipeline-canvas-container .lg\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}

@@ -5,6 +5,7 @@ from django.db import models
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.utils import timezone
+import json
 
 # ==========================================
 # 1. AUTHENTICATION & SECURITY TABLES (RBAC)
@@ -353,10 +354,15 @@ class StatementIngestRegistry(models.Model):
 
 
 class UserStatementTemplate(models.Model):
+    # Available parsing engines within the pipeline table
+    STRATEGY_CHOICES = [
+        ("STRICT_MATRIX", "Strict Coordinate Matrix"),
+        ("RELATIVE_SEQUENCE", "Relative Text Sequences"),
+    ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     account = models.ForeignKey(
-        Account,
+        "Account",  # Lazy reference handles import circularity cleanly
         on_delete=models.CASCADE,
         related_name="statement_templates",
         null=True,
@@ -371,7 +377,15 @@ class UserStatementTemplate(models.Model):
         max_length=100,
         blank=True,
         default="",
-        help_text="Lookup search anchor signature",
+        help_text="Lookup search anchor signature matching bank layout profiles.",
+    )
+
+    # ─── 🎯 THE PIPELINE STRATEGY ROUTER ───
+    parser_strategy_code = models.CharField(
+        max_length=50,
+        choices=STRATEGY_CHOICES,
+        default="STRICT_MATRIX",
+        help_text="Explicitly binds this layout template profile to a code-execution engine strategy.",
     )
 
     # ─── 📐 HORIZONTAL CANVAS POSITION CHANNELS ───
@@ -414,14 +428,37 @@ class UserStatementTemplate(models.Model):
         default=0, help_text="Rows to discard at bottom of pages"
     )
 
-    # ─── 🛡️ THE DYNAMIC ARCHITECTURAL ESCAPE HATCH ───
-    signature_json = models.TextField(
+    # ─── 🛡️ THE CENTRALIZED SSOT REGEX & NOISE GUARDIAN ───
+    signature_json = models.JSONField(
+        default=dict,
         blank=True,
-        default="{}",
-        help_text="Dynamic parameters payload box, e.g., {'force_negative_balances': false, 'strip_all_zeros': true}",
+        help_text="Stores regex_patterns, noise_patterns, and opening_balance_markers.",
+    )
+
+    # Dedicated Schema Mapper for Bank-Specific Column Aliases
+    header_mapping_json = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Stores column label aliases, e.g., {'date': ['Date', 'Txn Date'], 'debit': ['Debit', 'Withdrawal']}",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "ledger_userstatementtemplate"
+        verbose_name = "User Statement Template"
+        verbose_name_plural = "User Statement Templates"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Handle emergency safety fallbacks for both JSON fields
+        for field in ["signature_json", "header_mapping_json"]:
+            try:
+                val = getattr(self, field)
+                if isinstance(val, str):
+                    setattr(self, field, json.loads(val))
+            except Exception:
+                setattr(self, field, {})
+
     def __str__(self):
-        return f"{self.template_name} -> {self.account.name if self.account else 'Unlinked'}"
+        return f"[{self.parser_strategy_code}] {self.template_name} -> {self.account.name if self.account else 'Unlinked'}"
