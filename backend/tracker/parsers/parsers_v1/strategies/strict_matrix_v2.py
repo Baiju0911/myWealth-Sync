@@ -252,11 +252,11 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         else:
             sub_pools = [row_tokens_pool]
 
+        # ... [Keep your sub_pools loop setup exactly as it is above] ...
+
         for active_pool in sub_pools:
             dates_found = []
             narration_pieces = []
-
-            # Temporary pools to hold numbers and their coordinates
             detected_numbers = []
 
             for token in active_pool:
@@ -271,7 +271,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 elif date_bound_x < x_loc < debit_bound_x:
                     narration_pieces.append(t_text)
                 elif x_loc >= debit_bound_x and NUMERIC_RE.search(t_text):
-                    # Clean off common bank text sign qualifiers
                     clean_val = (
                         t_text.replace("CR", "")
                         .replace("DR", "")
@@ -281,25 +280,19 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     )
                     detected_numbers.append({"val": clean_val, "x": x_loc})
 
-            # ─── 🎯 RIGHT-TO-LEFT COLUMN SORTING PATCH ───
             debit_val = "-"
             credit_val = "-"
             balance_val = "-"
 
-            # Sort all identified numbers horizontally from right to left
             detected_numbers = sorted(
                 detected_numbers, key=lambda n: n["x"], reverse=True
             )
 
             if len(detected_numbers) >= 1:
-                # The rightmost numeric element is ALWAYS the running statement balance
                 balance_val = detected_numbers[0]["val"]
-
-                # If there are remaining numbers, evaluate them against the transaction lanes
                 remaining_tx_amts = detected_numbers[1:]
                 if len(remaining_tx_amts) >= 1:
                     target_amt = remaining_tx_amts[0]
-                    # Compare against mid_point to distinguish debits from credits
                     if target_amt["x"] <= mid_point:
                         debit_val = target_amt["val"]
                     else:
@@ -311,6 +304,24 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             raw_narration = " ".join(narration_pieces).strip()
             raw_narration = raw_narration.replace("/", " ").replace("\\", " ")
             final_narration = re.sub(r"\s+", " ", raw_narration).strip()
+
+            # ─── 🛡️ NEW INTERCEPT: EXTRACT OPENING BALANCE & DROP B/F LINE ───
+            narration_upper = final_narration.upper()
+            if (
+                "B F" in narration_upper
+                or "B/F" in narration_upper
+                or "BROUGHT FORWARD" in narration_upper
+            ):
+                if balance_val != "-":
+                    try:
+                        # Normalize the balance text into a standard python float string
+                        sanitized_bal = balance_val.replace(",", "").strip()
+                        # Dynamic injection into template memory storage context
+                        template_obj.computed_opening_balance = float(sanitized_bal)
+                    except Exception:
+                        pass
+                # 🔥 CRITICAL: Skip appending this row to intermediate_txns!
+                continue
 
             post_date = dates_found[0] if dates_found else None
             if not post_date:
@@ -340,14 +351,8 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 }
             )
 
-    # ─── ⚖️ PRINT BALANCES MAP ───
-    print("\n🚨 UNFILTERED VALUE STREAM SHEET:")
-    print("─" * 120)
-    for tx in intermediate_txns:
-        print(
-            f"Pg {tx['page_idx']} | Date: {tx['post_date']:<10} | Dr: {tx['debit']:<10} | Cr: {tx['credit']:<10} | Bal: {tx['balance']:<12}"
-        )
-        print(f"   ↳ Narration: \"{tx['narration']}\"")
-        print("─" * 120)
+    # ─── ⚖️ OVERRIDE RETURN RETURN BLOCK ───
+    # Dynamically extract the opening balance we intercepted, fallback to 0.0 if not captured
+    extracted_opening_balance = getattr(template_obj, "computed_opening_balance", 0.0)
 
-    return intermediate_txns, 0.0, system_noise_records
+    return intermediate_txns, extracted_opening_balance, system_noise_records
