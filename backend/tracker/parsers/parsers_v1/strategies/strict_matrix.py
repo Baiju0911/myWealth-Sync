@@ -195,6 +195,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                         has_true_date_anchor = True
                         break
 
+            # Added newly uncovered SIB/FED block boundaries
             STRICT_BLOCK_TERMINATORS = [
                 "PAGE",
                 "THE FEDERAL BANK",
@@ -203,6 +204,8 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 "DISCLAIMER",
                 "COMPUTER GENERATED",
                 "TRAN CHEQUE BALANCE",
+                "STATEMENT PERIOD",
+                "SBINT:",
             ]
             if (
                 has_true_date_anchor
@@ -235,8 +238,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         for active_pool in sub_pools:
             dates_found = []
             narration_pieces = []
-
-            # Temporary pools to hold numbers and their coordinates
             detected_numbers = []
 
             for token in active_pool:
@@ -246,12 +247,19 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 if x_loc > 100.0:
                     x_loc = (x_loc / page_width) * 100
 
-                if x_loc <= date_bound_x and DATE_RE.search(t_text):
-                    dates_found.append(t_text)
-                elif date_bound_x < x_loc < debit_bound_x:
+                # 🎯 REFINE ACCURACY FILTER PASS
+                is_date_string = bool(DATE_RE.match(t_text))
+
+                if is_date_string:
+                    # Captures chronological structural coordinates
+                    if x_loc <= date_bound_x + 20.0:
+                        dates_found.append(t_text)
+                    # Dropping internal duplicate layout track columns, ignoring random injection strings
+                    continue
+
+                if date_bound_x < x_loc < debit_bound_x:
                     narration_pieces.append(t_text)
                 elif x_loc >= debit_bound_x and NUMERIC_RE.search(t_text):
-                    # Clean off common bank text sign qualifiers
                     clean_val = (
                         t_text.replace("CR", "")
                         .replace("DR", "")
@@ -261,25 +269,19 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     )
                     detected_numbers.append({"val": clean_val, "x": x_loc})
 
-            # ─── 🎯 RIGHT-TO-LEFT COLUMN SORTING PATCH ───
             debit_val = "-"
             credit_val = "-"
             balance_val = "-"
 
-            # Sort all identified numbers horizontally from right to left
             detected_numbers = sorted(
                 detected_numbers, key=lambda n: n["x"], reverse=True
             )
 
             if len(detected_numbers) >= 1:
-                # The rightmost numeric element is ALWAYS the running statement balance
                 balance_val = detected_numbers[0]["val"]
-
-                # If there are remaining numbers, evaluate them against the transaction lanes
                 remaining_tx_amts = detected_numbers[1:]
                 if len(remaining_tx_amts) >= 1:
                     target_amt = remaining_tx_amts[0]
-                    # Compare against mid_point to distinguish debits from credits
                     if target_amt["x"] <= mid_point:
                         debit_val = target_amt["val"]
                     else:
@@ -294,6 +296,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
             post_date = dates_found[0] if dates_found else None
             if not post_date:
+                # Safe execution pass for embedded narrative transaction records
                 inline_dates = DATE_RE.findall(final_narration)
                 if inline_dates:
                     post_date = inline_dates[0]

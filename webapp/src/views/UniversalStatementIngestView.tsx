@@ -59,6 +59,22 @@ export default function UniversalStatementIngestView() {
   const [availableTemplates, setAvailableTemplates] = useState<TemplateMetadata[]>([]);
   const [forcedTemplateId, setForcedTemplateId] = useState<string>('');
 
+  const downloadWorkableCSV = (rawStreamText: string) => {
+    if (!rawStreamText) return;
+    
+    // Convert tildes to commas for standard excel processing
+    const csvContent = rawStreamText.replace(/ ~ /g, ",");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "statement_export.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   useEffect(() => {
     accountApi.getAccounts()
       .then(res => setAccounts(Array.isArray(res) ? res : res.results || []))
@@ -135,6 +151,7 @@ export default function UniversalStatementIngestView() {
           emptyMemoLineCount: res.data.data?.empty_memo_line_count || res.data.empty_memo_line_count || 0,
           duplicateCount: res.data.data?.duplicate_count || res.data.duplicate_count || 0, 
         });
+        (window as any).__lastRawStream = res.data.data?.raw_csv_stream || res.data.raw_csv_stream || "";
       }
     } catch (err: any) {
       console.error(err);
@@ -397,14 +414,36 @@ export default function UniversalStatementIngestView() {
         </div>
 
         <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
+         {/* <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
             <div><h3 className="text-base font-semibold text-white">Persistent Workspace Staging Floor (9-Column Review Deck)</h3></div>
             {previewLines.length > 0 && (
               <button type="button" onClick={handleCommitStaging} disabled={commitLoading} className="bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-white font-mono font-bold text-xs uppercase px-4 py-2 rounded-lg shadow-md transition-all">
                 {commitLoading ? 'Saving Ledger Run...' : '🔒 Save Reconciled Statement'}
               </button>
             )}
+          </div> */}
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
+            <div><h3 className="text-base font-semibold text-white">Persistent Workspace Staging Floor (9-Column Review Deck)</h3></div>
+            
+            {previewLines.length > 0 && (
+              <div className="flex items-center gap-3">
+                {/* 📊 NEW UTILITY: EXPORT INTERMEDIATE CSV RUN FOR MANUAL TOOLING */}
+                <button 
+                  type="button" 
+                  onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")} 
+                  className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-emerald-400 font-mono font-bold text-xs uppercase px-4 py-2 rounded-lg shadow-md transition-all"
+                >
+                  📥 Export Workable CSV
+                </button>
+
+                <button type="button" onClick={handleCommitStaging} disabled={commitLoading} className="bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-white font-mono font-bold text-xs uppercase px-4 py-2 rounded-lg shadow-md transition-all">
+                  {commitLoading ? 'Saving Ledger Run...' : '🔒 Save Reconciled Statement'}
+                </button>
+              </div>
+            )}
           </div>
+
 
           {previewLines.length === 0 ? (
             <div className="flex-1 flex items-center justify-center p-12 text-center text-sm text-zinc-500 border border-dashed border-zinc-800 rounded-lg">No active 9-column entries extracted into staging floor yet.</div>
