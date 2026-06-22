@@ -1699,22 +1699,78 @@ class StatementBulkIngestPipelineView(APIView):
                 password_vault_data = "[]"
 
             # 3. 🏁 UNIFIED ORCHESTRATOR PASS: Sends file + configuration + passwords down
-            intermediate_txns, op_bal, system_noise = process_bank_statement(
+            processed_bundle, op_bal, system_noise = process_bank_statement(
                 uploaded_file=uploaded_file,
                 template_obj=template_obj,
                 account_id=account_id,
                 existing_database_hashes=existing_hashes,
-                password_vault=password_vault_data,  # 🔓 Cracks the encrypted PDF bytes stream
+                password_vault=password_vault_data,
             )
 
-            # 4. Run final mathematical accumulations and audits
-            payload = validator.run_final_math(intermediate_txns, op_bal)
+            # Initialize pipeline configuration fallbacks
+            raw_csv_stream_text = ""
+            ocr_confidence_score = (
+                100.0  # Perfect baseline configuration for native parsers
+            )
+            active_engine_strategy = (
+                template_obj.parser_strategy_code
+            )  # Fallback tracker layout string
 
+            # ─── 🚥 STRATEGY ROUTING PASS ─────────────────────────────────────
+            if (
+                isinstance(processed_bundle, dict)
+                and "transactions_list" in processed_bundle
+            ):
+                # 🎯 AI Fallback Engine Routing Pass
+                intermediate_txns = processed_bundle.get("transactions_list", [])
+                raw_csv_stream_text = processed_bundle.get("raw_csv_stream", "")
+
+                # 📊 Harvest performance tracker metrics from dictionary metadata layers
+                ocr_confidence_score = processed_bundle.get("confidence_score", 0.0)
+                active_engine_strategy = processed_bundle.get(
+                    "fallback_engine_executed", "PaddleOCR_v1"
+                )
+
+                # Run math safely on the isolated internal transaction dictionary lists
+                payload = validator.run_final_math(intermediate_txns, op_bal)
+
+            elif isinstance(processed_bundle, str):
+                # ⚠️ EMERGENCY FALLBACK LAYER: If processed_bundle returned directly as a raw string text block
+                intermediate_txns = []
+                raw_csv_stream_text = processed_bundle
+                active_engine_strategy = "PaddleOCR_v1_Direct_Stream"
+                payload = {
+                    "preview_dataset": [],
+                    "opening_balance": op_bal,
+                    "closing_balance": op_bal,
+                    "count": 0,
+                    "total_debit": 0,
+                    "total_credit": 0,
+                }
+            else:
+                # ⚙️ STANDARD TEMPLATE LAYER: Fits your older structural layouts perfectly
+                intermediate_txns = processed_bundle
+
+                # Execute normal validator accumulations natively
+                payload = validator.run_final_math(intermediate_txns, op_bal)
+
+                # ─── 🎯 UNIVERSAL WYSIWYG BACKPORT FOR STANDARD TEMPLATES ───
+                final_dataset = payload.get("preview_dataset", intermediate_txns or [])
+                raw_csv_lines = [
+                    f"{r.get('post_date', r.get('date', ''))} ~ {r.get('narration_description', r.get('narration', ''))} ~ {r.get('debit', '')} ~ {r.get('credit', '')} ~ {r.get('balance', '')}"
+                    for r in final_dataset
+                ]
+                raw_csv_stream_text = "\n".join(raw_csv_lines)
+
+            # ─── 🏁 RESPONSE FORMULATION ──────────────────────────────────────
             return Response(
                 {
                     "status": "SUCCESS",
-                    "strategy_processed": template_obj.parser_strategy_code,
+                    "strategy_processed": template_obj.parser_strategy_code,  # DB Configuration code string
+                    "engine_strategy_executed": active_engine_strategy,  # Active engine runtime descriptor
+                    "confidence_score": ocr_confidence_score,  # Calculated verification index metrics
                     "system_noise_records_cleared": len(system_noise),
+                    "raw_csv_stream": raw_csv_stream_text,  # WYSIWYG CSV Data Stream Block
                     **payload,
                 },
                 status=status.HTTP_200_OK,
