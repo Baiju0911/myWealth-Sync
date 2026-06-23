@@ -59,22 +59,41 @@ export default function UniversalStatementIngestView() {
   const [availableTemplates, setAvailableTemplates] = useState<TemplateMetadata[]>([]);
   const [forcedTemplateId, setForcedTemplateId] = useState<string>('');
 
+
+
   const downloadWorkableCSV = (rawStreamText: string) => {
     if (!rawStreamText) return;
     
+    let cleanContent = rawStreamText;
+    let exportFilename = "statement_export.csv";
+    
+    // 🎯 PARSE INJECTED METADATA BLOCK
+    if (rawStreamText.startsWith("#FILENAME:")) {
+      const lines = rawStreamText.split("\n");
+      const metaLine = lines[0]; // Grab '#FILENAME:xyz.csv'
+      
+      // Extract everything after the colon
+      exportFilename = metaLine.replace("#FILENAME:", "").trim() || "statement_export.csv";      
+      // Remove the tracking row completely so it doesn't mess up your spreadsheet columns
+      cleanContent = lines.slice(1).join("\n");
+    }
+    
     // Convert tildes to commas for standard excel processing
-    const csvContent = rawStreamText.replace(/ ~ /g, ",");
+    const csvContent = cleanContent.replace(/ ~ /g, ",");
     
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
+    
     link.setAttribute("href", url);
-    link.setAttribute("download", "statement_export.csv");
+    link.setAttribute("download", exportFilename);
+    
+    console.log("🎯 DOWNLOADING WORKABLE FILE AS:", exportFilename);
+    
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
-
   useEffect(() => {
     accountApi.getAccounts()
       .then(res => setAccounts(Array.isArray(res) ? res : res.results || []))
@@ -431,7 +450,12 @@ export default function UniversalStatementIngestView() {
                 {/* 📊 NEW UTILITY: EXPORT INTERMEDIATE CSV RUN FOR MANUAL TOOLING */}
                 <button 
                   type="button" 
-                  onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")} 
+                  onClick={() => 
+                        downloadWorkableCSV(
+                          (window as any).__lastRawStream || "", 
+                          // (window as any).__lastExportFilename || "statement_export.csv"
+                        )
+                      }
                   className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-emerald-400 font-mono font-bold text-xs uppercase px-4 py-2 rounded-lg shadow-md transition-all"
                 >
                   📥 Export Workable CSV
