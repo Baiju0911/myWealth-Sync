@@ -5,6 +5,8 @@ import csv
 import datetime
 import decimal
 import json
+import logging
+import pprint
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -30,6 +32,7 @@ from rest_framework import status
 # from .parsers.raw_extractor import extract_raw_preview
 import os
 from django.core.files.storage import default_storage
+from .parsers.parsers_v1.utils.normalizer import format_to_two_digits
 
 
 from .models import (
@@ -65,6 +68,8 @@ from .parsers.parsers_v1.orchestrator import process_bank_statement
 # from .parsers.parsers_v1.resolver import resolve_strategy
 # from .parsers.parsers_v1.strategies import registry
 # from .parsers.parsers_v1.utils import validator
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -1691,14 +1696,13 @@ class StatementBulkIngestPipelineView(APIView):
                 credential_record = BankCredential.objects.filter(
                     account_id=account_id
                 ).first()
-                # Grab the password vault list string/JSON column
                 password_vault_data = (
                     credential_record.password_vault if credential_record else "[]"
                 )
             except Exception as vault_err:
                 password_vault_data = "[]"
 
-            # 3. 🏁 UNIFIED ORCHESTRATOR PASS: Sends file + configuration + passwords down
+            # 3. 🏁 UNIFIED ORCHESTRATOR PASS
             processed_bundle, op_bal, system_noise = process_bank_statement(
                 uploaded_file=uploaded_file,
                 template_obj=template_obj,
@@ -1709,34 +1713,23 @@ class StatementBulkIngestPipelineView(APIView):
 
             # Initialize pipeline configuration fallbacks
             raw_csv_stream_text = ""
-            ocr_confidence_score = (
-                100.0  # Perfect baseline configuration for native parsers
-            )
-            active_engine_strategy = (
-                template_obj.parser_strategy_code
-            )  # Fallback tracker layout string
+            ocr_confidence_score = 100.0
+            active_engine_strategy = template_obj.parser_strategy_code
+            intermediate_txns = []
 
             # ─── 🚥 STRATEGY ROUTING PASS ─────────────────────────────────────
             if (
                 isinstance(processed_bundle, dict)
                 and "transactions_list" in processed_bundle
             ):
-                # 🎯 AI Fallback Engine Routing Pass
                 intermediate_txns = processed_bundle.get("transactions_list", [])
-                raw_csv_stream_text = processed_bundle.get("raw_csv_stream", "")
-
-                # 📊 Harvest performance tracker metrics from dictionary metadata layers
                 ocr_confidence_score = processed_bundle.get("confidence_score", 0.0)
                 active_engine_strategy = processed_bundle.get(
                     "fallback_engine_executed", "PaddleOCR_v1"
                 )
-
-                # Run math safely on the isolated internal transaction dictionary lists
                 payload = validator.run_final_math(intermediate_txns, op_bal)
 
             elif isinstance(processed_bundle, str):
-                # ⚠️ EMERGENCY FALLBACK LAYER: If processed_bundle returned directly as a raw string text block
-                intermediate_txns = []
                 raw_csv_stream_text = processed_bundle
                 active_engine_strategy = "PaddleOCR_v1_Direct_Stream"
                 payload = {
@@ -1746,35 +1739,75 @@ class StatementBulkIngestPipelineView(APIView):
                     "count": 0,
                     "total_debit": 0,
                     "total_credit": 0,
+                    "total_balance_check": 0,
                 }
             else:
-                # ⚙️ STANDARD TEMPLATE LAYER: Fits your older structural layouts perfectly
                 intermediate_txns = processed_bundle
-
-                # Execute normal validator accumulations natively
                 payload = validator.run_final_math(intermediate_txns, op_bal)
 
-                # ─── 🎯 UNIVERSAL WYSIWYG BACKPORT FOR STANDARD TEMPLATES ───
+            # 🎯 FIXED & BULLETPROOF TWO-DIGIT FORMATTER: Matches exactly what you need via clean numbers
+
+            # ─── 🎯 UNIVERSAL CSV GENERATION MATRIX (WITH ESCAPING & ROUNDING) ───
+            if not raw_csv_stream_text:
                 final_dataset = payload.get("preview_dataset", intermediate_txns or [])
+
+                original_filename = getattr(uploaded_file, "name", "bank_statement.pdf")
+                base_filename, _ = os.path.splitext(original_filename)
+                export_filename = f"{base_filename}.csv"
+
+                # Prepend dynamic column labels
                 raw_csv_lines = [
-                    f"{r.get('post_date', r.get('date', ''))} ~ {r.get('narration_description', r.get('narration', ''))} ~ {r.get('debit', '')} ~ {r.get('credit', '')} ~ {r.get('balance', '')}"
-                    for r in final_dataset
+                    f"#FILENAME:{export_filename}",
+                    "Date ~ Narration ~ Debit ~ Credit ~ Running Bal",
                 ]
+
+                for r in final_dataset:
+                    p_date = (
+                        r.get("post_date") or r.get("date") or r.get("Txn Date") or ""
+                    )
+                    p_narr = (
+                        r.get("narration_description")
+                        or r.get("narration")
+                        or r.get("Narration Description")
+                        or ""
+                    )
+
+                    # Intercept values and enforce strict 2-decimal normalization (e.g. 5000.00, 171.10)
+                    p_deb = format_to_two_digits(r.get("debit") or r.get("Debit (-)"))
+                    p_cred = format_to_two_digits(
+                        r.get("credit") or r.get("Credit (+)")
+                    )
+                    p_bal = format_to_two_digits(r.get("balance") or r.get("Balance"))
+
+                    # Secure inner commas inside double quotes to protect data alignment boundaries
+                    p_narr_escaped = str(p_narr).replace('"', '""').strip()
+
+                    raw_csv_lines.append(
+                        f'{p_date} ~ "{p_narr_escaped}" ~ {p_deb} ~ {p_cred} ~ {p_bal}'
+                    )
+
                 raw_csv_stream_text = "\n".join(raw_csv_lines)
 
-            # ─── 🏁 RESPONSE FORMULATION ──────────────────────────────────────
-            return Response(
+            # ─── 📂 FILE STREAM DOWNLOAD ATTACHMENT FORMER ───────────────────────
+
+            response = Response(
                 {
                     "status": "SUCCESS",
-                    "strategy_processed": template_obj.parser_strategy_code,  # DB Configuration code string
-                    "engine_strategy_executed": active_engine_strategy,  # Active engine runtime descriptor
-                    "confidence_score": ocr_confidence_score,  # Calculated verification index metrics
+                    "strategy_processed": template_obj.parser_strategy_code,
+                    "engine_strategy_executed": active_engine_strategy,
+                    "confidence_score": ocr_confidence_score,
                     "system_noise_records_cleared": len(system_noise),
-                    "raw_csv_stream": raw_csv_stream_text,  # WYSIWYG CSV Data Stream Block
+                    "export_filename": export_filename,
+                    "raw_csv_stream": raw_csv_stream_text,
                     **payload,
                 },
                 status=status.HTTP_200_OK,
             )
+
+            response["Content-Disposition"] = (
+                f'attachment; filename="{export_filename}"'
+            )
+            return response
 
         except Account.DoesNotExist:
             return Response(

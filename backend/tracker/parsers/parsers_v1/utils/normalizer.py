@@ -45,3 +45,18 @@ def normalize_date(date_str, target_fmt="%d-%m-%Y"):
         except ValueError:
             pass
     return date_str
+
+
+def format_to_two_digits(val_str) -> str:
+    if not val_str or str(val_str).strip() in ["", "-", "₹", "None"]:
+        return ""
+
+    # 🎯 Robust Number Extraction: Remove anything that isn't a digit, period, or minus sign
+    clean = re.sub(r"[^\d.-]", "", str(val_str)).strip()
+
+    try:
+        # Enforces exactly 2 decimal places (e.g., 5000 -> 5000.00, 171.1 -> 171.10)
+        return f"{float(clean):.2f}"
+    except ValueError:
+        # Final safety net fallback
+        return str(val_str).strip()

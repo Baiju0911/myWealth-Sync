@@ -4,6 +4,7 @@ import os
 import re
 import cv2
 import logging
+import pprint
 from typing import List, Dict, Any
 
 _paddle_engine = None
@@ -24,14 +25,14 @@ def execute_paddle_fallback_pipeline(
     image_paths: List[str], *args, **kwargs
 ) -> Dict[str, Any]:
     """
-    Robust Column Classifier: Powered by PaddleOCR text accuracy.
-    Groups items by clean lines and isolates numbers to stop multi-line column drift.
+    Strict Geometric Intersection Parser:
+    Dynamically maps columns based on horizontal bounding box overlap with page headers.
+    Keeps debug logging and structural array object printers fully functional.
     """
     ocr_engine = _get_paddle_instance()
-    raw_tokens = []
+    final_processed_rows = []
 
-    # 1. VISUAL LAYER EXTRACTION (PADDLE)
-    for img_path in image_paths:
+    for page_idx, img_path in enumerate(image_paths):
         if not os.path.exists(img_path):
             continue
 
@@ -50,119 +51,241 @@ def execute_paddle_fallback_pipeline(
         texts = page_data.get("rec_texts", [])
         boxes = page_data.get("dt_polys", [])
 
+        # ─── 📊 LIVE DIAGNOSTIC MONITOR PRINTS ────────────────────────────
+        page_tokens = []
+        print(f"\n🔍 ====== PADDLEOCR RAW CONTENT LOG (PAGE INDEX: {page_idx}) ======")
+
         for idx in range(len(texts)):
             text_str = str(texts[idx]).strip()
             if not text_str:
                 continue
-
             coords = boxes[idx]
             try:
                 ymin = min(p[1] for p in coords)
                 ymax = max(p[1] for p in coords)
-                box_height = ymax - ymin
-                y_center = (ymin + ymax) / 2.0
                 xmin = min(p[0] for p in coords)
+                xmax = max(p[0] for p in coords)
+                y_center = (ymin + ymax) / 2.0
             except Exception:
                 continue
 
-            raw_tokens.append(
-                {"text": text_str, "x": xmin, "y": y_center, "height": box_height}
+            print(
+                f"📍 Text: '{text_str:<45}' | X: [{int(xmin):>4} -> {int(xmax):<4}] | Y-Center: {int(y_center)}"
             )
 
-    if not raw_tokens:
-        return {"status": "success", "transactions": [], "raw_csv_stream": ""}
+            page_tokens.append(
+                {
+                    "text": text_str,
+                    "xmin": xmin,
+                    "xmax": xmax,
+                    "y": y_center,
+                    "height": ymax - ymin,
+                }
+            )
 
-    # 2. ADAPTIVE LINE SLICER
-    sorted_by_y = sorted(raw_tokens, key=lambda k: k["y"])
-    grouped_lines = []
-    current_line = []
-    last_y = -1.0
+        print("==================================================================\n")
 
-    for token in sorted_by_y:
-        # Tighter 8px tolerance boundary to enforce distinct vertical separation
-        if last_y == -1.0 or abs(token["y"] - last_y) <= 8.0:
-            current_line.append(token)
-        else:
-            grouped_lines.append(sorted(current_line, key=lambda k: k["x"]))
-            current_line = [token]
-        last_y = token["y"]
-    if current_line:
-        grouped_lines.append(sorted(current_line, key=lambda k: k["x"]))
+        print(f"📋 === FULL PAGE_TOKENS STRUCT OBJECTS (PAGE INDEX: {page_idx}) ===")
+        pprint.pprint(page_tokens)
+        print("==================================================================\n")
 
-    # 3. ROBUST REGEX COLUMN CLASSIFIER
-    cleaned_rows = []
+        if not page_tokens:
+            continue
 
-    for line_tokens in grouped_lines:
-        full_row_line_str = " ".join([t["text"] for t in line_tokens])
+        # ─── 1. UNIVERSAL HEADER ANCHOR SCANNER ────────────────────────────
+        header_y = None
 
-        # 🎯 Isolate items using patterns rather than column indices
-        dates = re.findall(r"\b\d{2}[-/]\d{2}[-/]\d{2,4}\b", full_row_line_str)
-
-        # Isolate floats (e.g. 2,00,000.00 or 625.00)
-        raw_numbers = re.findall(
-            r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})\b", full_row_line_str
-        )
-
-        # Strip out structural keywords and metrics to leave pure narration descriptions
-        clean_narration = full_row_line_str
-        for d in dates:
-            clean_narration = clean_narration.replace(d, "")
-        for n in raw_numbers:
-            clean_narration = clean_narration.replace(n, "")
-
-        # Clean up remaining noise artifacts
-        clean_narration = (
-            re.sub(r"[₹|Rs\.\/]", "", clean_narration)
-            .replace("Cr", "")
-            .replace("  ", " ")
-            .strip()
-        )
-
-        c_date = dates[0] if len(dates) >= 1 else "-"
-        c_val = dates[1] if len(dates) >= 2 else c_date
-
-        c_deb = ""
-        c_cred = ""
-        c_bal = ""
-
-        # Map numbers safely according to quantitative row profiles
-        if len(raw_numbers) >= 3:
-            c_deb = raw_numbers[0]
-            c_cred = raw_numbers[1]
-            c_bal = raw_numbers[-1]
-        elif len(raw_numbers) == 2:
-            # Most common: an transaction amount and a running balance
-            c_deb = raw_numbers[0]
-            c_bal = raw_numbers[1]
-        elif len(raw_numbers) == 1:
-            c_bal = raw_numbers[0]
-
-        row_payload = {
-            "date": c_date,
-            "val_date": c_val,
-            "narration": clean_narration or full_row_line_str,
-            "debit": c_deb,
-            "credit": c_cred,
-            "balance": c_bal,
-            "post_date": c_date,
-            "value_date": c_val,
-            "Txn Date": c_date,
-            "Val Date": c_val,
-            "narration_description": clean_narration or full_row_line_str,
-            "Debit (-)": c_deb,
-            "Credit (+)": c_cred,
-            "Balance": c_bal,
-            "tran_type": "-",
-            "Status": "NEW",
-            "Type": "-",
-            "Chq/Ref": "",
+        # Adaptive tracking boxes
+        bounds = {
+            "date": {"min": 0, "max": 80},
+            "debit": {"min": None, "max": None},
+            "credit": {"min": None, "max": None},
+            "balance": {"min": None, "max": None},
         }
-        cleaned_rows.append(row_payload)
+
+        for token in page_tokens:
+            txt = token["text"].upper()
+
+            # Universal match matrix covering typical bank naming variants
+            if any(k in txt for k in ["TXN DATE", "VALUE DATE", "VAL DATE"]) or (
+                txt == "DATE" and bounds["debit"]["min"] is None
+            ):
+                bounds["date"]["min"] = token["xmin"]
+                bounds["date"]["max"] = token["xmax"]
+                header_y = token["y"]
+            elif any(
+                k in txt for k in ["WITHDRAWAL", "DEBIT", "WITHDRAMALS", "DEBIT(-)"]
+            ):
+                bounds["debit"]["min"] = token["xmin"]
+                bounds["debit"]["max"] = token["xmax"]
+                header_y = token["y"]
+            elif any(k in txt for k in ["DEPOSIT", "CREDIT", "DEPOSITS", "CREDIT(+)"]):
+                bounds["credit"]["min"] = token["xmin"]
+                bounds["credit"]["max"] = token["xmax"]
+                header_y = token["y"]
+            elif "BALANCE" in txt:
+                bounds["balance"]["min"] = token["xmin"]
+                bounds["balance"]["max"] = token["xmax"]
+                header_y = token["y"]
+
+        # Dynamic fallback offsets if specialized headers can't be matched
+        img_width = img.shape[1]
+        if bounds["debit"]["min"] is None:
+            bounds["debit"] = {"min": img_width * 0.52, "max": img_width * 0.68}
+        if bounds["credit"]["min"] is None:
+            bounds["credit"] = {"min": img_width * 0.68, "max": img_width * 0.83}
+        if bounds["balance"]["min"] is None:
+            bounds["balance"] = {"min": img_width * 0.83, "max": img_width * 0.98}
+        if header_y is None:
+            header_y = 175.0
+
+        # ─── 2. ADAPTIVE ROW SLICER (8px line grouping tolerance) ──────────
+        data_tokens = [t for t in page_tokens if t["y"] > header_y]
+        sorted_by_y = sorted(data_tokens, key=lambda k: k["y"])
+
+        grouped_lines = []
+        current_line = []
+        last_y = -1.0
+
+        for token in sorted_by_y:
+            if last_y == -1.0 or abs(token["y"] - last_y) <= 8.0:
+                current_line.append(token)
+            else:
+                grouped_lines.append(sorted(current_line, key=lambda k: k["xmin"]))
+                current_line = [token]
+            last_y = token["y"]
+        if current_line:
+            grouped_lines.append(sorted(current_line, key=lambda k: k["xmin"]))
+
+        # ─── 3. INTERSECTION-BASED DATA ASSIGNMENT ─────────────────────────
+        for line in grouped_lines:
+            line_str = " ".join([t["text"] for t in line])
+            if "PAGE TOTAL" in line_str.upper():
+                continue
+
+            c_date = None
+            c_deb = ""
+            c_cred = ""
+            c_bal = ""
+            narration_tokens = []
+
+            for item in line:
+                val = item["text"]
+
+                # Dynamic intersection helper
+                def get_overlap_percentage(b_key: str) -> float:
+                    b = bounds[b_key]
+                    if b["min"] is None or b["max"] is None:
+                        return 0.0
+                    overlap_min = max(item["xmin"], b["min"])
+                    overlap_max = min(item["xmax"], b["max"])
+                    if overlap_min < overlap_max:
+                        return (overlap_max - overlap_min) / float(
+                            item["xmax"] - item["xmin"]
+                        )
+                    return 0.0
+
+                # A. Date validation matrix
+                date_match = re.search(r"\b\d{2}[-/]\d{2}[-/]\d{2,4}\b", val)
+                if date_match and item["xmin"] < (
+                    bounds["debit"]["min"] or img_width * 0.5
+                ):
+                    c_date = date_match.group(0)
+                    continue
+
+                # B. Number extraction check
+                clean_num = (
+                    val.replace(",", "")
+                    .replace("Cr", "")
+                    .replace("Cz", "")
+                    .replace("Dr", "")
+                    .strip()
+                )
+                is_numeric = False
+                if any(c.isdigit() for c in clean_num) and not re.search(
+                    r"[a-zA-Z]{3,}", val
+                ):
+                    if len(clean_num.split(".")[0]) <= 9:
+                        is_numeric = True
+
+                if is_numeric:
+                    overlap_deb = get_overlap_percentage("debit")
+                    overlap_cred = get_overlap_percentage("credit")
+                    overlap_bal = get_overlap_percentage("balance")
+
+                    # Route to column with highest horizontal intersection percentage
+                    max_overlap = max(overlap_deb, overlap_cred, overlap_bal)
+
+                    if max_overlap > 0.15:
+                        if max_overlap == overlap_deb:
+                            c_deb = val
+                        elif max_overlap == overlap_cred:
+                            c_cred = val
+                        else:
+                            c_bal = val
+                    else:
+                        # Fallback step based on positioning if intersection fails
+                        mid_x = (item["xmin"] + item["xmax"]) / 2.0
+                        if mid_x >= bounds["balance"]["min"] - 15 or any(
+                            k in val for k in ["Cz", "Cr", "Dr"]
+                        ):
+                            c_bal = val
+                        elif mid_x >= bounds["credit"]["min"] - 10:
+                            c_cred = val
+                        elif mid_x >= bounds["debit"]["min"] - 10:
+                            c_deb = val
+                        else:
+                            narration_tokens.append(val)
+                else:
+                    if val not in ["₹", "Rs.", "|", ""]:
+                        narration_tokens.append(val)
+
+            c_narr = " ".join(narration_tokens).strip()
+
+            # C. Sub-line Continuation Aggregator
+            if c_date is None:
+                if final_processed_rows and (c_narr or c_deb or c_cred or c_bal):
+                    target_row = final_processed_rows[-1]
+                    if c_narr:
+                        target_row["narration"] += f" {c_narr}"
+                        target_row["narration_description"] = target_row["narration"]
+                    if c_deb:
+                        target_row["debit"] = c_deb
+                        target_row["Debit (-)"] = c_deb
+                    if c_cred:
+                        target_row["credit"] = c_cred
+                        target_row["Credit (+)"] = c_cred
+                    if c_bal:
+                        target_row["balance"] = c_bal
+                        target_row["Balance"] = c_bal
+                continue
+
+            row_payload = {
+                "date": c_date,
+                "val_date": c_date,
+                "narration": c_narr,
+                "debit": c_deb,
+                "credit": c_cred,
+                "balance": c_bal,
+                "post_date": c_date,
+                "value_date": c_date,
+                "Txn Date": c_date,
+                "Val Date": c_date,
+                "narration_description": c_narr,
+                "Debit (-)": c_deb,
+                "Credit (+)": c_cred,
+                "Balance": c_bal,
+                "tran_type": "-",
+                "Status": "NEW",
+                "Type": "-",
+                "Chq/Ref": "",
+            }
+            final_processed_rows.append(row_payload)
 
     return {
         "status": "success",
         "confidence_score": 100.0,
-        "fallback_engine_executed": "PaddleOCR_v1_RobustClassifier",
-        "transactions": cleaned_rows,
+        "fallback_engine_executed": "PaddleOCR_v1_StrictOverlap",
+        "transactions": final_processed_rows,
         "raw_csv_stream": "",
     }
