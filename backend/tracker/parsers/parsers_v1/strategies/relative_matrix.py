@@ -65,11 +65,14 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         except Exception:
             return date_str
 
+        # ─── 🧹 STEP 1: SPATIAL LINE BUILDER ───
+
     # ─── 🧹 STEP 1: SPATIAL LINE BUILDER ───
     for page_data in pages_raw_data:
         page_idx = page_data["page_idx"]
         page_width = float(page_data["page_width"])
 
+        # 1. Fast scan lookup to skip standalone summary-only pages
         page_text_dump = " ".join(
             [
                 str(w[4]).upper() if len(w) > 4 else str(w[2]).upper()
@@ -81,8 +84,9 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         ):
             continue
 
+        # 2. 🎯 Force strict top-to-bottom vertical sorting
         sorted_tokens = sorted(
-            page_data["words"], key=lambda w: (float(w[1]), float(w[0]))
+            page_data["words"], key=lambda w: (round(float(w[1]), 1), float(w[0]))
         )
         if not sorted_tokens:
             continue
@@ -143,6 +147,18 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 }
             )
 
+        # 3. Print out how the lines are now formed chronologically
+        if page_idx == 110:
+            print(
+                f"\n================ 🟢 VERTICALLY SORTED LINES: PAGE {page_idx} ================"
+            )
+            for idx, pl in enumerate(page_lines):
+                print(f"Line [{idx}]: '{pl['full_line_text']}'")
+            print(
+                "========================================================================\n"
+            )
+
+        # ─── 🚀 THE ONLY EXTENSION BOUNDARY REQUIRED ───
         start_idx = header_skip_target if page_idx == 1 else 0
         if start_idx < len(page_lines):
             raw_rows.extend(page_lines[start_idx:])
@@ -168,7 +184,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     intermediate_txns = []
     system_noise_records = []
 
-    STANDALONE_NOISE_SIGNALS = [
+    SUMMARY_TERMINATORS = [
         "STATEMENT SUMMARY",
         "BROUGHT FORWARD",
         "DR COUNT",
@@ -176,6 +192,8 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         "TOTAL DEBITS",
         "TOTAL CREDITS",
         "CLOSING BALANCE",
+        "PAGE NO",
+        "*---END OF STATEMENT---*",
     ]
 
     filtered_rows = []
@@ -192,13 +210,12 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         if any(thn.upper() in text_upper for thn in db_table_headers_noise):
             continue
 
-        if not has_date_anchor and (
-            any(sig in text_upper for sig in STANDALONE_NOISE_SIGNALS)
-            or any(r.search(text_upper) for r in SYSTEM_NOISE_REGEX)
+        if not has_date_anchor and any(
+            r.search(text_upper) for r in SYSTEM_NOISE_REGEX
         ):
             system_noise_records.append(
                 {
-                    "id": f"noise_{row['page_source']}",
+                    "id": f"noise_{row['page_source']}_{len(system_noise_records)}",
                     "narration_description": row["full_line_text"],
                     "status": "SYSTEM_NOISE",
                 }
@@ -206,9 +223,18 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         else:
             filtered_rows.append(row)
 
+    # 🎯 Sticky flag tracks when we leave transaction space
+    inside_summary_zone = False
+    current_page_tracking = None
+
     for row in filtered_rows:
         page_idx = row["page_source"]
         max_date_x = 95.0 if is_absolute_mode else 24.0
+
+        # Reset our sticky flag state whenever we cross over onto a brand new page canvas
+        if current_page_tracking != page_idx:
+            current_page_tracking = page_idx
+            inside_summary_zone = False
 
         line_dates = [
             str(t["text"]).strip()
@@ -227,7 +253,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             sub_words = []
             detected_numbers = []
 
-            # Pre-evaluate row description tokens for structural sign signals
             full_line_upper = str(row["full_line_text"]).upper()
             has_inline_debit_keyword = any(
                 kw in full_line_upper
@@ -258,10 +283,12 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     if clean_num:
                         detected_numbers.append({"val": clean_num, "x": x0})
                 else:
-                    if not any(n in t_text.upper() for n in ("CR", "DR", "₹", "INR")):
+                    # 🎯 THE FIX: Check for exact indicator flags ("CR", "DR")
+                    # so words like "CREDIT" don't get accidentally wiped out!
+                    t_upper = t_text.upper()
+                    if t_upper not in ("CR", "DR", "₹", "INR", "--"):
                         sub_words.append(t_text)
 
-            # ─── 🎯 RIGHT-TO-LEFT SORTING ROUTER ───
             debit_val = "-"
             credit_val = "-"
             balance_val = "-"
@@ -271,18 +298,14 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             )
 
             if len(detected_numbers) >= 1:
-                # Far-right token captures the actual running Balance
                 balance_val = detected_numbers[0]["val"]
                 remaining_tx_amts = detected_numbers[1:]
 
                 if len(remaining_tx_amts) >= 1:
                     target_amt = remaining_tx_amts[0]
                     t_x_val = target_amt["x"]
-
-                    # Compute normalized horizontal percentage bounds if layout is spatial
                     date_cutoff = 24.0 if not is_absolute_mode else (page_width * 0.24)
 
-                    # Contextual Routing pass for items embedded left inside narration
                     if t_x_val <= date_cutoff + 25.0:
                         if has_inline_debit_keyword and not has_inline_credit_keyword:
                             debit_val = target_amt["val"]
@@ -319,10 +342,17 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         elif intermediate_txns:
             text_upper = str(row["full_line_text"]).upper()
 
+            # 🎯 Check if this current line triggers the summary boundary
+            if any(term in text_upper for term in SUMMARY_TERMINATORS):
+                inside_summary_zone = True
+
+            # 🛡️ THE PERMANENT SHIELD: If our sticky flag is active, block everything
+            if inside_summary_zone:
+                continue
+
             FOOTER_TERMINATORS = [
                 "LAST TRANSACTION DATE",
                 "IN CASE YOUR ACCOUNT",
-                "*---END OF STATEMENT---*",
                 "END OF STATEMENT",
             ]
             if any(term in text_upper for term in FOOTER_TERMINATORS):
@@ -332,7 +362,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             for token in row["tokens"]:
                 t_text = str(token["text"]).strip()
                 if (
-                    not any(n in t_text.upper() for n in ("CR", "DR", "₹", "INR"))
+                    not any(n in t_text.upper() for n in ("CR", "DR", "₹", "INR", "--"))
                     and "PAGE" not in t_text.upper()
                 ):
                     append_words.append(t_text)

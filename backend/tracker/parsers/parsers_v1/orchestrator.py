@@ -169,7 +169,7 @@ def process_bank_statement(
         # ─── ⚖️ NEW STEP 4: AUTOMATED QUALITY ASSURANCE CIRCUIT BREAKER ───────────
         eval_rows = []
         print(f"\n===== 🔍 DEBUGGING FAST LANE OUTPUT (Total: {len(txns)} items) =====")
-        for idx, tx in enumerate(txns[:5]):
+        for idx, tx in enumerate(txns[:15]):
             print(f"Raw txn [{idx}]: {tx}")
 
         for tx in txns:

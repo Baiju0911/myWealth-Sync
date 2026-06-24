@@ -74,6 +74,7 @@ urlpatterns = [
     #     StatementIngestRouterView_older.as_view(),
     #     name="statement-upload",
     # ),
+    # save extracted rows
     path(
         "statement/commit-staging/",
         StatementStagingCommitView.as_view(),
@@ -94,6 +95,7 @@ urlpatterns = [
         StatementIngestRouterDynamicView.as_view(),
         name="statement-upload",
     ),
+    # Show extracted rows
     path(
         "statement/ingestbulk/",
         StatementBulkIngestPipelineView.as_view(),
