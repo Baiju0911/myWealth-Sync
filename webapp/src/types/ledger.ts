@@ -28,3 +28,41 @@ export interface CredentialEntity {
   statement_password: string;
   updated_at: string;
 }
+
+export interface StagingPreviewLine {
+  id: string;
+  post_date: string;
+  value_date?: string;
+  narration_description: string;
+  tran_type?: string;
+  chq_ref?: string;
+  credit: number | null;
+  debit: number | null;
+  balance?: number;
+  amount?: number;
+  status: string;
+  Hex?: string;
+}
+
+export interface TemplateMetadata {
+  id: number;
+  template_name: string;
+  is_universal: boolean;
+}
+
+export interface ApiResponseMeta {
+  fileType: string;
+  decrypted: boolean;
+  count: number;
+  openingBalance: number;
+  closingBalance: number;
+  totalDebit: number;
+  totalCredit: number;
+  rawMatchCount: number;
+  debitLineCount: number;
+  creditLineCount: number;
+  emptyMemoLineCount: number;
+  duplicateCount: number;
+  report_from_date?: string | null;
+  report_to_date?: string | null;
+}
