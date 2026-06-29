@@ -8,7 +8,22 @@ from ..geometry.lane_detector import StructuredRow
 class ConfidenceEvaluator:
     # Pre-compile patterns to avoid overhead inside high-frequency execution loops
     DATE_PATTERN = re.compile(r"\d{2,4}[-/\.]\d{2}[-/\.]\d{2,4}")
-    SUMMARY_FILTER_WORDS = {"total", "page", "grand"}
+    SUMMARY_FILTER_WORDS = {
+        "total",
+        "page",
+        "grand",
+        "opening balance",
+        "closing balance",
+        "brought forward",
+        "carried forward",
+        "b/f",
+        "c/f",
+        "opnbal",
+        "statement of account",
+        "particulars",
+        "withdrawals",
+        "deposits",
+    }
 
     @staticmethod
     def clean_numeric(val_str: str) -> float:

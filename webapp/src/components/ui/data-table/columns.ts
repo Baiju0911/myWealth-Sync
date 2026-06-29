@@ -6,7 +6,8 @@ export interface ColumnConfig {
   textColor?: string;
   fallbackColor?: string;
   isCurrency?: boolean;
-  headerClass?: string; // 🎯 Added to clean up header styles dynamically
+  headerClass?: string;
+  //HEXA?: string; // 🎯 Added to clean up header styles dynamically
 }
 
 export const LEDGER_COLUMNS: ColumnConfig[] = [
@@ -22,7 +23,7 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
   {
     key: 'narration_description', // 🎯 Fixed: Matches 'line.narration_description' from your markup
     label: 'Narration Description',
-    width: '30%',
+    width: '35%',
     align: 'left',
   },
   {
@@ -70,6 +71,15 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
     textColor: 'text-cyan-400/90',
     headerClass: 'text-cyan-400',
   },
+  // {
+  //   key: 'id',
+  //   label: 'id',
+  //   width: '9%',
+  //   align: 'right',
+  //   isCurrency: false,
+  //   textColor: 'text-cyan-400/90',
+  //   headerClass: 'text-cyan-400',
+  // },
 
   { key: 'status', label: 'Status', width: '5%', align: 'center' },
 ];
