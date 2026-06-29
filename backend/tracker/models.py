@@ -253,7 +253,7 @@ class StatementStagingLine(models.Model):
 
     # 📝 EXTRACTED LINE VALUES
     narration = models.TextField()
-    cheque_ref_number = models.CharField(max_length=50, blank=True, null=True)
+    cheque_ref_number = models.TextField(blank=True, null=True)
 
     # 💰 BALANCE TRACKING QUANTITIES
     # Positive values flag Money Out (Debits), Negative values flag Money In (Credits)

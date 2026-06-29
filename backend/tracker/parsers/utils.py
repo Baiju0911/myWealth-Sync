@@ -22,37 +22,19 @@ class MatchWrapper:
 def generate_row_fingerprint(
     bank_id,
     account_id,
-    narration,
-    cheque_ref,
-    amount,
-    running_balance,
     debit,
     credit,
+    running_balance,
     date_str,
+    intraday_index=0,
 ):
     """
-    🔒 CENTRAL SSOT HASH GUARDIAN (STRICT STRING ANCHOR CONTRACT):
-    Normalizes parsing variants by formatting raw fields into standardized,
-    un-mutated string components.
+    🔒 UNIVERSAL LEDGER HASH GUARDIAN (BACKWARD COMPATIBLE):
+    Accepts bank_id and account_id to maintain system compatibility, but anchors
+    uniqueness strictly on core financial facts (Date, DR, CR, BAL, IDX).
     """
-    # 1. 🧼 TEXT DE-SPACING
-    clean_narration = str(narration or "").strip().upper()
-    clean_narration = (
-        clean_narration.replace("\n", " ")
-        .replace("\r", " ")
-        .replace("\t", " ")
-        .replace('"', "")
-        .replace("'", "")
-    )
-    fragments = clean_narration.split(" ")
-    clean_fragments = [
-        f
-        for f in fragments
-        if not (f.startswith("[") and f.endswith("]")) and not f.startswith("REF:")
-    ]
-    clean_narration = " ".join(" ".join(clean_fragments).split()).strip()
 
-    # 2. 🔢 METRIC NORMALIZER
+    # 1. 🔢 METRIC NORMALIZER
     def force_pure_numeric_str(v):
         if v is None:
             return "0.00"
@@ -70,26 +52,38 @@ def generate_row_fingerprint(
                 clean_v = clean_v[:-2].strip()
             if clean_v.startswith("-"):
                 clean_v = clean_v.replace("-", "")
-            if not clean_v or clean_v.lower() in ["none", "null", "-", "cr", "dr"]:
+
+            # Defensive structural rescue
+            clean_v = re.sub(r"[^0-9.]", "", clean_v)
+
+            if not clean_v or clean_v.lower() in [
+                "none",
+                "null",
+                "-",
+                "cr",
+                "dr",
+                "nan",
+            ]:
                 return "0.00"
             return f"{float(clean_v):.2f}"
         except (ValueError, TypeError):
             return "0.00"
 
-    fmt_amount = force_pure_numeric_str(amount)
+    fmt_debit = force_pure_numeric_str(debit)
+    fmt_credit = force_pure_numeric_str(credit)
     fmt_balance = force_pure_numeric_str(running_balance)
 
-    # 3. 📅 DATE FOUNDATION
+    # 2. 📅 DATE FOUNDATION
     clean_date = str(date_str).strip().split("T")[0].split(" ")[0].strip()
 
-    # 4. 🔗 PAYLOAD ASSEMBLE
+    # 3. 🔗 UNIVERSAL PAYLOAD ASSEMBLE
+    # 🎯 Removed bank_id and account_id from the text block to make it format-agnostic!
     payload = (
         f"DATE:{clean_date}||"
-        f"BANK:{str(bank_id).strip()}||"
-        f"ACC:{str(account_id).strip()}||"
-        f"NARR:{clean_narration}||"
-        f"AMT:{fmt_amount}||"
-        f"BAL:{fmt_balance}"
+        f"DR:{fmt_debit}||"
+        f"CR:{fmt_credit}||"
+        f"BAL:{fmt_balance}||"
+        f"IDX:{intraday_index}"
     )
 
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

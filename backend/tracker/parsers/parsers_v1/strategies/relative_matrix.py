@@ -1,3 +1,4 @@
+# backend/tracker/parsers/parsers_v1/strategies/relative_matrix.py
 import re
 import json
 from ..utils import normalizer as norm
@@ -8,7 +9,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     UNIVERSAL DYNAMIC RELATIVE MATRIX ENGINE: Driven entirely by database configurations.
     Bypasses structural drifting via a layout-agnostic Right-to-Left context router.
     """
-    # ─── 📦 DYNAMIC DATABASE OVERRIDES UNPACKING ───
     try:
         signature = template_obj.signature_json
         if isinstance(signature, str):
@@ -18,7 +18,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     regex_config = signature.get("regex_patterns", {})
 
-    # 🎯 DATABASE DRIVEN REGEX: Load and clean pattern classes dynamically
     DATE_MATCH_RAW = regex_config.get(
         "DATE_MATCH", r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}"
     )
@@ -65,14 +64,11 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         except Exception:
             return date_str
 
-        # ─── 🧹 STEP 1: SPATIAL LINE BUILDER ───
-
     # ─── 🧹 STEP 1: SPATIAL LINE BUILDER ───
     for page_data in pages_raw_data:
         page_idx = page_data["page_idx"]
         page_width = float(page_data["page_width"])
 
-        # 1. Fast scan lookup to skip standalone summary-only pages
         page_text_dump = " ".join(
             [
                 str(w[4]).upper() if len(w) > 4 else str(w[2]).upper()
@@ -84,7 +80,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         ):
             continue
 
-        # 2. 🎯 Force strict top-to-bottom vertical sorting
         sorted_tokens = sorted(
             page_data["words"], key=lambda w: (round(float(w[1]), 1), float(w[0]))
         )
@@ -147,18 +142,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 }
             )
 
-        # 3. Print out how the lines are now formed chronologically
-        if page_idx == 110:
-            print(
-                f"\n================ 🟢 VERTICALLY SORTED LINES: PAGE {page_idx} ================"
-            )
-            for idx, pl in enumerate(page_lines):
-                print(f"Line [{idx}]: '{pl['full_line_text']}'")
-            print(
-                "========================================================================\n"
-            )
-
-        # ─── 🚀 THE ONLY EXTENSION BOUNDARY REQUIRED ───
         start_idx = header_skip_target if page_idx == 1 else 0
         if start_idx < len(page_lines):
             raw_rows.extend(page_lines[start_idx:])
@@ -223,7 +206,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         else:
             filtered_rows.append(row)
 
-    # 🎯 Sticky flag tracks when we leave transaction space
     inside_summary_zone = False
     current_page_tracking = None
 
@@ -231,7 +213,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         page_idx = row["page_source"]
         max_date_x = 95.0 if is_absolute_mode else 24.0
 
-        # Reset our sticky flag state whenever we cross over onto a brand new page canvas
         if current_page_tracking != page_idx:
             current_page_tracking = page_idx
             inside_summary_zone = False
@@ -283,8 +264,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     if clean_num:
                         detected_numbers.append({"val": clean_num, "x": x0})
                 else:
-                    # 🎯 THE FIX: Check for exact indicator flags ("CR", "DR")
-                    # so words like "CREDIT" don't get accidentally wiped out!
+                    # 🎯 FIXED EXACT MATCH COMPARISON MATRIX
                     t_upper = t_text.upper()
                     if t_upper not in ("CR", "DR", "₹", "INR", "--"):
                         sub_words.append(t_text)
@@ -342,11 +322,9 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         elif intermediate_txns:
             text_upper = str(row["full_line_text"]).upper()
 
-            # 🎯 Check if this current line triggers the summary boundary
             if any(term in text_upper for term in SUMMARY_TERMINATORS):
                 inside_summary_zone = True
 
-            # 🛡️ THE PERMANENT SHIELD: If our sticky flag is active, block everything
             if inside_summary_zone:
                 continue
 
@@ -361,9 +339,13 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             append_words = []
             for token in row["tokens"]:
                 t_text = str(token["text"]).strip()
+                t_upper = t_text.upper()
+
+                # 🎯 THE FIXED MATRIX SHIELD: Explicitly check exact string equivalents
+                # to prevent character sequences like "TRIVANDRUM" from being dropped.
                 if (
-                    not any(n in t_text.upper() for n in ("CR", "DR", "₹", "INR", "--"))
-                    and "PAGE" not in t_text.upper()
+                    t_upper not in ("CR", "DR", "₹", "INR", "--")
+                    and "PAGE" not in t_upper
                 ):
                     append_words.append(t_text)
 

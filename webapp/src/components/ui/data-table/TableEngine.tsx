@@ -29,8 +29,8 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
         {/* 🧬 CONTEXT VIRTUALIZED BODY */}
         <tbody className="divide-y divide-zinc-800/40 font-sans">
           {data.map((row, rowIndex) => {
-            // Check status flag using custom handler callback fallback
             const isDuplicate = isDuplicateRow ? isDuplicateRow(row) : (row.status === "DUPLICATE");
+            const isEnriched = row.status === "ENRI";
 
             return (
               <tr 
@@ -38,18 +38,19 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                 className={`transition-colors border-b border-zinc-800/30 ${
                   isDuplicate 
                     ? 'bg-zinc-950/20 text-zinc-500 hover:bg-zinc-950/30 border-l-2 border-zinc-700' 
+                    : isEnriched
+                    ? 'bg-amber-950/10 text-zinc-200 hover:bg-amber-950/20 border-l-2 border-amber-500/80' // Distinct container highlighting
                     : 'hover:bg-zinc-950/40 text-zinc-300'
                 }`}
                 style={{ 
                   opacity: isDuplicate ? 0.65 : 1,
-                  contentVisibility: 'auto', // 🚀 NATIVE CSS VIRTUAL DOM OPTIMIZATION
+                  contentVisibility: 'auto', 
                   containIntrinsicSize: 'auto 45px'
                 }}
               >
                 {columns.map((col) => {
                   const rawValue = row[col.key];
                   
-                  // Compute baseline color classes based on configuration state rules
                   const cellColorClass = isDuplicate 
                     ? 'text-zinc-600 line-through decoration-zinc-800/60' 
                     : (col.textColor || col.fallbackColor || 'text-zinc-300');
@@ -57,7 +58,7 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                   return (
                     <td 
                       key={col.key}
-                      style={{ textAlign: col.align }} // Forced alignment bypasses tailwind caching bugs
+                      style={{ textAlign: col.align }} 
                       className={`py-3 px-2 font-mono align-top text-[13px] ${cellColorClass}`}
                     >
                       {/* 🎯 CUSTOM KEY CONDITIONAL RENDERING MATRIX */}
@@ -79,6 +80,8 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                                 {row.tran_type}
                               </span>
                             )}
+                            {/* 💎 INLINE AMBER CHIP FOR ENRICHED LABELS */}
+                            {isEnriched}
                           </div>
                           <span className={isDuplicate ? 'text-zinc-600 line-through decoration-zinc-800/60' : 'text-zinc-200'}>
                             {rawValue}
@@ -98,9 +101,11 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                         ) : '-'
                       ) : col.key === 'status' ? (
                         isDuplicate ? (
-                          <span className="text-zinc-600 uppercase">STALE</span>
+                          <span className="text-zinc-600 uppercase font-bold">STALE</span>
+                        ) : isEnriched ? (
+                          <span className="text-amber-400 font-bold uppercase drop-shadow-[0_0_6px_rgba(245,158,11,0.2)]">ENRI</span>
                         ) : (
-                          <span className="text-emerald-400 uppercase drop-shadow-[0_0_6px_rgba(52,211,153,0.2)]">NEW</span>
+                          <span className="text-emerald-400 font-bold uppercase drop-shadow-[0_0_6px_rgba(52,211,153,0.2)]">NEW</span>
                         )
                       ) : (
                         rawValue || <span className="text-zinc-800 opacity-40">-</span>
@@ -112,7 +117,6 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
             );
           })}
         </tbody>
-
       </table>
     </div>
   );
