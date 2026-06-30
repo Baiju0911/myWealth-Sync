@@ -72,7 +72,7 @@ def parse_meta_decimal(meta_summary, camel_key, snake_key):
     return decimal.Decimal(str(extracted_val if extracted_val is not None else 0.00))
 
 
-def normalize_row_date(raw_date, index):
+def normalize_row_date1(raw_date, index):
     """Processes pipeline date formats to strict database signatures."""
     if not raw_date:
         raise ValueError(f"Missing date signature at row dataset index {index}")
@@ -91,7 +91,7 @@ def normalize_row_date(raw_date, index):
     )
 
 
-def sanitize_transaction_dates_via_template(intermediate_txns, template_obj):
+def sanitize_transaction_dates_via_template1(intermediate_txns, template_obj):
     """
     🔒 TEMPLATE-DRIVEN DATE SANITIZATION & STANDARDIZATION:
     Extracts the first valid matching date signature pattern from a string,
@@ -167,4 +167,124 @@ def sanitize_transaction_dates_via_template(intermediate_txns, template_obj):
                     )
 
     # print("🏁 [DATE SANITIZER END]\n")
+    return intermediate_txns
+
+
+def normalize_row_date(raw_date, index):
+    """Processes pipeline date formats to strict database signatures."""
+    if not raw_date:
+        raise ValueError(f"Missing date signature at row dataset index {index}")
+
+    clean_date_str = str(raw_date).split("T")[0].strip()
+
+    # 🎯 Added support for alphabetical short-month formats (%d-%b-%Y and %d/%b/%Y)
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%Y", "%d/%b/%Y"):
+        try:
+            return datetime.strptime(clean_date_str, fmt).date()
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Row date signature structure '{raw_date}' could not be parsed to database schema specs."
+    )
+
+
+def sanitize_transaction_dates_via_template(intermediate_txns, template_obj):
+    """
+    🔒 UNIVERSAL TEMPLATE DATE SANITIZER (YEAR CENTURY EXPANSION):
+    Intercepts 2-digit and 4-digit numeric/alphabetical date patterns seamlessly.
+    Expands 2-digit years contextually to a full 4-digit YYYY profile to stabilize
+    fingerprint hash keys across all layout engines.
+    """
+    date_regex_str = None
+
+    if template_obj and template_obj.signature_json:
+        try:
+            sig_data = (
+                json.loads(template_obj.signature_json)
+                if isinstance(template_obj.signature_json, str)
+                else template_obj.signature_json
+            )
+            date_regex_str = sig_data.get("regex_patterns", {}).get("DATE_MATCH")
+        except Exception:
+            pass
+
+    # 🎯 HARDENED MULTI-PATTERN MASK: Added \d{2,4} constraints to intercept 2-digit trailing years safely
+    if not date_regex_str:
+        date_regex_str = (
+            r"\b\d{2}-[A-Za-z]{3}-\d{2,4}\b|"
+            r"\b\d{2}-\d{2}-\d{2,4}\b|"
+            r"\b\d{4}-\d{2}-\d{2}\b|"
+            r"\b\d{4}/\d{2}/\d{2}\b|"
+            r"\b\d{2}/[A-Za-z]{3}/\d{2,4}\b|"
+            r"\b\d{2}/\d{2}/\d{2,4}\b"
+        )
+    else:
+        # If database overrides exist, ensure 2-digit fallback patterns are injected
+        if r"\d{2,4}" not in date_regex_str and r"\d{2}" not in date_regex_str[-10:]:
+            date_regex_str += r"|\b\d{2}-\d{2}-\d{2}\b|\b\d{2}/\d{2}/\d{2}\b|\b\d{2}-[A-Za-z]{3}-\d{2}\b"
+
+    compiled_date_finder = re.compile(date_regex_str, re.IGNORECASE)
+
+    for idx, txn in enumerate(intermediate_txns):
+        for date_key in ["post_date", "date", "value_date", "Txn Date"]:
+            if date_key in txn and txn[date_key]:
+                raw_val = str(txn[date_key]).strip()
+                found_match = compiled_date_finder.search(raw_val)
+
+                if found_match:
+                    cleaned_val = found_match.group(0)
+                    finalized_display_val = cleaned_val
+
+                    try:
+                        # ─── 🗺️ PATTERN 1: HYPHEN BOUNDARY SEPARATORS ───
+                        if "-" in cleaned_val:
+                            parts = cleaned_val.split("-")
+                            # Detect text month profile (e.g., 09-Apr-22)
+                            if len(parts[1]) == 3:
+                                fmt_year = "%y" if len(parts[2]) == 2 else "%Y"
+                                dt_obj = datetime.strptime(
+                                    cleaned_val, f"%d-%b-{fmt_year}"
+                                )
+                            # Detect reversed ISO layout (e.g., 2022-10-01)
+                            elif len(parts[0]) == 4:
+                                dt_obj = datetime.strptime(cleaned_val, "%Y-%m-%d")
+                            # Standard layout (e.g., 01-10-22 or 01-10-2022)
+                            else:
+                                fmt_year = "%y" if len(parts[2]) == 2 else "%Y"
+                                dt_obj = datetime.strptime(
+                                    cleaned_val, f"%d-%m-{fmt_year}"
+                                )
+
+                            finalized_display_val = dt_obj.strftime("%d-%m-%Y")
+
+                        # ─── 🗺️ PATTERN 2: SLASH BOUNDARY SEPARATORS ───
+                        elif "/" in cleaned_val:
+                            parts = cleaned_val.split("/")
+                            # Reversed layout path (e.g., 2022/10/01)
+                            if len(parts[0]) == 4:
+                                dt_obj = datetime.strptime(cleaned_val, "%Y/%m/%d")
+                            # Text month path (e.g., 09/Apr/22)
+                            elif len(parts[1]) == 3:
+                                fmt_year = "%y" if len(parts[2]) == 2 else "%Y"
+                                dt_obj = datetime.strptime(
+                                    cleaned_val, f"%d/%b/{fmt_year}"
+                                )
+                            # Standard numeric path (e.g., 01/10/22)
+                            else:
+                                fmt_year = "%y" if len(parts[2]) == 2 else "%Y"
+                                dt_obj = datetime.strptime(
+                                    cleaned_val, f"%d/%m/{fmt_year}"
+                                )
+
+                            finalized_display_val = dt_obj.strftime("%d-%m-%Y")
+
+                    except (ValueError, IndexError, KeyError):
+                        pass
+
+                    txn[date_key] = finalized_display_val
+                else:
+                    # Clear dashboard diagnostics tracker logs
+                    pass
+
     return intermediate_txns

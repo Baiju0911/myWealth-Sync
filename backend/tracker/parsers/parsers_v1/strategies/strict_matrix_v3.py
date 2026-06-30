@@ -9,23 +9,23 @@ logger = logging.getLogger(__name__)
 
 def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     """
-    GEOMETRIC WRAPPED LINE PARSER (V3): Maps transactions using strict coordinate tracking.
-    Includes automated initial balance back-calculation fallbacks for statements lacking
-    explicit B/F descriptor rows.
+    GEOMETRIC WRAPPED LINE PARSER (V3 - COMPACT PRODUCTION HARDENED):
+    Maps transactions using relative horizontal column boundaries to prevent
+    short character formats from shifting across ledger columns.
     """
     DATE_RE = re.compile(r"^\d{2}-\d{2}-\d{2,4}|^\d{2}/\d{2}/\d{2,4}")
     NUMERIC_RE = re.compile(
-        r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d{2})(?:CR|DR|Cr|Dr)?\b|\b\d{1,3}(?:,\d{3})*(?:\.\d{2})(?:CR|DR|Cr|Dr)?\b|\b\d+(?:\.\d{2})\b"
+        r"\b\d{1,3}(?:,\d{3})*(?:\.\d{2})(?:CR|DR|Cr|Dr)?\b|\b\d+(?:\.\d{2})(?:CR|DR|Cr|Dr)?\b"
     )
     BF_RE = re.compile(r"\bB[/\s]?F\b|\bBROUGHT\s+FORWARD\b", re.IGNORECASE)
 
-    CREDIT_ZONE_X_START = 56.0
+    # 🎯 BALANCED COLUMN MIDPOINT:
+    # Debits (Withdrawals) cluster around x=48%-54%. Credits (Deposits) cluster around x=58%-64%.
+    COLUMN_MIDPOINT_X = 56.5
 
     intermediate_txns = []
     computed_opening_balance = 0.0
     current_txn = None
-
-    total_pages = len(pages_raw_data) if pages_raw_data else 0
 
     for page_data in pages_raw_data:
         page_idx = page_data["page_idx"]
@@ -92,7 +92,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                     current_txn = None
                 continue
 
-            # 💰 EXTRACATION HARVESTER: Look backward on B/F rows to grab opening numbers before continuing
             if BF_RE.search(line_text):
                 for t in reversed(row_tokens):
                     clean_t = (
@@ -125,10 +124,12 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
                 numeric_tokens = []
                 narration_pieces = []
+
                 for t in row_tokens:
                     if DATE_RE.match(t["text"]):
                         continue
-                    if NUMERIC_RE.search(t["text"]):
+                    # Safe transactional value coordinates boundaries mask check
+                    if NUMERIC_RE.search(t["text"]) and t["x"] > 35.0:
                         numeric_tokens.append(t)
                     else:
                         narration_pieces.append(t["text"])
@@ -138,43 +139,57 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 balance_val = "-"
 
                 if len(numeric_tokens) == 1:
-                    tx_token = numeric_tokens[0]
-                    tx_amt_clean = (
-                        tx_token["text"]
+                    t_tok = numeric_tokens[0]
+                    t_amt = (
+                        t_tok["text"]
                         .upper()
                         .replace("CR", "")
                         .replace("DR", "")
                         .replace(",", "")
                         .strip()
                     )
-                    if tx_token["x"] < CREDIT_ZONE_X_START:
-                        debit_val = tx_amt_clean
+                    if t_tok["x"] <= COLUMN_MIDPOINT_X:
+                        debit_val = t_amt
+                    elif t_tok["x"] <= 68.0:
+                        credit_val = t_amt
                     else:
-                        credit_val = tx_amt_clean
-                    balance_val = "-"
+                        balance_val = t_amt
 
                 elif len(numeric_tokens) >= 2:
+                    # Capture running balance string metrics cleanly
+                    bal_tok = numeric_tokens[-1]
+                    bal_text_upper = bal_tok["text"].upper()
                     balance_val = (
-                        numeric_tokens[-1]["text"]
-                        .upper()
+                        bal_text_upper.replace("CR", "")
+                        .replace("DR", "")
+                        .replace(",", "")
+                        .strip()
+                    )
+
+                    # Capture true financial magnitude token
+                    amt_tok = numeric_tokens[-2]
+                    amt_text_raw = amt_tok["text"]
+                    amt_val = (
+                        amt_text_raw.upper()
                         .replace("CR", "")
                         .replace("DR", "")
                         .replace(",", "")
                         .strip()
                     )
-                    tx_token = numeric_tokens[-2]
-                    tx_amt_clean = (
-                        tx_token["text"]
-                        .upper()
-                        .replace("CR", "")
-                        .replace("DR", "")
-                        .replace(",", "")
-                        .strip()
-                    )
-                    if tx_token["x"] < CREDIT_ZONE_X_START:
-                        debit_val = tx_amt_clean
+
+                    # 🎯 ADJUSTED LANE ALLOCATION MATRICES
+                    # If the balance or amount string explicitly contains a directional indicator suffix:
+                    if (
+                        "DR" in bal_text_upper
+                        and len(numeric_tokens) == 2
+                        and amt_tok["x"] > COLUMN_MIDPOINT_X
+                    ):
+                        # Fallback case for specific fee lines running near the column edges
+                        debit_val = amt_val
+                    elif amt_tok["x"] < COLUMN_MIDPOINT_X:
+                        debit_val = amt_val
                     else:
-                        credit_val = tx_amt_clean
+                        credit_val = amt_val
 
                 try:
                     norm_date = norm.normalize_date(
@@ -199,9 +214,8 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     if current_txn:
         intermediate_txns.append(current_txn)
-        current_txn = None
 
-    # ─── STEP 3: FLATTEN AND SANITIZE OUTPUTS FOR STORAGE ───
+    # Flatten out arrays safely before return statements execution
     final_txns = []
     for tx in intermediate_txns:
         combined_narration = " ".join(tx["narration_lines"]).strip()
@@ -214,13 +228,13 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             "CUSTOMER ID:",
             "CURRENCY CODE:",
             "BU.SUSEELAN@GMAIL.COM",
+            "NOMINEE:",
+            "MODE OF OPR.:",
         )
         if any(h_sig in payload_upper for h_sig in HEADER_LEAK_SIGNATURES):
             continue
-
         if tx["debit"] == "-" and tx["credit"] == "-":
             continue
-
         if not combined_narration or len(combined_narration) < 3:
             continue
 
@@ -228,8 +242,7 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
         del tx["narration_lines"]
         final_txns.append(tx)
 
-    # ─── 🎯 BACK-CALCULATION FALLBACK ENGINE ───
-    # If no explicit opening balance row was scraped, deduce it using the first parsed entry's math
+    # Reverse-engineer opening balance seeds anchors baseline if missing
     if computed_opening_balance == 0.00 and final_txns:
         first_tx = final_txns[0]
         try:
@@ -238,14 +251,9 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             )
             first_dr = float(first_tx["debit"]) if first_tx["debit"] != "-" else 0.00
             first_cr = float(first_tx["credit"]) if first_tx["credit"] != "-" else 0.00
-
             if first_bal != 0.00:
-                # Reverse the action of the first transaction to find the true starting balance
                 computed_opening_balance = first_bal - first_cr + first_dr
-                logger.info(
-                    f"🔮 [Fallback Engine] Deduced initial balance using first row entry: {computed_opening_balance}"
-                )
-        except (ValueError, KeyError):
+        except Exception:
             pass
 
     return final_txns, computed_opening_balance, []
