@@ -8,3 +8,5 @@ export { default as MasterInstitutionsContainer } from './MasterInstitutionsCont
 export { default as StatementIngestView } from './StatementIngestView';
 export { default as StatementIngestionNode } from './StatementIngestionNode';
 export { default as UniversalStatementIngestView } from './UniversalStatementIngestView';
+
+export { default as AccountingHeaders } from './AccountingHeaders';

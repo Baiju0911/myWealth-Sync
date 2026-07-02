@@ -467,3 +467,162 @@ class UserStatementTemplate(models.Model):
 
     def __str__(self):
         return f"[{self.parser_strategy_code}] {self.template_name} -> {self.account.name if self.account else 'Unlinked'}"
+
+
+############ Accounting Categories & Ledger Mapping Tables ############
+
+# ========================================================
+# 1. TAXONOMY RULES & CENTRAL CONFIGURATION PATTERNS
+# ========================================================
+
+
+class MasterFinancialCategory(models.Model):
+    """
+    🎯 CONSOLIDATED MASTER CATEGORY & PATTERN MATRIX
+    Clubs balancesheetheader, knowndefaultheader, and selftransferheader into one framework.
+    """
+
+    CATEGORY_TYPES = [
+        ("REGULAR", "Standard Balance Sheet / Expense Item"),
+        ("KNOWN_DEFAULT", "Auto-Matched Known Rule Node"),
+        ("SELF_TRANSFER", "Inter-Account Internal Transfer Rule"),
+    ]
+
+    id = models.AutoField(primary_key=True)
+    sno = models.IntegerField(
+        default=1, help_text="Stores legacy ID reference number tracks"
+    )
+    category_type = models.CharField(
+        max_length=20, choices=CATEGORY_TYPES, default="REGULAR", db_index=True
+    )
+
+    # 📊 Taxonomy Layout Chains
+    act_category = models.CharField(max_length=100)
+    act_subcategory = models.CharField(max_length=100)
+    categories_items = models.CharField(max_length=100)
+    dashboard_cat = models.CharField(max_length=100)
+
+    # ⚡ NEW COMPACT VAULTS
+    keys = models.JSONField(
+        default=dict, help_text="Stores matching tokens: {'key1': '...', 'key2': '...'}"
+    )
+    bank_types = models.JSONField(
+        default=dict,
+        help_text="Stores inter-bank routing details: {'from': '...', 'to': '...'}",
+    )
+
+    self_account = models.CharField(max_length=100, blank=True, null=True)
+    transfer_value = models.CharField(max_length=200, blank=True, null=True)
+    remarks = models.CharField(max_length=100, blank=True, null=True)
+    concatenate = models.CharField(max_length=100, blank=True, null=True)
+    monthly_expense = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "ledger_mastercategory"
+        verbose_name = "Master Financial Category"
+        verbose_name_plural = "Master Financial Categories"
+        ordering = ["category_type", "act_category", "categories_items"]
+
+    def __str__(self):
+        return f"[{self.category_type}] {self.act_category} -> {self.categories_items}"
+
+
+class AccountingRule(models.Model):
+    """
+    📜 TIERED ACCOUNTING POLICIES & GOLDEN RULES MATRIX
+    Maintains traditional financial evaluation tracking vectors (GR01 - GR75).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    rule_code = models.CharField(
+        max_length=20,
+        unique=True,
+        help_text="Unique custom rule code indicator string token: GR01, GR07",
+    )
+    rule_title = models.CharField(max_length=255)
+    entry_type = models.CharField(
+        max_length=10,
+        choices=[("Debit", "Debit"), ("Credit", "Credit")],
+        help_text="Target verification accounting vector direction",
+    )
+    rule_priority = models.IntegerField(
+        default=1,
+        help_text="Sorting weight priority indicator to settle keyword competition logs",
+    )
+
+    # 🔍 Rule Search Verification Constraints
+    description_tags = models.JSONField(
+        help_text="Array listing search trigger tracking tags keywords"
+    )
+    examples = models.JSONField(
+        help_text="Array containing mock raw ledger transactions data"
+    )
+
+    # 🧳 THE METADATA VAULT (Combines summary, categorization type, layout targets)
+    rule_metadata = models.JSONField(
+        default=dict,
+        help_text="Stores: golden_rule_type, account_type, golden_rule_summary, category, subcategory",
+    )
+
+    # 🛡️ Pipeline Controls
+    is_active = models.BooleanField(default=True)
+    apply_to_ai = models.BooleanField(default=False)
+    notes = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_accountingrule"
+        verbose_name = "Accounting Rule"
+        verbose_name_plural = "Accounting Rules"
+        ordering = ["rule_priority"]
+
+    def __str__(self):
+        return f"{self.rule_code}: {self.rule_title} ({self.entry_type})"
+
+
+# ========================================================
+# 2. EXTENDED DOUBLE-ENTRY LEDGER LINE ALLOCATIONS
+# ========================================================
+
+
+class JournalEntryMapping(models.Model):
+    """
+    🔗 THE RELATIONAL INTEGRATION LINK
+    Instead of building a separate transaction ledger table, this extends your
+    existing core JournalEntry row. It decorates your double-entry rows with
+    your multi-tier category structures and tracking rule codes.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 🎯 Points directly back to your existing core transaction lines
+    journal_entry = models.OneToOneField(
+        "JournalEntry",  # Use 'your_app.JournalEntry' if this model sits in a different folder
+        on_delete=models.CASCADE,
+        related_name="category_mapping",
+        help_text="Links to your signed-amount double-entry row line",
+    )
+
+    # 📊 Assigns your custom category tracks
+    assigned_category = models.ForeignKey(
+        MasterFinancialCategory, on_delete=models.PROTECT, related_name="mapped_entries"
+    )
+
+    # 📜 Tracks exactly which rule processed this row for clear audit logging
+    applied_rule = models.ForeignKey(
+        AccountingRule,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="mapped_entries",
+    )
+
+    class Meta:
+        db_table = "ledger_entry_mapping"
+        verbose_name = "Journal Entry Mapping"
+        verbose_name_plural = "Journal Entry Mappings"
+
+    def __str__(self):
+        return f"Mapping -> {self.assigned_category.categories_items} (Rule: {self.applied_rule.rule_code if self.applied_rule else 'MANUAL'})"

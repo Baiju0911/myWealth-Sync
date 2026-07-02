@@ -1,6 +1,6 @@
 import type { AppView } from '../../App.tsx';
 // 🟢 Keep both legacy and dynamic components imported from your views index
-import { MasterInstitutionsContainer, StatementIngestView, StatementIngestionNode,UniversalStatementIngestView } from '../../views'; 
+import { MasterInstitutionsContainer, StatementIngestView, StatementIngestionNode,UniversalStatementIngestView, AccountingHeaders } from '../../views'; 
 import StatementMapper from '../mappers/StatementMapper.tsx'; 
 
 interface ShellProps {
@@ -62,7 +62,9 @@ export default function DashboardShell({ currentView, setViewAction }: ShellProp
 
       case 'schemas':
         return <StatementMapper />; 
-
+      case 'AccountingHeaders':
+        return <AccountingHeaders />;
+        
       default:
         return <MasterInstitutionsContainer />;
     }
