@@ -2,10 +2,18 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework.authtoken.views import obtain_auth_token
 from rest_framework.routers import DefaultRouter
+from tracker.ledgerCategorizationView import (
+    AccountingRuleViewSet,
+    MasterFinancialCategoryViewSet,
+)
 from tracker.views import BankCredentialViewSet
 
 router = DefaultRouter()
 router.register(r"bank-credentials", BankCredentialViewSet, basename="bank-credentials")
+router.register(
+    r"config/categories", MasterFinancialCategoryViewSet, basename="admin-categories"
+)
+router.register(r"config/rules", AccountingRuleViewSet, basename="admin-rules")
 
 urlpatterns = [
     path("admin/", admin.site.urls),

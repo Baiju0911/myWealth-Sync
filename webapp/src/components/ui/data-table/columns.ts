@@ -83,3 +83,61 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
 
   { key: 'status', label: 'Status', width: '5%', align: 'center' },
 ];
+
+// Column configuration for Tab 1: Known Headers
+export const ACCOUNTING_HEADER_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'account_code',
+    label: 'Account Code',
+    width: '15%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'narration_description',
+    label: 'Account Name',
+    width: '40%',
+    align: 'left',
+    textColor: 'text-zinc-100',
+  },
+  {
+    key: 'tran_type',
+    label: 'Classification Type',
+    width: '20%',
+    align: 'center',
+  },
+  {
+    key: 'balance',
+    label: 'Current Balance',
+    width: '25%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-cyan-400/90',
+    headerClass: 'text-cyan-400',
+  },
+];
+
+// Column configuration for Tab 2: Self Transfers
+export const SELF_TRANSFER_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'id',
+    label: 'Route ID',
+    width: '10%',
+    align: 'left',
+    textColor: 'text-zinc-500',
+  },
+  {
+    key: 'source_account_name',
+    label: 'Source Entity Ledger (Debit Origin)',
+    width: '35%',
+    align: 'left',
+  },
+  {
+    key: 'destination_account_name',
+    label: 'Destination Entity Ledger (Credit Target)',
+    width: '35%',
+    align: 'left',
+  },
+  { key: 'tran_type', label: 'Route Code', width: '10%', align: 'center' },
+  { key: 'status', label: 'Route Status', width: '10%', align: 'center' },
+];

@@ -3,7 +3,7 @@ from django.urls import path
 from .views import (
     SystemConfigView,
     AccountListCreateView,
-    AccountDetailView,  # 🎯 THE FIX: Import the single-resource detail handler class
+    AccountDetailView,
     TransactionListCreateView,
     BulkTransactionSyncView,
     BankViewSet,
@@ -15,17 +15,19 @@ from .views import (
     AvailableTemplatesListView,
     StatementBulkIngestPipelineView,
 )
+from .ledgerCategorizationView import (
+    AutoCategorizeStagingQueueView,
+    MasterFinancialCategoryViewSet,
+    AccountingRuleViewSet,
+)
 
 urlpatterns = [
-    # ⚙️ Configuration Properties
-    path("config/", SystemConfigView.as_view(), name="system-config"),
     # 🏛️ Master Bank Collection Endpoints
     path(
         "banks/",
         BankViewSet.as_view({"get": "list", "post": "create"}),
         name="bank-list-create",
     ),
-    # Individual bank resource router matching UUID strings
     path(
         "banks/<str:pk>/",
         BankViewSet.as_view(
@@ -44,7 +46,6 @@ urlpatterns = [
         BankCredentialViewSet.as_view({"get": "list", "post": "create"}),
         name="bank-credential-list-create",
     ),
-    # Resource router for individual credentials modifications
     path(
         "bank-credentials/<str:pk>/",
         BankCredentialViewSet.as_view(
@@ -59,7 +60,6 @@ urlpatterns = [
     ),
     # 💳 Financial Ledger Management Collection
     path("accounts/", AccountListCreateView.as_view(), name="account-list-create"),
-    # 🎯 THE FIX: Wire the detail path directly to AccountDetailView instead of AccountListCreateView!
     path("accounts/<str:pk>/", AccountDetailView.as_view(), name="account-detail"),
     # 📊 Double-Entry Transaction Data streams
     path(
@@ -68,12 +68,6 @@ urlpatterns = [
         name="transaction-list-create",
     ),
     path("transactions/sync/", BulkTransactionSyncView.as_view(), name="bulk-sync"),
-    # 📂 Ingestion Router (File Drag & Drop Target Endpoint)
-    # path(
-    #     "statement/ingest/",
-    #     StatementIngestRouterView_older.as_view(),
-    #     name="statement-upload",
-    # ),
     # save extracted rows
     path(
         "statement/commit-staging/",
@@ -105,5 +99,52 @@ urlpatterns = [
         "statements/available/",
         AvailableTemplatesListView.as_view(),
         name="available-templates",
+    ),
+]
+
+urlpatterns += [
+    # ⚙️ Configuration Properties
+    path("config/", SystemConfigView.as_view(), name="system-config"),
+    # 🛠️ NEW ADMINISTRATIVE CRUD ENDPOINTS
+    # Master Categories CRUD Matrix Lookups
+    path(
+        "config/categories/",
+        MasterFinancialCategoryViewSet.as_view({"get": "list", "post": "create"}),
+        name="admin-categories-list-create",
+    ),
+    path(
+        "config/categories/<int:pk>/",
+        MasterFinancialCategoryViewSet.as_view(
+            {
+                "get": "retrieve",
+                "put": "update",
+                "patch": "partial_update",
+                "delete": "destroy",
+            }
+        ),
+        name="admin-categories-detail",
+    ),
+    # Golden Accounting Rules CRUD Matrix Lookups
+    path(
+        "config/rules/",
+        AccountingRuleViewSet.as_view({"get": "list", "post": "create"}),
+        name="admin-rules-list-create",
+    ),
+    path(
+        "config/rules/<int:pk>/",
+        AccountingRuleViewSet.as_view(
+            {
+                "get": "retrieve",
+                "put": "update",
+                "patch": "partial_update",
+                "delete": "destroy",
+            }
+        ),
+        name="admin-rules-detail",
+    ),
+    path(
+        "staging/auto-categorize/",
+        AutoCategorizeStagingQueueView.as_view(),
+        name="auto-categorize-staging",
     ),
 ]

@@ -16,6 +16,8 @@ export default function Sidebar({ currentView, setCurrentView }: SidebarProps) {
     { id: 'upload', label: 'Statement Ingestion [Legacy]', icon: '📂' },
     { id: 'ingestDynamic', label: 'Statement Ingestion Dynamic [Testing]', icon: '📂' },
     { id: 'schemas', label: 'Mapping Schemas', icon: '📋' }, 
+    { id: 'AccountingHeaders', label: 'Accounting Headers', icon: '📋' },
+
   ];
 
   return (
