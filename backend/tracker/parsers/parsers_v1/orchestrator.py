@@ -24,7 +24,7 @@ from .geometry.lane_detector import StructuredRow
 logger = logging.getLogger(__name__)
 
 
-def process_bank_statement(
+def process_bank_statement_older(
     uploaded_file,
     template_obj,
     account_id,
@@ -262,7 +262,7 @@ def process_bank_statement(
     return _run_paddle_fallback_bridge(uploaded_file, template_obj)
 
 
-def process_bank_statement_older(
+def process_bank_statement(
     uploaded_file,
     template_obj,
     account_id,
@@ -302,7 +302,7 @@ def process_bank_statement_older(
             calculated_op_bal = 0.00
             if csv_txns:
                 try:
-                    # ─── 🎯 FIX: MATHEMATICAL REVERSE-ENGINEERING ANCHOR SEED ───
+                    # ─── 🎯 MATHEMATICAL REVERSE-ENGINEERING ANCHOR SEED ───
                     first_row = csv_txns[0]
                     first_row_bal = float(
                         str(first_row.get("balance", "0.00")).replace(",", "")
@@ -319,13 +319,11 @@ def process_bank_statement_older(
                     )
 
                     if first_row_deb > 0:
-                        # If the first row was a withdrawal, the starting balance was higher!
                         calculated_op_bal = first_row_bal + first_row_deb
                         logger.info(
                             f"🔄 Reverse-engineered opening anchor baseline: {first_row_bal} + {first_row_deb} = {calculated_op_bal}"
                         )
                     elif first_row_crd > 0:
-                        # If the first row was a deposit, the starting balance was lower!
                         calculated_op_bal = first_row_bal - first_row_crd
                         logger.info(
                             f"🔄 Reverse-engineered opening anchor baseline: {first_row_bal} - {first_row_crd} = {calculated_op_bal}"
@@ -334,6 +332,10 @@ def process_bank_statement_older(
                         calculated_op_bal = first_row_bal
                 except (ValueError, IndexError):
                     pass
+
+                # 🎯 STRATEGY FLAG INJECTION FOR CSV TRACK
+                for tx in csv_txns:
+                    tx["strategy_used"] = "UNIVERSAL_CSV_FLOW"
 
             return csv_txns, calculated_op_bal, []
 
@@ -402,11 +404,18 @@ def process_bank_statement_older(
             or "PARTICULARS" in page_sample_upper
             or "CHQ.NO" in page_sample_upper
         ):
-            matched_template = candidate_templates.filter(
-                parser_strategy_code="GRID_COLUMN_FLOW_V3"
-            ).first()
-            if matched_template:
-                template_obj = matched_template
+            if "BROUGHT FORWARD" in page_sample_upper or "OPNBAL" in page_sample_upper:
+                matched_template = candidate_templates.filter(
+                    parser_strategy_code="RELATIVE_MATRIX_V2"
+                ).first()
+                if matched_template:
+                    template_obj = matched_template
+            else:
+                matched_template = candidate_templates.filter(
+                    parser_strategy_code="GRID_COLUMN_FLOW_V3"
+                ).first()
+                if matched_template:
+                    template_obj = matched_template
         else:
             matched_template = candidate_templates.filter(
                 parser_strategy_code="GRID_COLUMN_FLOW_V2"
@@ -431,6 +440,10 @@ def process_bank_statement_older(
             txns, bal, errs = strict_matrix.execute(
                 pages_raw_data, template_obj, account_id, existing_database_hashes
             )
+        elif strategy in ("RELATIVE_MATRIX_V2", "TOKEN_SPLITTER_FLOW"):
+            txns, bal, errs = relative_matrix_v2.execute_v2(
+                pages_raw_data, template_obj, account_id, existing_database_hashes
+            )
         elif strategy in (
             "NARRATIVE_INLINE_FLOW",
             "RELATIVE_MATRIX",
@@ -441,6 +454,11 @@ def process_bank_statement_older(
             )
         else:
             raise ValueError(f"❌ Unsupported strategy classification '{strategy}'.")
+
+        # 🎯 THE INJECTION POINT: Safely map the strategy used into each record dictionary
+        if txns:
+            for tx in txns:
+                tx["strategy_used"] = strategy
 
         # ─── ⚖️ STEP 4: AUTOMATED QUALITY ASSURANCE CIRCUIT BREAKER ───────────
         eval_rows = []
@@ -457,11 +475,11 @@ def process_bank_statement_older(
             cr_str = (
                 "" if tx.get("credit") == "-" else str(tx.get("credit") or "").strip()
             )
-            bal_str = (
+            val_str = (
                 "" if tx.get("balance") == "-" else str(tx.get("balance") or "").strip()
             )
 
-            if not tx_date and not (dr_str or cr_str or bal_str) and tx_narration:
+            if not tx_date and not (dr_str or cr_str or val_str) and tx_narration:
                 if eval_rows:
                     eval_rows[-1].narration += " " + tx_narration
                 continue
@@ -471,7 +489,7 @@ def process_bank_statement_older(
             row.narration = tx_narration
             row.debit = dr_str
             row.credit = cr_str
-            row.balance = bal_str
+            row.balance = val_str
             eval_rows.append(row)
 
         confidence_score = ConfidenceEvaluator.evaluate_dataset(eval_rows)
@@ -486,7 +504,15 @@ def process_bank_statement_older(
             f"🚨 DEBUG LOG: Active strategy {strategy} crashed during execution: {str(engine_error)}"
         )
 
-    return _run_paddle_fallback_bridge(uploaded_file, template_obj)
+    # 🎯 FALLBACK INJECTION PASS: If native fails and redirects to OCR, mark it clearly
+    fallback_txns, fallback_bal, fallback_errs = _run_paddle_fallback_bridge(
+        uploaded_file, template_obj
+    )
+    if fallback_txns:
+        for tx in fallback_txns:
+            tx["strategy_used"] = f"PADDLE_OCR_FALLBACK_{strategy}"
+
+    return fallback_txns, fallback_bal, fallback_errs
 
 
 def _run_paddle_fallback_bridge(uploaded_file, template_obj):

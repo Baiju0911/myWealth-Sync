@@ -1,3 +1,5 @@
+# tracker/parsers/parsers_v1/strategies/strict_matrix.py
+
 import re
 import json
 from ..utils import normalizer as norm
@@ -5,10 +7,9 @@ from ..utils import normalizer as norm
 
 def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     """
-    UNIVERSAL DYNAMIC MATRIX ENGINE: Loads tracking metrics, boundary coordinates,
-    and extraction filters directly from database template schema objects.
+    UNIVERSAL DYNAMIC MATRIX ENGINE (PRODUCTION RECTIFIED): Mapped directly from template properties.
+    Dynamically extracts the opening statement balance from metadata header rows.
     """
-    # ─── 📦 DYNAMIC DATABASE OVERRIDES UNPACKING ───
     try:
         config_payload = template_obj.signature_json
         if isinstance(config_payload, str):
@@ -18,18 +19,21 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
     db_regex_patterns = config_payload.get("regex_patterns", {})
 
-    # 🎯 DYNAMIC DATABASE REGEX FETCHING
     DATE_MATCH_RAW = db_regex_patterns.get(
         "DATE_MATCH", r"\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}"
     )
     NUMERIC_FINDER_RAW = db_regex_patterns.get("NUMERIC_FINDER", r"\d+(?:\.\d{2})")
 
-    # Clean off strict word boundary tokens (\b) to avoid truncation inside lookaheads
     DATE_MATCH_RAW = DATE_MATCH_RAW.replace(r"\b", "")
     NUMERIC_FINDER_RAW = NUMERIC_FINDER_RAW.replace(r"\b", "")
 
     DATE_RE = re.compile(DATE_MATCH_RAW)
     NUMERIC_RE = re.compile(NUMERIC_FINDER_RAW, re.I)
+
+    # 🎯 SEED ANCHOR PATTERNS: Captures statement beginning entries
+    BF_RE = re.compile(
+        r"\bB[/\s]?F\b|\bBROUGHT\s+FORWARD\b|\bOPENING\s+BALANCE\b", re.IGNORECASE
+    )
 
     db_summary_markers = config_payload.get("summary_markers") or []
     db_noise = config_payload.get("system_noise_patterns") or []
@@ -38,17 +42,26 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
     SYSTEM_NOISE_REGEX = [re.compile(p, re.I) for p in db_noise]
 
     base_y_tolerance = float(getattr(template_obj, "y_tolerance", 3.0))
-    is_fed = getattr(template_obj, "template_name", "SBI") == "FED"
+    template_name_str = str(getattr(template_obj, "template_name", "SBI")).upper()
+    is_fed = "FED" in template_name_str
     active_delta = 7.5 if is_fed else base_y_tolerance
 
-    # Dynamic column parameters mapped directly from database table properties
     date_bound_x = float(getattr(template_obj, "date_x", 12.0))
     debit_bound_x = float(getattr(template_obj, "debit_x", 65.0))
     credit_bound_x = float(getattr(template_obj, "credit_x", 76.0))
     balance_bound_x = float(getattr(template_obj, "balance_x", 86.0))
-    mid_point = (debit_bound_x + credit_bound_x) / 2
 
+    if is_fed:
+        if debit_bound_x == 65.0:
+            debit_bound_x = 45.0
+        if balance_bound_x == 86.0:
+            balance_bound_x = 70.0
+
+    mid_point = (debit_bound_x + credit_bound_x) / 2
     raw_rows = []
+
+    # 🎯 Track dynamic opening balance variable metrics
+    computed_opening_balance = 0.0
 
     # ─── 🔍 STEP 1: SPATIAL AGGREGATION LOOP ───
     for page_data in pages_raw_data:
@@ -135,6 +148,24 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             idx += 1
             continue
 
+        # 💰 HARVEST ANCHOR VALUES: Intercept Opening Balance strings
+        if BF_RE.search(text):
+            for t in reversed(row["tokens"]):
+                clean_t = (
+                    t["text"]
+                    .upper()
+                    .replace("CR", "")
+                    .replace("DR", "")
+                    .replace(",", "")
+                    .strip()
+                )
+                if re.match(r"^\d+(?:\.\d{2})?$", clean_t):
+                    try:
+                        computed_opening_balance = float(clean_t)
+                        break
+                    except ValueError:
+                        pass
+
         if any(m in text_upper for m in db_summary_markers) or any(
             regex.search(text_upper) for regex in SYSTEM_NOISE_REGEX
         ):
@@ -167,7 +198,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
             idx += 1
             continue
 
-        active_post_date = None
         found_dts = []
         for dt in line_dates:
             dt_x = float(dt["x"])
@@ -175,9 +205,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 dt_x = (dt_x / page_width) * 100
             if dt_x <= 24.0:
                 found_dts.append(dt["text"])
-
-        if found_dts:
-            active_post_date = found_dts[0]
 
         row_tokens_pool = list(row["tokens"])
         k = idx + 1
@@ -195,7 +222,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                         has_true_date_anchor = True
                         break
 
-            # Added newly uncovered SIB/FED block boundaries
             STRICT_BLOCK_TERMINATORS = [
                 "PAGE",
                 "THE FEDERAL BANK",
@@ -246,19 +272,25 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
                 if x_loc > 100.0:
                     x_loc = (x_loc / page_width) * 100
-
-                # 🎯 REFINE ACCURACY FILTER PASS
                 is_date_string = bool(DATE_RE.match(t_text))
 
                 if is_date_string:
-                    # Captures chronological structural coordinates
                     if x_loc <= date_bound_x + 20.0:
                         dates_found.append(t_text)
-                    # Dropping internal duplicate layout track columns, ignoring random injection strings
                     continue
 
                 if date_bound_x < x_loc < debit_bound_x:
-                    narration_pieces.append(t_text)
+                    if NUMERIC_RE.match(t_text) and x_loc >= (debit_bound_x - 15.0):
+                        clean_val = (
+                            t_text.replace("CR", "")
+                            .replace("DR", "")
+                            .replace("Cr", "")
+                            .replace("Dr", "")
+                            .strip()
+                        )
+                        detected_numbers.append({"val": clean_val, "x": x_loc})
+                    else:
+                        narration_pieces.append(t_text)
                 elif x_loc >= debit_bound_x and NUMERIC_RE.search(t_text):
                     clean_val = (
                         t_text.replace("CR", "")
@@ -296,7 +328,6 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
 
             post_date = dates_found[0] if dates_found else None
             if not post_date:
-                # Safe execution pass for embedded narrative transaction records
                 inline_dates = DATE_RE.findall(final_narration)
                 if inline_dates:
                     post_date = inline_dates[0]
@@ -323,14 +354,20 @@ def execute(pages_raw_data, template_obj, account_id, existing_database_hashes):
                 }
             )
 
-    # ─── ⚖️ PRINT BALANCES MAP ───
-    print("\n🚨 UNFILTERED VALUE STREAM SHEET:")
-    print("─" * 120)
-    for tx in intermediate_txns:
-        print(
-            f"Pg {tx['page_idx']} | Date: {tx['post_date']:<10} | Dr: {tx['debit']:<10} | Cr: {tx['credit']:<10} | Bal: {tx['balance']:<12}"
-        )
-        print(f"   ↳ Narration: \"{tx['narration']}\"")
-        print("─" * 120)
+    # ─── 🎯 BACK-CALCULATION FALLBACK ENGINE ───
+    # If no explicit opening balance text line was scraped, deduce it from row 1 math
+    if computed_opening_balance == 0.00 and intermediate_txns:
+        first_tx = intermediate_txns[0]
+        try:
+            first_bal = (
+                float(first_tx["balance"]) if first_tx["balance"] != "-" else 0.00
+            )
+            first_dr = float(first_tx["debit"]) if first_tx["debit"] != "-" else 0.00
+            first_cr = float(first_tx["credit"]) if first_tx["credit"] != "-" else 0.00
+            if first_bal != 0.00:
+                computed_opening_balance = first_bal - first_cr + first_dr
+        except Exception:
+            pass
 
-    return intermediate_txns, 0.0, system_noise_records
+    # 🎯 FIX: Return the dynamically harvested opening balance instead of 0.0
+    return intermediate_txns, computed_opening_balance, system_noise_records

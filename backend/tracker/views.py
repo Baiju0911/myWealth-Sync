@@ -491,235 +491,6 @@ class StatementStagingCommitView1(APIView):
     """
     🔒 CORE TRANSACTION COMMIT ENGINE (PRODUCTION RECTIFIED):
     Maps, validates, and atomically commits both registry headers and transactional children blocks.
-    Defensively handles incoming date parameters across string, integer, and object datatypes safely.
-    """
-
-    permission_classes = [AllowAny]
-
-    def post(self, request, *args, **kwargs):
-        account_id = request.data.get("account_id")
-        preview_dataset = request.data.get("preview_dataset", [])
-        meta_summary = request.data.get("meta_summary", {})
-
-        fallback_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        file_name = (
-            request.data.get("file_name") or f"STATEMENT_UPLOAD_{fallback_time}.PDF"
-        )
-
-        if not account_id or not preview_dataset:
-            return Response(
-                {
-                    "message": "Required parameters missing or empty payload array received."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        account = get_object_or_404(Account, id=account_id)
-
-        # 1. Extract financial balances safely
-        op_bal = parse_meta_decimal(meta_summary, "openingBalance", "opening_balance")
-        cl_bal = parse_meta_decimal(meta_summary, "closingBalance", "closing_balance")
-        tot_dr = parse_meta_decimal(meta_summary, "totalDebit", "total_debit")
-        tot_cr = parse_meta_decimal(meta_summary, "totalCredit", "total_credit")
-
-        # 2. Extract Document Range Signatures Safely
-        report_from_date = None
-        report_to_date = None
-
-        if preview_dataset:
-            try:
-                first_date = preview_dataset[0].get("post_date") or preview_dataset[
-                    0
-                ].get("date")
-                if first_date:
-                    if isinstance(first_date, (datetime.date, datetime.datetime)):
-                        report_from_date = (
-                            first_date
-                            if isinstance(first_date, datetime.date)
-                            else first_date.date()
-                        )
-                    else:
-                        clean_first_str = str(first_date).split("T")[0].strip()
-                        report_from_date = datetime.datetime.strptime(
-                            clean_first_str, "%d-%m-%Y"
-                        ).date()
-
-                last_date = preview_dataset[-1].get("post_date") or preview_dataset[
-                    -1
-                ].get("date")
-                if last_date:
-                    if isinstance(last_date, (datetime.date, datetime.datetime)):
-                        report_to_date = (
-                            last_date
-                            if isinstance(last_date, datetime.date)
-                            else last_date.date()
-                        )
-                    else:
-                        clean_last_str = str(last_date).split("T")[0].strip()
-                        report_to_date = datetime.datetime.strptime(
-                            clean_last_str, "%d-%m-%Y"
-                        ).date()
-            except Exception as date_range_err:
-                print(f"⚠️ Metadata range parsing fell back: {str(date_range_err)}")
-                report_from_date = datetime.date.today()
-                report_to_date = datetime.date.today()
-
-        # Dynamic extension tracking extraction
-        raw_file_type = meta_summary.get("fileType") or meta_summary.get("file_type")
-        if not raw_file_type or str(raw_file_type).strip().upper() in [
-            "UNKNOWN",
-            "NONE",
-            "",
-        ]:
-            _, file_extension = os.path.splitext(str(file_name).lower())
-            if file_extension in [".xls", ".xlsx"]:
-                clean_file_type = "EXCEL"
-            elif file_extension == ".csv":
-                clean_file_type = "CSV"
-            else:
-                clean_file_type = "PDF"
-        else:
-            clean_file_type = str(raw_file_type).strip().upper()[:10]
-
-        # ─── 🏛️ STEP 3: CONSTRUCT LIVE DATABASE METADATA DICTIONARY ───
-        db_records = StatementStagingLine.objects.filter(account_id=account.id).values(
-            "row_identifier",
-            "narration",
-            "cheque_ref_number",
-            "raw_statement_date",
-            "amount",
-            "running_balance",
-            "credit",
-            "debit",
-        )
-
-        existing_hashes = set()
-        database_lookup_dict = {}
-        for r in db_records:
-            h_key = r["row_identifier"]
-            existing_hashes.add(h_key)
-            database_lookup_dict[h_key] = r
-
-        try:
-            # Run core deduplication filtering pass using raw stream inputs
-            tx_pool, duplicate_skip_count = process_and_filter_rows(
-                preview_dataset,
-                account,
-                account.bank,
-                existing_hashes,
-                database_lookup_dict,
-            )
-
-            with transaction.atomic():
-                # ─── TABLE 1 WRITER: Full Registry Header Write ───
-                registry_entry = StatementIngestRegistry.objects.create(
-                    account=account,
-                    file_name=file_name,
-                    file_type=clean_file_type,
-                    vault_decrypted=meta_summary.get("decrypted")
-                    or meta_summary.get("vault_decrypted", False),
-                    report_from_date=report_from_date,
-                    report_to_date=report_to_date,
-                    opening_balance=op_bal,
-                    closing_balance=cl_bal,
-                    total_debit_amount=tot_dr,
-                    total_credit_amount=tot_cr,
-                    total_row_count=len(preview_dataset),
-                    debit_line_count=meta_summary.get("debitLineCount")
-                    or meta_summary.get("debit_line_count", 0),
-                    credit_line_count=meta_summary.get("creditLineCount")
-                    or meta_summary.get("credit_line_count", 0),
-                    skipped_duplicate_count=duplicate_skip_count,
-                    source_channel="WEB_DASHBOARD",
-                )
-
-                # ─── 🏛️ STEP 5: TWO-WAY SPLIT UPSERT LOGIC CHANNELING ───
-                create_pool = []
-                update_records_count = 0
-
-                for tx in tx_pool:
-                    action_intent = tx.pop("pipeline_action", "INSERT")
-                    tx.pop("status", None)
-                    tx.pop("id", None)
-                    tx.pop(
-                        "value_date", None
-                    )  # 🎯 Drop the extra field safe shield check
-
-                    # Defensive type shield check
-                    raw_date_token = tx.get("raw_statement_date")
-                    if isinstance(raw_date_token, (datetime.date, datetime.datetime)):
-                        db_date = (
-                            raw_date_token
-                            if isinstance(raw_date_token, datetime.date)
-                            else raw_date_token.date()
-                        )
-                    elif (
-                        isinstance(raw_date_token, str)
-                        and len(raw_date_token.strip()) >= 8
-                    ):
-                        try:
-                            clean_tx_str = raw_date_token.split("T")[0].strip()
-                            db_date = datetime.datetime.strptime(
-                                clean_tx_str, "%d-%m-%Y"
-                            ).date()
-                        except (ValueError, TypeError):
-                            db_date = datetime.date.today()
-                    else:
-                        db_date = datetime.date.today()
-
-                    if action_intent == "UPDATE_ENRICHMENT":
-                        target_uuid = tx.get("row_identifier")
-                        StatementStagingLine.objects.filter(
-                            account_id=account.id, row_identifier=target_uuid
-                        ).update(
-                            narration=tx.get("narration"),
-                            cheque_ref_number=tx.get("cheque_ref_number"),
-                            uploaded_at=datetime.datetime.now(),  # Refreshes the upload timestamp
-                        )
-                        update_records_count += 1
-                    else:
-                        create_pool.append(
-                            StatementStagingLine(
-                                account=account,
-                                bank=account.bank,
-                                ingest_registry=registry_entry,
-                                routing_status="COMMITTED",
-                                raw_statement_date=db_date,  # Only map fields aligned to our model definitions
-                                narration=tx.get("narration"),
-                                amount=tx.get("amount"),
-                                running_balance=tx.get("running_balance"),
-                                debit=tx.get("debit"),
-                                credit=tx.get("credit"),
-                                bank_transaction_id=tx.get("bank_transaction_id"),
-                                cheque_ref_number=tx.get("cheque_ref_number"),
-                                row_identifier=tx.get("row_identifier"),
-                            )
-                        )
-
-                if create_pool:
-                    StatementStagingLine.objects.bulk_create(create_pool)
-
-            return Response(
-                {
-                    "status": "SUCCESS",
-                    "registry_id": str(registry_entry.id),
-                    "message": f"Sync run complete. Saved {len(create_pool)} new rows, enriched & updated {update_records_count} transactions, skipped {duplicate_skip_count} unchanged duplicates.",
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        except Exception as batch_err:
-            print(f"❌ RECONCILIATION DATA COMMIT CRASHED: {str(batch_err)}")
-            return Response(
-                {"message": f"Ledger write failure: {str(batch_err)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-
-class StatementStagingCommitView(APIView):
-    """
-    🔒 CORE TRANSACTION COMMIT ENGINE (PRODUCTION RECTIFIED):
-    Maps, validates, and atomically commits both registry headers and transactional children blocks.
     Defensively handles timezone alignment natively across all query paths.
     """
 
@@ -931,6 +702,284 @@ class StatementStagingCommitView(APIView):
                     "status": "SUCCESS",
                     "registry_id": str(registry_entry.id),
                     "message": f"Sync run complete. Saved {len(create_pool)} new rows, enriched & updated {update_records_count} transactions, skipped {duplicate_skip_count} unchanged duplicates.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as batch_err:
+            print(f"❌ RECONCILIATION DATA COMMIT CRASHED: {str(batch_err)}")
+            return Response(
+                {"message": f"Ledger write failure: {str(batch_err)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class StatementStagingCommitView(APIView):
+    """
+    🔒 CORE TRANSACTION COMMIT ENGINE (PRODUCTION RECTIFIED):
+    Maps, validates, and atomically commits both registry headers and transactional children blocks.
+    Defensively intercepts line-item splits to prevent metadata aggregation drift on re-uploads.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        account_id = request.data.get("account_id")
+        preview_dataset = request.data.get("preview_dataset", [])
+        meta_summary = request.data.get("meta_summary", {})
+
+        fallback_time = timezone.now().strftime("%Y-%m-%d_%H-%M")
+        file_name = (
+            request.data.get("file_name") or f"STATEMENT_UPLOAD_{fallback_time}.PDF"
+        )
+
+        if not account_id or not preview_dataset:
+            return Response(
+                {
+                    "message": "Required parameters missing or empty payload array received."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        account = get_object_or_404(Account, id=account_id)
+
+        # 1. Extract financial balances safely
+        op_bal = parse_meta_decimal(meta_summary, "openingBalance", "opening_balance")
+        cl_bal = parse_meta_decimal(meta_summary, "closingBalance", "closing_balance")
+        tot_dr = parse_meta_decimal(meta_summary, "totalDebit", "total_debit")
+        tot_cr = parse_meta_decimal(meta_summary, "totalCredit", "total_credit")
+
+        # 🎯 EXTRACT ADMIN NOTES TELEMETRY DIRECTLY FROM REACT PREVIEW WRAPPERS
+        admin_notes_count_fallback = int(
+            meta_summary.get("emptyMemoLineCount")
+            or meta_summary.get("admin_notes_count")
+            or 0
+        )
+
+        # 2. Extract Document Range Signatures Safely
+        report_from_date = None
+        report_to_date = None
+
+        if preview_dataset:
+            try:
+                first_date = preview_dataset[0].get("post_date") or preview_dataset[
+                    0
+                ].get("date")
+                if first_date:
+                    if isinstance(first_date, (datetime.date, datetime.datetime)):
+                        report_from_date = (
+                            first_date
+                            if isinstance(first_date, datetime.date)
+                            else first_date.date()
+                        )
+                    else:
+                        clean_first_str = str(first_date).split("T")[0].strip()
+                        report_from_date = datetime.datetime.strptime(
+                            clean_first_str, "%d-%m-%Y"
+                        ).date()
+
+                last_date = preview_dataset[-1].get("post_date") or preview_dataset[
+                    -1
+                ].get("date")
+                if last_date:
+                    if isinstance(last_date, (datetime.date, datetime.datetime)):
+                        report_to_date = (
+                            last_date
+                            if isinstance(last_date, datetime.date)
+                            else last_date.date()
+                        )
+                    else:
+                        clean_last_str = str(last_date).split("T")[0].strip()
+                        report_to_date = datetime.datetime.strptime(
+                            clean_last_str, "%d-%m-%Y"
+                        ).date()
+            except Exception as date_range_err:
+                print(f"⚠️ Metadata range parsing fell back: {str(date_range_err)}")
+                report_from_date = timezone.now().date()
+                report_to_date = timezone.now().date()
+
+        raw_file_type = meta_summary.get("fileType") or meta_summary.get("file_type")
+        if not raw_file_type or str(raw_file_type).strip().upper() in [
+            "UNKNOWN",
+            "NONE",
+            "",
+        ]:
+            _, file_extension = os.path.splitext(str(file_name).lower())
+            if file_extension in [".xls", ".xlsx"]:
+                clean_file_type = "EXCEL"
+            elif file_extension == ".csv":
+                clean_file_type = "CSV"
+            else:
+                clean_file_type = "PDF"
+        else:
+            clean_file_type = str(raw_file_type).strip().upper()[:10]
+
+        # 3. Construct lookup dictionary for hashing duplicates
+        db_records = StatementStagingLine.objects.filter(account_id=account.id).values(
+            "row_identifier",
+            "narration",
+            "cheque_ref_number",
+            "raw_statement_date",
+            "amount",
+            "running_balance",
+            "credit",
+            "debit",
+        )
+
+        existing_hashes = set()
+        database_lookup_dict = {}
+        for r in db_records:
+            h_key = r["row_identifier"]
+            existing_hashes.add(h_key)
+            database_lookup_dict[h_key] = r
+
+        try:
+            tx_pool, duplicate_skip_count = process_and_filter_rows(
+                preview_dataset,
+                account,
+                account.bank,
+                existing_hashes,
+                database_lookup_dict,
+            )
+
+            with transaction.atomic():
+                # ─── 🏛️ STEP 4: PRE-SCAN TX_POOL TO CALCULATE LIVE COMMITTED VALUES ───
+                actual_insert_count = 0
+                actual_update_count = 0
+                actual_debit_lines = 0
+                actual_credit_lines = 0
+                actual_admin_notes = 0
+
+                for tx in tx_pool:
+                    action_intent = tx.get("pipeline_action", "INSERT")
+
+                    val_deb = tx.get("debit")
+                    val_cred = tx.get("credit")
+
+                    is_debit = val_deb and str(val_deb).strip() not in (
+                        "-",
+                        "",
+                        "0.00",
+                        "0",
+                    )
+                    is_credit = val_cred and str(val_cred).strip() not in (
+                        "-",
+                        "",
+                        "0.00",
+                        "0",
+                    )
+
+                    if action_intent == "UPDATE_ENRICHMENT":
+                        actual_update_count += 1
+                    else:
+                        actual_insert_count += 1
+                        if is_debit:
+                            actual_debit_lines += 1
+                        elif is_credit:
+                            actual_credit_lines += 1
+                        else:
+                            # 🎯 IDENTIFIES AN EXPLICIT NON-FINANCIAL SYSTEM NOISE/ADMIN NOTE RECORD IN THE POOL
+                            actual_admin_notes += 1
+
+                # Use live pool calculation if notes exist, otherwise fallback to frontend telemetry payload values
+                final_admin_notes_logged = (
+                    actual_admin_notes
+                    if actual_admin_notes > 0
+                    else admin_notes_count_fallback
+                )
+
+                # ─── TABLE 1 WRITER: Hardened Clean Registry Header Write ───
+                registry_entry = StatementIngestRegistry.objects.create(
+                    account=account,
+                    file_name=file_name,
+                    file_type=clean_file_type,
+                    vault_decrypted=meta_summary.get("decrypted")
+                    or meta_summary.get("vault_decrypted", False),
+                    report_from_date=report_from_date,
+                    report_to_date=report_to_date,
+                    opening_balance=op_bal,
+                    closing_balance=cl_bal,
+                    total_debit_amount=tot_dr,
+                    total_credit_amount=tot_cr,
+                    # 🎯 SAVES TELEMETRY BALANCED COLUMNS DIRECTLY INTO CORE DB SCHEMA FIELD KEYS
+                    total_row_count=actual_insert_count,
+                    debit_line_count=actual_debit_lines,
+                    credit_line_count=actual_credit_lines,
+                    admin_notes_count=final_admin_notes_logged,
+                    skipped_duplicate_count=(
+                        duplicate_skip_count + actual_update_count
+                    ),
+                    source_channel="WEB_DASHBOARD",
+                )
+
+                # ─── 🏛️ STEP 5: TWO-WAY SPLIT UPSERT LOGIC CHANNELING ───
+                create_pool = []
+                update_records_count = 0
+
+                for tx in tx_pool:
+                    action_intent = tx.pop("pipeline_action", "INSERT")
+                    tx.pop("status", None)
+                    tx.pop("id", None)
+                    tx.pop("value_date", None)
+
+                    raw_date_token = tx.get("raw_statement_date")
+                    if isinstance(raw_date_token, (datetime.date, datetime.datetime)):
+                        db_date = (
+                            raw_date_token
+                            if isinstance(raw_date_token, datetime.date)
+                            else raw_date_token.date()
+                        )
+                    elif (
+                        isinstance(raw_date_token, str)
+                        and len(raw_date_token.strip()) >= 8
+                    ):
+                        try:
+                            clean_tx_str = raw_date_token.split("T")[0].strip()
+                            db_date = datetime.datetime.strptime(
+                                clean_tx_str, "%d-%m-%Y"
+                            ).date()
+                        except (ValueError, TypeError):
+                            db_date = timezone.now().date()
+                    else:
+                        db_date = timezone.now().date()
+
+                    if action_intent == "UPDATE_ENRICHMENT":
+                        target_uuid = tx.get("row_identifier")
+                        StatementStagingLine.objects.filter(
+                            account_id=account.id, row_identifier=target_uuid
+                        ).update(
+                            narration=tx.get("narration"),
+                            cheque_ref_number=tx.get("cheque_ref_number"),
+                            uploaded_at=timezone.now(),
+                        )
+                        update_records_count += 1
+                    else:
+                        create_pool.append(
+                            StatementStagingLine(
+                                account=account,
+                                bank=account.bank,
+                                ingest_registry=registry_entry,
+                                routing_status="COMMITTED",
+                                raw_statement_date=db_date,
+                                narration=tx.get("narration"),
+                                amount=tx.get("amount"),
+                                running_balance=tx.get("running_balance"),
+                                debit=tx.get("debit"),
+                                credit=tx.get("credit"),
+                                bank_transaction_id=tx.get("bank_transaction_id"),
+                                cheque_ref_number=tx.get("cheque_ref_number"),
+                                row_identifier=tx.get("row_identifier"),
+                            )
+                        )
+
+                if create_pool:
+                    StatementStagingLine.objects.bulk_create(create_pool)
+
+            return Response(
+                {
+                    "status": "SUCCESS",
+                    "registry_id": str(registry_entry.id),
+                    "message": f"Sync run complete. Saved {len(create_pool)} new rows (including {final_admin_notes_logged} admin note entries), enriched & updated {update_records_count} transactions, skipped {duplicate_skip_count} unchanged duplicates.",
                 },
                 status=status.HTTP_200_OK,
             )
@@ -1360,7 +1409,7 @@ class StatementIngestRouterDynamicView(APIView):
 ##################################
 
 
-class StatementBulkIngestPipelineView(APIView):
+class StatementBulkIngestPipelineView_older(APIView):
     """
     📡 PIPELINE INGESTION VIEW CONTROLLER (PRODUCTION ALIGNED):
     Loads historical deduplication hashes up front, processes document layouts,
@@ -1545,6 +1594,225 @@ class StatementBulkIngestPipelineView(APIView):
                     "export_filename": export_filename,
                     "raw_csv_stream": payload.get("generated_raw_csv_stream", ""),
                     **payload,  # Unpacks the correctly synchronized array references out to the React table grid
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Account.DoesNotExist:
+            return Response(
+                {"status": "ERROR", "message": "Account context not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            print(f"❌ PIPELINE INGEST PREVIEW CRASHED: {str(e)}")
+            return Response(
+                {"status": "ERROR", "message": f"Pipeline execution crash: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class StatementBulkIngestPipelineView(APIView):
+    """
+    📡 PIPELINE INGESTION VIEW CONTROLLER (PRODUCTION ALIGNED):
+    Loads historical deduplication hashes up front, processes document layouts,
+    normalizes string variations, and triggers inline narration enrichment checks
+    before emitting the payload grid to the front-end dashboard preview with matching strategy signatures.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("statement_file")
+        account_id = request.data.get("account_id")
+
+        if not uploaded_file or not account_id:
+            return Response(
+                {"status": "ERROR", "message": "Required parameters are missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            account = Account.objects.get(id=account_id)
+
+            # ─── 🚀 STEP A: INTERCEPT EXTENSION FIRST ───
+            original_filename = getattr(uploaded_file, "name", "bank_statement.pdf")
+            file_extension = os.path.splitext(original_filename)[1].lower()
+            is_tabular = file_extension in [".csv", ".txt", ".xlsx", ".xls"]
+
+            # ─── 🎯 STEP B: STRATEGY-AWARE DATABASE TEMPLATE RESOLUTION ───
+            if is_tabular:
+                template_obj = UserStatementTemplate.objects.filter(
+                    template_name="UNIVERSAL"
+                ).first()
+                if not template_obj:
+                    template_obj = UserStatementTemplate.objects.filter(
+                        account_id=account_id
+                    ).first()
+            else:
+                template_obj = (
+                    UserStatementTemplate.objects.filter(account_id=account_id)
+                    .exclude(parser_strategy_code="UNIVERSAL_CSV_FLOW")
+                    .first()
+                )
+
+            if not template_obj:
+                template_obj = UserStatementTemplate.objects.filter(
+                    account_id=account_id
+                ).first()
+
+            if not template_obj:
+                return Response(
+                    {
+                        "status": "ERROR",
+                        "message": "No parsing template linked to this account context profile.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            credential_record = BankCredential.objects.filter(
+                account_id=account_id
+            ).first()
+            password_vault_data = (
+                credential_record.password_vault if credential_record else "[]"
+            )
+
+            # Pull historical database verification metrics
+            db_records = StatementStagingLine.objects.filter(
+                account_id=account.id
+            ).values(
+                "row_identifier",
+                "narration",
+                "cheque_ref_number",
+                "raw_statement_date",
+                "amount",
+                "running_balance",
+                "credit",
+                "debit",
+            )
+
+            existing_hashes = set()
+            database_lookup_dict = {}
+            for r in db_records:
+                h_key = r["row_identifier"]
+                existing_hashes.add(h_key)
+                database_lookup_dict[h_key] = r
+
+            # Process layout coordinates
+            processed_bundle, op_bal, system_noise = process_bank_statement(
+                uploaded_file=uploaded_file,
+                template_obj=template_obj,
+                account_id=account_id,
+                existing_database_hashes=existing_hashes,
+                password_vault=password_vault_data,
+            )
+
+            export_filename = f"{os.path.splitext(original_filename)[0]}.csv"
+            intermediate_txns = []
+            ocr_confidence_score = 100.0
+
+            # Fallback initialization target signature
+            active_strategy = getattr(
+                template_obj, "parser_strategy_code", "UNIVERSAL_CSV_FLOW"
+            ).upper()
+
+            if (
+                isinstance(processed_bundle, dict)
+                and "transactions_list" in processed_bundle
+            ):
+                intermediate_txns = processed_bundle.get("transactions_list", [])
+                ocr_confidence_score = processed_bundle.get("confidence_score", 0.0)
+                active_strategy = processed_bundle.get(
+                    "fallback_engine_executed", "PaddleOCR_v1"
+                ).upper()
+            elif isinstance(processed_bundle, str):
+                return Response(
+                    {
+                        "status": "SUCCESS",
+                        "strategy_processed": "UNIVERSAL_CSV_FLOW",
+                        "engine_strategy_executed": "UNIVERSAL_CSV_FLOW",
+                        "export_filename": export_filename,
+                        "raw_csv_stream": processed_bundle,
+                        "preview_dataset": [],
+                        "opening_balance": op_bal,
+                        "closing_balance": op_bal,
+                        "count": 0,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                intermediate_txns = processed_bundle
+
+                # 🎯 THE CORE BACKEND RESOLUTION INTERCEPT:
+                # Extract the dynamic strategy assigned directly by process_bank_statement loops
+                if intermediate_txns and isinstance(intermediate_txns, list):
+                    first_tx_element = intermediate_txns[0]
+                    if (
+                        isinstance(first_tx_element, dict)
+                        and "strategy_used" in first_tx_element
+                    ):
+                        active_strategy = str(
+                            first_tx_element.get("strategy_used")
+                        ).upper()
+
+            if (
+                "sanitize_transaction_dates_via_template" in locals()
+                or "sanitize_transaction_dates_via_template" in globals()
+            ):
+                intermediate_txns = sanitize_transaction_dates_via_template(
+                    intermediate_txns, template_obj
+                )
+
+            # Generate baseline payload matrix layout maps
+            payload = validator.run_final_math(
+                intermediate_txns,
+                op_bal,
+                template_obj=template_obj,
+                account_id=account_id,
+                export_filename=export_filename,
+            )
+
+            preview_dataset = payload.get("preview_dataset", [])
+
+            # ─── 🎯 RUN DUAL ENRICHMENT PROCESSING PASS ───
+            # This mutates the values inside preview_dataset array elements inline
+            _, _ = validator.process_and_filter_rows(
+                preview_dataset=preview_dataset,
+                account=account,
+                bank=account.bank if hasattr(account, "bank") else None,
+                existing_hashes=existing_hashes,
+                database_lookup_dict=database_lookup_dict,
+            )
+
+            # Re-generate diagnostic CSV strings using the updated values
+            raw_csv_lines = [
+                f"#FILENAME:{export_filename}",
+                "Date ~ Narration ~ Debit ~ Credit ~ Running Bal ~ Record Status",
+            ]
+            for row in preview_dataset:
+                p_narr_escaped = (
+                    str(row["narration_description"]).replace('"', '""').strip()
+                )
+                raw_csv_lines.append(
+                    f'{row["post_date"]} ~ "{p_narr_escaped}" ~ {row["debit"]} ~ {row["credit"]} ~ {row["balance"]} ~ {row["status"]}'
+                )
+
+            # Re-sync payload array structures
+            payload["preview_dataset"] = preview_dataset
+            payload["generated_raw_csv_stream"] = "\n".join(raw_csv_lines)
+
+            return Response(
+                {
+                    "status": "SUCCESS",
+                    # 🎯 EMITS THE REAL STRATEGY STRAIGHT TO THE FRONT-END
+                    "strategy_processed": active_strategy,
+                    "engine_strategy_executed": active_strategy,
+                    "confidence_score": ocr_confidence_score,
+                    "system_noise_records_cleared": (
+                        len(system_noise) if system_noise else 0
+                    ),
+                    "export_filename": export_filename,
+                    "raw_csv_stream": payload.get("generated_raw_csv_stream", ""),
+                    **payload,
                 },
                 status=status.HTTP_200_OK,
             )
