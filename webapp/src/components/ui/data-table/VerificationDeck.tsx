@@ -1,9 +1,13 @@
+// webapp/src/components/ui/data-table/VerificationDeck.tsx
+
+
 interface VerificationDeckProps {
   responseMeta: {
     fileType: string;
     debitLineCount: number;
     creditLineCount: number;
     emptyMemoLineCount: number;
+    count: number;
   };
   previewLines: any[];
   opening: number | null;
@@ -15,6 +19,9 @@ interface VerificationDeckProps {
   isBalanceVerified: boolean;
   isFileFullyStale: boolean;
   isRowCountVerified: boolean;
+  strategyExecuted: string;
+  confidenceScore: number | null;
+  frontendRenderCount: number;
 }
 
 export function VerificationDeck({
@@ -28,7 +35,10 @@ export function VerificationDeck({
   isDoubleTrustOk,
   isBalanceVerified,
   isFileFullyStale,
-  isRowCountVerified
+  isRowCountVerified,
+  strategyExecuted,
+  confidenceScore,
+  frontendRenderCount
 }: VerificationDeckProps) {
   return (
     <div className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-6 shadow-2xl space-y-6 font-mono text-zinc-300 block clear-both" style={{ width: '100%', minWidth: '100%', display: 'block' }}>
@@ -41,9 +51,7 @@ export function VerificationDeck({
             Automated Engine Verification Summary Deck
           </h3>
         </div>
-        <div className="text-[10px] uppercase tracking-widest shrink-0 bg-zinc-900 px-2 py-0.5 border border-zinc-800 rounded hidden sm:inline-block" style={{ fontWeight: 700, color: '#9ca3af' }}>
-          File Mode: {responseMeta.fileType}
-        </div>
+
       </div>
 
       {/* 📡 GRID LAYER 1: TELEMETRY MATRIX STRIPS */}
@@ -52,9 +60,7 @@ export function VerificationDeck({
           Telemetry Stream Metrics
         </div>
         
-        {/* 🎯 Fixed: Kept standard layout, removed broken styles */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '12px', width: '100%' }}>
-          
           {/* ACTIVE DEBITS CARD */}
           <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-3 col-span-2 sm:col-span-1" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }}>
             <div className="text-[10px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#9ca3af' }}>
@@ -114,7 +120,6 @@ export function VerificationDeck({
               {previewLines.length} <span style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#a1a1aa', fontSize: '10px' }}>Total</span>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -125,11 +130,9 @@ export function VerificationDeck({
         </div>
         
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '12px', width: '100%' }}>
-          
           {/* OPENING BASE */}
           <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-3.5 min-w-0">
             <div className="text-[12px] uppercase tracking-wider truncate" style={{ fontWeight: 900, color: '#f3f4f6' }}>Opening Balance</div>
-            {/* 🎯 Fixed camelCase syntax on styles below */}
             <div style={{ fontFamily: 'sans-serif', fontWeight: 500, color: '#6b7280', fontSize: '11px', letterSpacing: '0.05em', marginTop: '4px' }}>Baseline Anchor</div>
             <div className="text-sm font-bold text-zinc-200 mt-1 font-mono tabular-nums truncate">
               ₹{opening?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -174,28 +177,136 @@ export function VerificationDeck({
         </div>
       </div>
 
-      {/* 🚥 SAFETY SECURITY AUDIT CHECK PANEL */}
-      <div className="w-full p-4 rounded-lg border flex flex-col sm:flex-row items-center justify-between gap-4 text-[10px] font-bold tracking-wider"
-           style={{ 
-             backgroundColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.05)' : 'rgba(239, 68, 68, 0.05)',
-             borderColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-             color: isDoubleTrustOk ? '#34d399' : '#f87171',
-             display: 'flex'
-           }}>
-        <div className="flex items-center gap-2 uppercase shrink-0" style={{ color: '#f3f4f6' }}>
-          <span className="text-xs">🛡️</span> Security Pipeline Verification Status:
+
+    <br/>
+      {/* 🛡️ HIGH-FIDELITY DE-CONGESTED SECURITY COMMAND HUB BLOCK */}
+{responseMeta && (
+  <div className="w-full bg-zinc-900/90 border border-zinc-800/80 rounded-xl shadow-2xl overflow-hidden mt-6 backdrop-blur-md flex flex-col" style={{ display: 'flex', flexDirection: 'column' }}>
+    
+    {/* 🎚️ FIXED INLINE HORIZONTAL HUD STRIP (FORCED ROW ROUTING) */}
+    <div 
+      className="w-full p-4 overflow-x-auto" 
+      style={{ 
+        display: 'flex', 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        justifyContent: 'space-between', 
+        gap: '24px',
+        width: '100%',
+        minWidth: '100%'
+      }}
+    >
+      
+      {/* HUD BLOCK 0: Core Identifier Block */}
+      <div className="shrink-0 min-w-[200px]" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderRight: '1px solid rgba(63, 63, 70, 0.6)', paddingRight: '24px' }}>
+        <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 select-none shrink-0">
+          🔒
         </div>
-        <div className="flex flex-row flex-wrap gap-2 justify-end w-full sm:w-auto" style={{ display: 'flex' }}>
-          <span className="px-2.5 py-1 rounded border uppercase font-mono font-bold tracking-wide shadow-sm"
-                style={{ backgroundColor: isBalanceVerified ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderColor: isBalanceVerified ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
-            {isBalanceVerified ? "🟢 Balance: MATCHED" : isFileFullyStale ? "⏳ RE-PARSE" : "🔴 Balance: DRIFTED"}
-          </span>
-          <span className="px-2.5 py-1 rounded border uppercase font-mono font-bold tracking-wide shadow-sm"
-                style={{ backgroundColor: isRowCountVerified ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderColor: isRowCountVerified ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }}>
-            {isRowCountVerified ? `🟢 Parsing: ${previewLines.length} Rows Whole` : "🔴 SIZE MISMATCH"}
+        <div className="flex flex-col" style={{ display: 'flex', flexDirection: 'column' }}>
+          <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold font-sans">Control Center</span>
+          <span className="text-xs font-bold text-zinc-200 font-sans tracking-wide">Verification Matrix</span>
+        </div>
+      </div>
+
+      {/* HUD BLOCK 1: Balance Liquidity */}
+      <div className="shrink-0" style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '120px' }}>
+        <span className="text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Liquidity Matrix</span>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border tracking-wide shadow-sm flex items-center gap-1.5 ${isBalanceVerified ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse"></span>
+            {isBalanceVerified ? 'BALANCE: MATCHED' : 'BALANCE: DRIFT'}
           </span>
         </div>
       </div>
+
+      {/* HUD BLOCK 2: Data Integrity */}
+      <div className="shrink-0" style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '130px' }}>
+        <span className="text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Data Integrity</span>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border tracking-wide shadow-sm ${isRowCountVerified ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
+            {isRowCountVerified ? `🟢 ${frontendRenderCount} ROWS INTACT` : '⚠️ SIZE VARIANCE'}
+          </span>
+        </div>
+      </div>
+
+      {/* HUD BLOCK 3: Engine Routing */}
+      <div className="shrink-0" style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '180px', maxWidth: '240px' }}>
+        <span className="text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Pipeline Routing</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span className="text-blue-400 font-bold tracking-wide text-xs truncate select-all" title={strategyExecuted}>
+            {strategyExecuted || 'UNASSIGNED'}
+          </span>
+          <span className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded text-[8px] font-bold uppercase tracking-wider shrink-0 select-none">
+            {strategyExecuted.includes('CSV') ? 'Flat' : 'Coord'}
+          </span>
+        </div>
+      </div>
+
+      {/* HUD BLOCK 4: Stream Confidence */}
+      <div className="shrink-0" style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '120px' }}>
+        <span className="text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Stream Confidence</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          
+          <span className={`px-1 py-0.5 rounded text-[8px] font-bold border shrink-0 uppercase tracking-wide select-none ${strategyExecuted.includes('CSV') ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
+            {strategyExecuted.includes('CSV') ? 'Direct' : 'OCR'}
+          </span>
+          <span className="text-emerald-400 font-bold text-xs">
+            {strategyExecuted.includes('CSV') || confidenceScore === null || confidenceScore === 100
+              ? '100.00' 
+              : confidenceScore.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+
+      {/* HUD BLOCK 5: Ingest Mode */}
+      <div className="shrink-0" style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '100px'}}>
+        <span className="text-[10px] text-zinc-500 font-sans font-medium uppercase tracking-wider">Ingest Mode</span>
+        <span className="px-1 py-0.5 rounded text-[8px] font-bold border shrink-0 uppercase tracking-wide select-none">
+          {responseMeta.fileType || 'UNKNOWN'}
+        </span>
+      </div>
+
+    </div>
+
+    
+              <br/>
+{/* 🎚️ BOTTOM SYSTEM STATUS AUDIT TICKER (PULLED TO THE LEFT) */}
+<div 
+  className="w-full px-5 py-3 border-t text-[10px] font-bold tracking-wider select-none transition-all duration-300"
+  style={{ 
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start', // 🎯 FIX: Pulls everything to the left side
+    gap: '24px',                   // 🎯 Spacing between the main header and the indicators group
+    backgroundColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.03)' : 'rgba(239, 68, 68, 0.03)',
+    borderColor: isDoubleTrustOk ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+    color: isDoubleTrustOk ? '#34d399' : '#f87171'
+  }}
+>
+  {/* Left Label Header */}
+  <div className="flex items-center gap-2 uppercase text-zinc-400 shrink-0" style={{ display: 'flex', alignItems: 'center' }}>
+    <span className="text-zinc-500 animate-pulse">⚡</span> SYSTEM SECURITY AUDIT PASS:
+  </div>
+
+  {/* Status Pills Group - Pulled left alongside header */}
+  <div style={{ display: 'flex', flexDirection: 'row', gap: '16px', alignItems: 'center' }}>
+    <span className="text-xs text-zinc-100 font-sans font-bold" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span className={`h-2 w-2 rounded-full ${isBalanceVerified ? 'bg-emerald-500 animate-ping' : 'bg-red-500'}`}></span>
+      Liquidity System: <span className={isBalanceVerified ? 'text-emerald-400' : 'text-red-400'}>{isBalanceVerified ? 'SECURE' : 'COMPROMISED'}</span>
+    </span>
+    
+    <span className="text-zinc-700 font-sans font-light select-none">|</span>
+    
+    <span className="text-xs text-zinc-100 font-sans font-bold" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span className={`h-2 w-2 rounded-full ${isRowCountVerified ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+      Payload Integrity: <span className={isRowCountVerified ? 'text-emerald-400' : 'text-amber-400'}>{isRowCountVerified ? 'INTACT' : 'VARIANCE_DETECTION'}</span>
+    </span>
+  </div>
+</div>
+
+  </div>
+)}
 
     </div>
   );

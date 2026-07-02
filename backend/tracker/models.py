@@ -338,6 +338,11 @@ class StatementIngestRegistry(models.Model):
     credit_line_count = models.IntegerField(default=0)
     skipped_duplicate_count = models.IntegerField(default=0)
 
+    admin_notes_count = models.IntegerField(
+        default=0,
+        help_text="Tracks system noise rows, statement footers, or non-financial note entries.",
+    )
+
     # Environment Provenance Markers
     ingested_at = models.DateTimeField(default=timezone.now)
     source_channel = models.CharField(max_length=50, default="WEB_DASHBOARD")
