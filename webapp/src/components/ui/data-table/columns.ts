@@ -87,57 +87,190 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
 // Column configuration for Tab 1: Known Headers
 export const ACCOUNTING_HEADER_COLUMNS: ColumnConfig[] = [
   {
-    key: 'account_code',
-    label: 'Account Code',
+    key: 'sno',
+    label: 'SNo',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-500',
+  },
+  { key: 'category_type', label: 'Type Tag', width: '12%', align: 'center' },
+  {
+    key: 'act_category',
+    label: 'Core Category',
     width: '15%',
     align: 'left',
     textColor: 'text-zinc-400',
   },
   {
+    key: 'act_subcategory',
+    label: 'Sub-Category',
+    width: '20%',
+    align: 'left',
+    textColor: 'text-zinc-300',
+  },
+  {
     key: 'narration_description',
-    label: 'Account Name',
-    width: '40%',
+    label: 'Item Label / Rules Match',
+    width: '33%',
     align: 'left',
     textColor: 'text-zinc-100',
   },
-  {
-    key: 'tran_type',
-    label: 'Classification Type',
-    width: '20%',
-    align: 'center',
-  },
-  {
-    key: 'balance',
-    label: 'Current Balance',
-    width: '25%',
-    align: 'right',
-    isCurrency: true,
-    textColor: 'text-cyan-400/90',
-    headerClass: 'text-cyan-400',
-  },
+  { key: 'actions', label: 'CRUD Actions', width: '12%', align: 'center' },
 ];
 
-// Column configuration for Tab 2: Self Transfers
+// 🔄 TAB 2 COLUMNS: SELF TRANSFER SYSTEM NODES
 export const SELF_TRANSFER_COLUMNS: ColumnConfig[] = [
   {
-    key: 'id',
-    label: 'Route ID',
-    width: '10%',
+    key: 'sno',
+    label: 'SNo',
+    width: '8%',
     align: 'left',
     textColor: 'text-zinc-500',
   },
   {
     key: 'source_account_name',
-    label: 'Source Entity Ledger (Debit Origin)',
-    width: '35%',
+    label: 'Debit Origin (From)',
+    width: '30%',
     align: 'left',
+    textColor: 'text-red-400/90',
   },
   {
     key: 'destination_account_name',
-    label: 'Destination Entity Ledger (Credit Target)',
-    width: '35%',
+    label: 'Credit Target (To)',
+    width: '30%',
+    align: 'left',
+    textColor: 'text-emerald-400/90',
+  },
+  {
+    key: 'narration_description',
+    label: 'Routing Instruction',
+    width: '20%',
     align: 'left',
   },
-  { key: 'tran_type', label: 'Route Code', width: '10%', align: 'center' },
-  { key: 'status', label: 'Route Status', width: '10%', align: 'center' },
+  { key: 'actions', label: 'CRUD Actions', width: '12%', align: 'center' },
+];
+
+// Add this to src/components/ui/data-table/columns.ts
+
+export const BALANCE_SHEET_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'sno',
+    label: 'SNo',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-500',
+  },
+  {
+    key: 'act_category',
+    label: 'Core Group',
+    width: '15%',
+    align: 'left',
+    textColor: 'text-cyan-400',
+  },
+  {
+    key: 'act_subcategory',
+    label: 'Line Item Header',
+    width: '25%',
+    align: 'left',
+    textColor: 'text-zinc-200',
+  },
+  {
+    key: 'narration_description',
+    label: 'Target Label',
+    width: '25%',
+    align: 'left',
+    textColor: 'text-zinc-100',
+  },
+  {
+    key: 'dashboard_cat',
+    label: 'Dashboard Placement',
+    width: '15%',
+    align: 'center',
+  },
+  { key: 'actions', label: 'CRUD Actions', width: '12%', align: 'center' },
+];
+
+export const BULK_APPROVAL_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'date',
+    label: 'Txn Date',
+    width: '10%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'narration',
+    label: 'Statement Description Reference',
+    width: '35%',
+    align: 'left',
+    textColor: 'text-zinc-100',
+  },
+  {
+    key: 'debit',
+    label: 'Debit (DR)',
+    width: '10%',
+    align: 'right',
+    textColor: 'text-amber-500',
+  },
+  {
+    key: 'credit',
+    label: 'Credit (CR)',
+    width: '10%',
+    align: 'right',
+    textColor: 'text-emerald-500',
+  },
+  {
+    key: 'category_item',
+    label: 'Assigned Header Mapping',
+    width: '20%',
+    align: 'left',
+    textColor: 'text-cyan-400',
+  },
+  {
+    key: 'rule_code',
+    label: 'Rule Linked',
+    width: '10%',
+    align: 'center',
+    textColor: 'text-zinc-400',
+  },
+  { key: 'actions', label: 'Clearance', width: '5%', align: 'center' },
+];
+
+export const UNCATEGORIZED_VAULT_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'date',
+    label: 'Txn Date',
+    width: '10%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'narration',
+    label: 'Statement Description Reference',
+    width: '40%',
+    align: 'left',
+    textColor: 'text-zinc-100',
+  },
+  {
+    key: 'debit',
+    label: 'Debit (DR)',
+    width: '10%',
+    align: 'right',
+    textColor: 'text-amber-500',
+  },
+  {
+    key: 'credit',
+    label: 'Credit (CR)',
+    width: '10%',
+    align: 'right',
+    textColor: 'text-emerald-500',
+  },
+  {
+    key: 'errors',
+    label: 'Failed Validation Gate Footprint',
+    width: '20%',
+    align: 'left',
+    textColor: 'text-red-400 font-mono text-[11px]',
+  },
+  { key: 'actions', label: 'Manual Allocation', width: '10%', align: 'center' },
 ];

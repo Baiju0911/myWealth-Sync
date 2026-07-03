@@ -10,3 +10,4 @@ export { default as StatementIngestionNode } from './StatementIngestionNode';
 export { default as UniversalStatementIngestView } from './UniversalStatementIngestView';
 
 export { default as AccountingHeaders } from './AccountingHeaders';
+export { default as StagingQueueEvaluator } from './StagingQueueEvaluator';

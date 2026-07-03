@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Sidebar from './components/navigation/Sidebar';
 import DashboardShell from './components/dashboard/DashboardShell';
 
-export type AppView = 'summary' | 'banks' | 'accounts' | 'upload' | 'credentials' | 'schemas'| 'ingestDynamic'| 'ingestDynamicBulk'|'AccountingHeaders';
+export type AppView = 'summary' | 'banks' | 'accounts' | 'upload' | 'credentials' | 'schemas'| 'ingestDynamic'| 'ingestDynamicBulk'|'AccountingHeaders'|'StagingQueueEvaluator';  
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('summary');

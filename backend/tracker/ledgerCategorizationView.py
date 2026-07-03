@@ -1,31 +1,36 @@
 import re
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from .models import StatementStagingLine, MasterFinancialCategory, AccountingRule
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny
-from .models import MasterFinancialCategory, AccountingRule
+from django.db.models import Q
+
+from .models import (
+    StatementStagingLine,
+    MasterFinancialCategory,
+    AccountingRule,
+    WIPEvaluationMatrix,
+)
 from .serializers import (
     MasterFinancialCategoryAdminSerializer,
     AccountingRuleAdminSerializer,
 )
 
+# 🧠 Import our locked-in transactional hash-based loader
+from .serviceWIP import WIPIngestionSweeper
+
 
 class AutoCategorizeStagingQueueView(APIView):
     """
     🤖 HIGH-PRECISION RECONCILIATION MATCHING VIEW ENGINE
-    Evaluates raw statement lines text strings against our unified pattern taxonomy.
+    Enforces our strict, locked-in Source of Truth ASCII pipeline:
+    Tier 1 (Pattern) ──> Tier 2 (Balance Sheet Placement) ──> Tier 3 (Golden Rule Compliance).
+    Requires 100% verification across all gates to earn a 'HIGH' confidence score.
     """
 
-    permission_classes = [
-        AllowAny
-    ]  # Open access for internal processing; adjust as needed
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        # 1. Grab all pending staging lines for the active account context
         account_id = request.data.get("account_id")
         if not account_id:
             return Response(
@@ -33,120 +38,162 @@ class AutoCategorizeStagingQueueView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        staging_rows = StatementStagingLine.objects.filter(
-            account_id=account_id, routing_status="PENDING"
-        )
+        # ─── STEP 1: EXECUTE SANDBOX WORKSPACE SWEEP ───
+        # Automatically imports fresh staging rows into the WIP table via hash keys
+        sweep_metrics = WIPIngestionSweeper.execute_sweep(account_context_id=account_id)
 
-        # 2. Extract our master lookup rules into local memory arrays for ultra-fast matching
-        self_transfers = list(
-            MasterFinancialCategory.objects.filter(category_type="SELF_TRANSFER")
-        )
-        known_defaults = list(
-            MasterFinancialCategory.objects.filter(category_type="KNOWN_DEFAULT")
-        )
+        # ─── STEP 2: LOAD REFERENCE VECTOR ARRAYS INTO CACHE MEMORY ───
+        master_categories = list(MasterFinancialCategory.objects.all())
         accounting_rules = list(
-            AccountingRule.objects.filter(is_active=True).ordering("-rule_priority")
+            AccountingRule.objects.filter(is_active=True).order_by("-rule_priority")
         )
 
-        processed_payloads = []
+        # Fetch only the unresolved active workspace records for this account context
+        active_wip_rows = WIPEvaluationMatrix.objects.filter(
+            account_id=account_id,
+            is_split_component=False,  # Only evaluate root records directly
+        )
 
-        # 3. Spin through our transaction queue loop
-        for row in staging_rows:
-            # Clean and normalize the description string target
-            narration_clean = " ".join(row.narration.strip().lower().split())
+        total_promoted_to_high = 0
+        total_failed_to_zero = 0
 
-            matched_category = None
+        # ─── STEP 3: RUN THE EVALUATION ENGINE ENGINE LOOP ───
+        for wip_row in active_wip_rows:
+            # Re-initialize clean state flags
+            t1_pass = False
+            t2_pass = False
+            t3_pass = False
+            errors_list = []
+
+            matched_cat = None
             matched_rule = None
-            prediction_confidence = "LOW"
 
-            # ─── CHALLENGE TIER 1: INTER-BANK OWN ACCOUNT MOVEMENTS ───
-            for st in self_transfers:
-                if st.match_key1 and st.match_key1 in narration_clean:
-                    if not st.match_key2 or (st.match_key2 in narration_clean):
-                        matched_category = st
-                        prediction_confidence = "HIGH"
-                        # Auto-associate traditional transfer rules if applicable
-                        matched_rule = next(
-                            (
-                                r
-                                for r in accounting_rules
-                                if r.entry_type == "Debit"
-                                and "transfer" in r.rule_title.lower()
-                            ),
-                            None,
-                        )
+            narration_clean = wip_row.narration_normalized
+
+            # 🧩 TIER 1: CORE PATTERN MATCHING GATE
+            # Scan matching tokens inside keys JSON payload fields
+            for cat in master_categories:
+                # Support custom compact json structures or explicit fields securely
+                k1 = (
+                    cat.keys.get("key1", "").strip().lower()
+                    if isinstance(cat.keys, dict)
+                    else ""
+                )
+                k2 = (
+                    cat.keys.get("key2", "").strip().lower()
+                    if isinstance(cat.keys, dict)
+                    else ""
+                )
+
+                if k1 and k1 in narration_clean:
+                    if not k2 or (k2 in narration_clean):
+                        matched_cat = cat
+                        t1_pass = True
                         break
 
-            # ─── CHALLENGE TIER 2: GENERAL DESCRIPTIVE TOKENS ───
-            if not matched_category:
-                for kd in known_defaults:
-                    if kd.match_key1 and kd.match_key1 in narration_clean:
-                        if not kd.match_key2 or (kd.match_key2 in narration_clean):
-                            matched_category = kd
-                            prediction_confidence = "HIGH"
-                            break
+            if not t1_pass:
+                errors_list.append("UNMAPPED_PATTERN")
 
-            # ─── CHALLENGE TIER 3: TIERED GENERAL ACCOUNTING POLICIES ───
-            # If no direct category matched, see if any golden rule keywords trigger a match
-            if not matched_category or not matched_rule:
+            # 📊 TIER 2: BALANCE SHEET MATRIX HEADER VALIDATION GATE
+            if t1_pass and matched_cat:
+                # Must possess a valid, non-empty structural dashboard placement tag
+                if matched_cat.dashboard_cat and matched_cat.dashboard_cat.strip():
+                    t2_pass = True
+                else:
+                    errors_list.append("MISSING_BALANCE_SHEET_CONTEXT")
+
+            # 📜 TIER 3: GOLDEN RULE DOUBLE-ENTRY COMPLIANCE CHECK
+            if t1_pass and t2_pass and matched_cat:
+                # Evaluate against our prioritized accounting rules matrix
                 for rule in accounting_rules:
-                    # Look inside your compressed metadata block or description tags array
                     tags = (
                         rule.description_tags
                         if isinstance(rule.description_tags, list)
                         else []
                     )
-                    if any(tag.lower() in narration_clean for tag in tags):
+
+                    # Verify vector direction match (DR table values vs Rule definitions)
+                    is_debit_txn = wip_row.debit > 0
+                    is_correct_direction = (
+                        rule.entry_type == "Debit" and is_debit_txn
+                    ) or (rule.entry_type == "Credit" and not is_debit_txn)
+
+                    if is_correct_direction and any(
+                        tag.strip().lower() in narration_clean for tag in tags
+                    ):
                         matched_rule = rule
-                        if prediction_confidence != "HIGH":
-                            prediction_confidence = "MEDIUM"
+                        t3_pass = True
                         break
 
-            # ─── FALLBACK COMPLIANCE TIER: ROUTE TO SUSPENSE SAFE VAULT ───
-            if not matched_category:
-                # Safely bind to row 1773 or search via fallback key title strings
-                matched_category = MasterFinancialCategory.objects.filter(
-                    categories_items__icontains="Suspense"
-                ).first()
-                matched_rule = next(
-                    (r for r in accounting_rules if r.rule_code == "GR37"), None
-                )
-                prediction_confidence = "LOW"
+                if not t3_pass:
+                    errors_list.append("RULE_COMPLIANCE_FAILED")
 
-            # Append the smart suggestion footprint back to your viewport layer array
-            processed_payloads.append(
+            # ─── VERDICT EVALUATION INTERCEPTOR ───
+            # Strict Gate Protocol: 100% unbroken chain required to unlock Bulk Queue
+            if t1_pass and t2_pass and t3_pass:
+                wip_row.confidence_level = "HIGH"
+                wip_row.evaluation_errors = []
+                total_promoted_to_high += 1
+            else:
+                wip_row.confidence_level = (
+                    "ZERO"  # Sent to Uncategorized Vault Container
+                )
+                wip_row.evaluation_errors = errors_list
+                total_failed_to_zero += 1
+
+            # Bind matched references safely
+            wip_row.matched_category = matched_cat
+            wip_row.applied_rule = matched_rule
+            wip_row.tier_1_passed = t1_pass
+            wip_row.tier_2_passed = t2_pass
+            wip_row.tier_3_passed = t3_pass
+
+            # Atomic save back to workspace sandbox
+            wip_row.save()
+
+        # ─── STEP 4: PACKAGE JSON RESPONSE FOR FRONTEND WORKSPACE TABS ───
+        # Output split payload segments back to viewport layers
+        refreshed_wip_set = WIPEvaluationMatrix.objects.filter(account_id=account_id)
+
+        serialized_queue = []
+        for w in refreshed_wip_set:
+            serialized_queue.append(
                 {
-                    "staging_line_id": str(row.id),
-                    "raw_date": row.raw_statement_date,
-                    "narration": row.narration,
-                    "amount": float(row.amount),
-                    "predictions": {
-                        "confidence": prediction_confidence,
-                        "category_item": (
-                            matched_category.categories_items
-                            if matched_category
-                            else "Suspense-E"
-                        ),
+                    "wip_id": str(w.id),
+                    "hash": w.row_footprint_hash,
+                    "date": w.raw_statement_date.strftime("%Y-%m-%d"),
+                    "narration": w.staging_line.narration,  # Pull raw uncleaned rendering format
+                    "debit": float(w.debit),
+                    "credit": float(w.credit),
+                    "confidence": w.confidence_level,
+                    "errors": w.evaluation_errors,
+                    "routing_status": w.staging_line.routing_status,
+                    "analysis": {
                         "category_id": (
-                            matched_category.id if matched_category else None
+                            w.matched_category.id if w.matched_category else None
                         ),
-                        "assigned_type": (
-                            matched_category.act_category
-                            if matched_category
-                            else "Expenses"
+                        "category_item": (
+                            w.matched_category.categories_items
+                            if w.matched_category
+                            else "Unassigned"
                         ),
-                        "assigned_subcategory": (
-                            matched_category.act_subcategory
-                            if matched_category
-                            else "Suspense"
+                        "dashboard_cat": (
+                            w.matched_category.dashboard_cat
+                            if w.matched_category
+                            else "None"
                         ),
-                        "applied_rule_code": (
-                            matched_rule.rule_code if matched_rule else "MANUAL"
+                        "group": (
+                            w.matched_category.act_category
+                            if w.matched_category
+                            else "None"
                         ),
-                        "applied_rule_title": (
-                            matched_rule.rule_title
-                            if matched_rule
-                            else "Manual Entry Blueprint"
+                        "rule_code": (
+                            w.applied_rule.rule_code if w.applied_rule else "MANUAL"
+                        ),
+                        "rule_title": (
+                            w.applied_rule.rule_title
+                            if w.applied_rule
+                            else "Manual Override State"
                         ),
                     },
                 }
@@ -155,8 +202,12 @@ class AutoCategorizeStagingQueueView(APIView):
         return Response(
             {
                 "account_id": account_id,
-                "total_evaluated": len(processed_payloads),
-                "suggestions_queue": processed_payloads,
+                "sweep_metrics": sweep_metrics,
+                "evaluation_summary": {
+                    "staged_for_bulk_high": total_promoted_to_high,
+                    "uncategorized_vault_zero": total_failed_to_zero,
+                },
+                "workspace_queue": serialized_queue,
             },
             status=status.HTTP_200_OK,
         )
@@ -165,16 +216,12 @@ class AutoCategorizeStagingQueueView(APIView):
 class MasterFinancialCategoryViewSet(viewsets.ModelViewSet):
     """
     💼 REST ENDPOINT CRUD FOR MATRIX CATEGORIES
-    Handles GET, POST, PUT, PATCH, and DELETE operations.
     """
 
     queryset = MasterFinancialCategory.objects.all()
     serializer_class = MasterFinancialCategoryAdminSerializer
-    permission_classes = [
-        AllowAny
-    ]  # Open access for internal processing; adjust as needed
+    permission_classes = [AllowAny]
 
-    # Enable filtering variants over your collection query lists
     def get_queryset(self):
         queryset = MasterFinancialCategory.objects.all()
         category_type = self.request.query_params.get("category_type")
@@ -190,14 +237,11 @@ class MasterFinancialCategoryViewSet(viewsets.ModelViewSet):
 class AccountingRuleViewSet(viewsets.ModelViewSet):
     """
     💼 REST ENDPOINT CRUD FOR TIERED GOLDEN RULES
-    Handles GET, POST, PUT, PATCH, and DELETE operations.
     """
 
     queryset = AccountingRule.objects.all()
     serializer_class = AccountingRuleAdminSerializer
-    permission_classes = [
-        AllowAny
-    ]  # Open access for internal processing; adjust as needed
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         queryset = AccountingRule.objects.all()
@@ -207,6 +251,5 @@ class AccountingRuleViewSet(viewsets.ModelViewSet):
         if entry_type:
             queryset = queryset.filter(entry_type=entry_type)
         if is_active:
-            # Handle string variant interpretations from query headers safely
             queryset = queryset.filter(is_active=str(is_active).lower() == "true")
         return queryset
