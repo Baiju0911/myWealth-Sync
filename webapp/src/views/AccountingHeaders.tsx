@@ -1,100 +1,205 @@
 import React, { useState, useEffect } from 'react';
 import { TableEngine } from '../components/ui/data-table/TableEngine';
-import { ACCOUNTING_HEADER_COLUMNS, SELF_TRANSFER_COLUMNS } from '../components/ui/data-table/columns';
 import { 
-  accountingHeaderApi, 
-  selfTransferApi, 
-  balanceSheetApi, 
-  goldenRuleApi
-} from '../api';
-import type { AccountingHeaderPayload, SelfTransferPayload } from '../api';
-import api from '../api/client';
+  ACCOUNTING_HEADER_COLUMNS, 
+  SELF_TRANSFER_COLUMNS,
+  BALANCE_SHEET_COLUMNS // 📊 Import new columns layout
+} from '../components/ui/data-table/columns';
+import { ledgerMasterApi } from '../api';
 
-type TabType = 'known-headers' | 'self-transfer' | 'balance-sheet' | 'golden-rule';
+
+type TabType = 'known-headers' | 'self-transfer' | 'balance-sheet';
 
 export default function AccountingHeaders() {
   const [activeTab, setActiveTab] = useState<TabType>('known-headers');
   
-  // Data States
+  // Data Vectors
   const [headers, setHeaders] = useState<any[]>([]);
   const [selfTransfers, setSelfTransfers] = useState<any[]>([]);
-  const [balanceSheet, setBalanceSheet] = useState<any>({ total_assets: 0, total_liabilities: 0, total_equity: 0 });
-  const [engineRules, setEngineRules] = useState<any[]>([]);
+  const [balanceSheetRows, setBalanceSheetRows] = useState<any[]>([]); // 🎯 FIXED: Proper raw rows state array
   
-  // Modal / Form UI Toggle States
+  // Workspace Mutation Toggles
   const [showHeaderForm, setShowHeaderForm] = useState(false);
   const [showTransferForm, setShowTransferForm] = useState(false);
+  const [showBalanceForm, setShowBalanceForm] = useState(false); // New form toggle
   
-  // Form Payloads
-  const [newHeader, setNewHeader] = useState<AccountingHeaderPayload>({ account_name: '', account_code: '', type: 'Asset' });
-  const [newTransfer, setNewTransfer] = useState<SelfTransferPayload>({ source_account_id: '', destination_account_id: '', transfer_type: 'INT', is_active: true });
+  // Input Forms States
+  const [newHeader, setNewHeader] = useState({ sno: '', type: 'KNOWN_DEFAULT', cat: 'Account Transfer', subcat: 'Transfer', item: 'Account Transfer', remarks: '' });
+  const [newTransfer, setNewTransfer] = useState({ sno: '', from_bank: '', to_bank: '', remarks: '' });
+  const [newBalanceRow, setNewBalanceRow] = useState({ sno: '', cat: 'Assets', subcat: '', item: '', dashCat: 'Investments', remarks: '' }); // Form state
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+
+  /* ==========================================================================
+     1. MUTATION CRUD HANDLERS
+     ========================================================================== */
+  
+  const handleDeleteRow = async (id: string | number) => {
+    if (!window.confirm(`Permanently remove master entry index row ${id}?`)) return;
+    try {
+      await ledgerMasterApi.deleteMasterCategory(id);
+      await synchronizationWorkflow();
+    } catch (err) {
+      setErrorMsg('Failed to drop requested data node.');
+    }
+  };
+
+  const handleCreateHeader = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        category_type: newHeader.type, // Maps to 'REGULAR' or 'KNOWN_DEFAULT'
+        sno: newHeader.sno,
+        act_category: newHeader.cat,
+        act_subcategory: newHeader.subcat,
+        categories_items: newHeader.item,
+        dashboard_cat: 'Auto Routed',
+        remarks: newHeader.remarks,
+        transfer_value: null,
+        monthly_expense: '0',
+        bank_types: '{}',
+        keys: '{}'
+      };
+
+      // 🎯 FIXED: Direct routing to unified api configuration wrapper method
+      await ledgerMasterApi.createMasterCategory(payload);
+      
+      setNewHeader({ sno: '', type: 'KNOWN_DEFAULT', cat: 'Account Transfer', subcat: 'Transfer', item: 'Account Transfer', remarks: '' });
+      setShowHeaderForm(false);
+      await synchronizationWorkflow();
+    } catch (err) {
+      setErrorMsg('Failed creating master category item reference inside Known Headers.');
+    }
+  };
+
+  const handleCreateTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        category_type: 'SELF_TRANSFER',
+        sno: newTransfer.sno,
+        act_category: 'Assets',
+        act_subcategory: 'Self Inter-Account Transfer',
+        categories_items: `By ${newTransfer.from_bank} To ${newTransfer.to_bank}`,
+        dashboard_cat: 'Transfers',
+        self_account: 'Self',
+        remarks: newTransfer.remarks,
+        transfer_value: null,
+        monthly_expense: '0',
+        bank_types: JSON.stringify({ to_bank: newTransfer.to_bank, from_bank: newTransfer.from_bank }),
+        keys: '{}'
+      };
+
+      // 🎯 FIXED: Direct routing to unified api configuration wrapper method
+      await ledgerMasterApi.createMasterCategory(payload);
+      
+      setNewTransfer({ sno: '', from_bank: '', to_bank: '', remarks: '' });
+      setShowTransferForm(false);
+      await synchronizationWorkflow();
+    } catch (err) {
+      setErrorMsg('Failed writing self-transfer configuration record.');
+    }
+  };
+
+  const handleCreateBalanceRow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        category_type: 'REGULAR',
+        sno: newBalanceRow.sno,
+        act_category: newBalanceRow.cat,
+        act_subcategory: newBalanceRow.subcat,
+        categories_items: newBalanceRow.item,
+        dashboard_cat: newBalanceRow.dashCat,
+        remarks: newBalanceRow.remarks,
+        transfer_value: null,
+        monthly_expense: '0',
+        bank_types: '{}',
+        keys: '{}'
+      };
+
+      // 🎯 FIXED: Direct routing to unified api configuration wrapper method
+      await ledgerMasterApi.createMasterCategory(payload);
+      
+      setNewBalanceRow({ sno: '', cat: 'Assets', subcat: '', item: '', dashCat: 'Investments', remarks: '' });
+      setShowBalanceForm(false);
+      await synchronizationWorkflow();
+    } catch (err) {
+      setErrorMsg('Failed writing balance sheet header entry.');
+    }
+  };
+
+
+  /* ==========================================================================
+     2. DATA LAYOUT SYNCHRONIZER
+     ========================================================================== */
+  
   const synchronizationWorkflow = async () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      // 1. Fetch the unified ledger raw master dataset and balance metric concurrently
-      const [masterDatasetRes, matrixData] = await Promise.all([
-        api.get('/accounting/ledger-mastercategory/'), 
-        balanceSheetApi.getMatrix()
-      ]);
+      const data = await ledgerMasterApi.getMasterCategories();
+      
+      const rawRows = Array.isArray(data) 
+        ? data 
+        : data.results || data.data || [];
 
-      const rawRows = Array.isArray(masterDatasetRes.data) 
-        ? masterDatasetRes.data 
-        : masterDatasetRes.data.results || [];
+      if (!Array.isArray(rawRows)) {
+        throw new Error(`Data field is not iterable. Received type: ${typeof rawRows}`);
+      }
 
-      // 2. Extract and Map Tab 1: Known Headers (Chart of Accounts)
-      // Filters out self-transfers to show clean asset/liability/expense nodes
+      // 🛠️ 1. Tab 1: Known Defaults & Operational Headers
       const mappedHeaders = rawRows
-        .filter((row: any) => row.category_type !== 'SELF_TRANSFER')
+        .filter((row: any) => row && row.category_type === 'KNOWN_DEFAULT')
         .map((h: any) => ({
           ...h,
           id: h.id,
-          account_code: h.sno || h.id,
-          narration_description: h.categories_items || h.act_subcategory, // Displays cleanly under "Account Name"
-          tran_type: h.category_type?.toUpperCase(),                    // Displays inside center classification pill
-          balance: parseFloat(h.transfer_value || '0')
+          narration_description: h.categories_items || h.act_subcategory || 'Unnamed Node',
+          tran_type: h.category_type, 
+          onDelete: handleDeleteRow
         }));
       setHeaders(mappedHeaders);
 
-      // 3. Extract and Map Tab 2: Self Transfers
-      // Filters on 'SELF_TRANSFER' type and unpacks your JSON structures
+      // 🛠️ 2. Tab 2: Self Transfers
       const mappedTransfers = rawRows
-        .filter((row: any) => row.category_type === 'SELF_TRANSFER')
+        .filter((row: any) => row && row.category_type === 'SELF_TRANSFER')
         .map((st: any) => {
-          // Parse your custom inline bank metadata blocks safely
-          let bankMeta = { from_bank: '-', to_bank: '-' };
+          let parsedBanks = { from_bank: 'Unknown Node', to_bank: 'Unknown Target' };
           try {
             if (st.bank_types) {
-              bankMeta = typeof st.bank_types === 'string' ? JSON.parse(st.bank_types) : st.bank_types;
+              const cleaned = typeof st.bank_types === 'string' ? JSON.parse(st.bank_types) : st.bank_types;
+              parsedBanks.from_bank = cleaned.from_bank || parsedBanks.from_bank;
+              parsedBanks.to_bank = cleaned.to_bank || parsedBanks.to_bank;
             }
-          } catch (e) {
-            console.error("Failed parsing bank_types JSON payload structural matrix", e);
-          }
+          } catch (err) {}
 
           return {
             ...st,
             id: st.id,
-            source_account_name: bankMeta.from_bank || `Origin node: ${st.sno}`,
-            destination_account_name: bankMeta.to_bank || 'Target Node',
-            tran_type: st.dashboard_cat?.toUpperCase() || 'TRANSFER',
-            status: st.self_account?.toUpperCase() === 'SELF' ? 'ACTIVE' : 'DISABLED'
+            source_account_name: parsedBanks.from_bank,
+            destination_account_name: parsedBanks.to_bank,
+            narration_description: st.categories_items || 'Inter-account movement', 
+            tran_type: 'SELF',
+            onDelete: handleDeleteRow
           };
         });
       setSelfTransfers(mappedTransfers);
 
-      // 4. Set Balance Matrix & Control Gate intercepts
-      setBalanceSheet(matrixData || { total_assets: 0, total_liabilities: 0, total_equity: 0 });
-      
-      // Fallback fallback parsing mock for rules engine if it shares the table scope
-      const ruleNodes = rawRows.filter((row: any) => row.category_type === 'SYSTEM_RULE');
-      setEngineRules(ruleNodes.length ? ruleNodes : [{ id: 1, rule_name: 'Double-Entry Ledger Balance Interceptor', is_enabled: true }]);
+      // 🛠️ 3. Tab 3: Balance Sheet Core Structural Headers (REGULAR)
+      const mappedBalanceSheet = rawRows
+        .filter((row: any) => row && row.category_type === 'REGULAR')
+        .map((b: any) => ({
+          ...b,
+          id: b.id,
+          narration_description: b.categories_items || b.act_subcategory,
+          onDelete: handleDeleteRow
+        }));
+      setBalanceSheetRows(mappedBalanceSheet);
 
-    } catch (err: any)  {
-      setErrorMsg('Failed sorting ledger mastercategory data layout vectors across workspace tabs.');
+    } catch (err: any) {
+      setErrorMsg(`[VECTORS ERROR]: ${err.message || err}. Check console logs.`);
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -105,60 +210,26 @@ export default function AccountingHeaders() {
     synchronizationWorkflow();
   }, []);
 
-  const handleCreateHeader = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await accountingHeaderApi.createHeader(newHeader);
-      setNewHeader({ account_name: '', account_code: '', type: 'Asset' });
-      setShowHeaderForm(false);
-      await synchronizationWorkflow();
-    } catch (err) {
-      setErrorMsg('Failed to commit new accounting ledger block.');
-    }
-  };
-
-  const handleCreateTransferRoute = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await selfTransferApi.createRoute(newTransfer);
-      setNewTransfer({ source_account_id: '', destination_account_id: '', transfer_type: 'INT', is_active: true });
-      setShowTransferForm(false);
-      await synchronizationWorkflow();
-    } catch (err) {
-      setErrorMsg('Failed to initialize clear self-transfer entity node.');
-    }
-  };
-
-  const handleToggleRule = async (id: string | number, currentStatus: boolean) => {
-    try {
-      await goldenRuleApi.updateRuleConstraint(id, { is_enabled: !currentStatus });
-      await synchronizationWorkflow();
-    } catch (err) {
-      setErrorMsg('Failed to update system interceptor state.');
-    }
-  };
-
   const tabs = [
     { id: 'known-headers', label: 'Known Headers (COA)' },
     { id: 'self-transfer', label: 'Self Transfers' },
-    { id: 'balance-sheet', label: 'Balance Sheet Matrix' },
-    { id: 'golden-rule', label: 'Golden Rule Engine' },
+    { id: 'balance-sheet', label: 'Balance Sheet Matrix' }
   ] as const;
 
   if (isLoading) {
-    return <div className="p-12 text-center text-xs font-mono text-zinc-500 tracking-widest bg-zinc-950 min-h-screen">RE-INDEXING WORKSPACE NODES...</div>;
+    return <div className="p-12 text-center text-xs font-mono text-zinc-500 bg-zinc-950 min-h-screen">RE-INDEXING WORKSPACE NODES...</div>;
   }
 
   return (
     <div className="w-full bg-zinc-950 text-zinc-100 min-h-screen p-6 space-y-6">
       {errorMsg && (
-        <div className="bg-red-950/40 border border-red-900/60 text-red-400 p-4 rounded-lg text-xs font-mono flex justify-between items-center">
+        <div className="bg-red-950/40 border border-red-900/60 text-red-400 p-4 rounded text-xs font-mono flex justify-between">
           <span>[CRITICAL EXCEPTION] // {errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} className="text-zinc-500 hover:text-zinc-200">clear</button>
+          <button onClick={() => setErrorMsg(null)} className="text-zinc-500 hover:text-zinc-300">clear</button>
         </div>
       )}
 
-      {/* Tabs Row */}
+      {/* Navigation Headers */}
       <div className="border-b border-zinc-800">
         <nav className="flex space-x-6">
           {tabs.map((tab) => (
@@ -175,43 +246,25 @@ export default function AccountingHeaders() {
         </nav>
       </div>
 
-      {/* Tab Panels */}
+      {/* Content Panels */}
       <div className="min-h-[400px]">
-        
-        {/* TAB 1: KNOWN HEADERS */}
         {activeTab === 'known-headers' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-400">Chart of Accounts Matrix</h2>
-              <button 
-                onClick={() => setShowHeaderForm(!showHeaderForm)}
-                className="bg-cyan-600 hover:bg-cyan-700 text-zinc-950 font-mono text-xs font-bold py-1.5 px-3 rounded transition-colors"
-              >
-                {showHeaderForm ? 'CLOSE ROW' : '+ INITIALIZE COA NODE'}
+              <h2 className="text-sm font-mono uppercase text-zinc-400">Chart of Accounts Matrix</h2>
+              <button onClick={() => setShowHeaderForm(!showHeaderForm)} className="bg-cyan-600 hover:bg-cyan-700 text-zinc-950 font-mono text-xs font-bold py-1.5 px-3 rounded">
+                {showHeaderForm ? 'CLOSE Form' : '+ INITIALIZE COA ROW'}
               </button>
             </div>
 
             {showHeaderForm && (
-              <form onSubmit={handleCreateHeader} className="bg-zinc-900/60 border border-zinc-800 p-4 rounded-lg grid grid-cols-4 gap-3 items-end font-mono text-xs">
-                <div>
-                  <label className="block text-zinc-500 mb-1">ACCOUNT CODE</label>
-                  <input type="text" required placeholder="e.g. 1010" value={newHeader.account_code} onChange={e => setNewHeader({...newHeader, account_code: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500" />
-                </div>
-                <div>
-                  <label className="block text-zinc-500 mb-1">ACCOUNT NAME</label>
-                  <input type="text" required placeholder="e.g. Citibank Operating" value={newHeader.account_name} onChange={e => setNewHeader({...newHeader, account_name: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500" />
-                </div>
-                <div>
-                  <label className="block text-zinc-500 mb-1">CLASSIFICATION TYPE</label>
-                  <select value={newHeader.type} onChange={e => setNewHeader({...newHeader, type: e.target.value as any})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500">
-                    <option value="Asset">Asset</option>
-                    <option value="Liability">Liability</option>
-                    <option value="Equity">Equity</option>
-                    <option value="Revenue">Revenue</option>
-                    <option value="Expense">Expense</option>
-                  </select>
-                </div>
-                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-bold p-2 rounded transition-colors uppercase">Commit Node</button>
+              <form onSubmit={handleCreateHeader} className="bg-zinc-900/40 border border-zinc-800 p-4 rounded-lg grid grid-cols-3 gap-3 font-mono text-xs">
+                <input type="text" placeholder="SNO (e.g. 1709)" value={newHeader.sno} onChange={e => setNewHeader({...newHeader, sno: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="CATEGORY (e.g. Account Transfer)" value={newHeader.cat} onChange={e => setNewHeader({...newHeader, cat: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="SUBCATEGORY (e.g. Transfer)" value={newHeader.subcat} onChange={e => setNewHeader({...newHeader, subcat: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="ITEM NAME" value={newHeader.item} onChange={e => setNewHeader({...newHeader, item: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="REMARKS" value={newHeader.remarks} onChange={e => setNewHeader({...newHeader, remarks: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" />
+                <button type="submit" className="bg-emerald-600 text-zinc-950 font-bold p-2 rounded uppercase">Deploy Header</button>
               </form>
             )}
 
@@ -219,34 +272,22 @@ export default function AccountingHeaders() {
           </div>
         )}
 
-        {/* TAB 2: SELF TRANSFERS */}
         {activeTab === 'self-transfer' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-400">Inter-Entity Clearing Matrix</h2>
-              <button 
-                onClick={() => setShowTransferForm(!showTransferForm)}
-                className="bg-cyan-600 hover:bg-cyan-700 text-zinc-950 font-mono text-xs font-bold py-1.5 px-3 rounded transition-colors"
-              >
-                {showTransferForm ? 'CLOSE ROW' : '+ MAP CLEARING PATH'}
+              <h2 className="text-sm font-mono uppercase text-zinc-400">Inter-Entity Clearing Matrix</h2>
+              <button onClick={() => setShowTransferForm(!showTransferForm)} className="bg-cyan-600 hover:bg-cyan-700 text-zinc-950 font-mono text-xs font-bold py-1.5 px-3 rounded">
+                {showTransferForm ? 'CLOSE Form' : '+ DEPLOY ROUTING VECTOR'}
               </button>
             </div>
 
             {showTransferForm && (
-              <form onSubmit={handleCreateTransferRoute} className="bg-zinc-900/60 border border-zinc-800 p-4 rounded-lg grid grid-cols-4 gap-3 items-end font-mono text-xs">
-                <div>
-                  <label className="block text-zinc-500 mb-1">SOURCE LEDGER ID</label>
-                  <input type="text" required placeholder="Source Acc UUID / Int ID" value={newTransfer.source_account_id} onChange={e => setNewTransfer({...newTransfer, source_account_id: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500" />
-                </div>
-                <div>
-                  <label className="block text-zinc-500 mb-1">DESTINATION LEDGER ID</label>
-                  <input type="text" required placeholder="Dest Acc UUID / Int ID" value={newTransfer.destination_account_id} onChange={e => setNewTransfer({...newTransfer, destination_account_id: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500" />
-                </div>
-                <div>
-                  <label className="block text-zinc-500 mb-1">ROUTE CODE</label>
-                  <input type="text" placeholder="INT" value={newTransfer.transfer_type} onChange={e => setNewTransfer({...newTransfer, transfer_type: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-200 focus:outline-none focus:border-cyan-500" />
-                </div>
-                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-bold p-2 rounded transition-colors uppercase">Deploy Path</button>
+              <form onSubmit={handleCreateTransfer} className="bg-zinc-900/40 border border-zinc-800 p-4 rounded-lg grid grid-cols-4 gap-3 font-mono text-xs">
+                <input type="text" placeholder="SNO CODE (e.g. 369)" value={newTransfer.sno} onChange={e => setNewTransfer({...newTransfer, sno: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="FROM BANK CODE" value={newTransfer.from_bank} onChange={e => setNewTransfer({...newTransfer, from_bank: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="TO BANK CODE" value={newTransfer.to_bank} onChange={e => setNewTransfer({...newTransfer, to_bank: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="REMARKS" value={newTransfer.remarks} onChange={e => setNewTransfer({...newTransfer, remarks: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" />
+                <button type="submit" className="bg-emerald-600 text-zinc-950 font-bold p-2 rounded uppercase">Commit Route</button>
               </form>
             )}
 
@@ -254,48 +295,35 @@ export default function AccountingHeaders() {
           </div>
         )}
 
-        {/* TAB 3: BALANCE SHEET MATRIX */}
+        {/* 📊 TAB 3: PROPER BALANCE SHEET CRUD ROW PANEL */}
         {activeTab === 'balance-sheet' && (
-          <div className="space-y-6">
-            <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-400">Equation Ledger Status</h2>
-            <div className="grid grid-cols-3 gap-4 font-mono">
-              <div className="border border-zinc-800/80 bg-zinc-900/40 p-4 rounded-lg">
-                <span className="text-[10px] text-zinc-500 uppercase">Total Assets</span>
-                <p className="text-xl font-bold text-emerald-400 mt-1">${Number(balanceSheet.total_assets || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-              </div>
-              <div className="border border-zinc-800/80 bg-zinc-900/40 p-4 rounded-lg">
-                <span className="text-[10px] text-zinc-500 uppercase">Total Liabilities</span>
-                <p className="text-xl font-bold text-red-400 mt-1">${Number(balanceSheet.total_liabilities || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-              </div>
-              <div className="border border-zinc-800/80 bg-zinc-900/40 p-4 rounded-lg">
-                <span className="text-[10px] text-zinc-500 uppercase">Owner Equity</span>
-                <p className="text-xl font-bold text-cyan-400 mt-1">${Number(balanceSheet.total_equity || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 4: GOLDEN RULE INTERCEPTORS */}
-        {activeTab === 'golden-rule' && (
           <div className="space-y-4">
-            <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-400">System Constraint Gates</h2>
-            <div className="border border-zinc-800/80 bg-zinc-900/40 p-4 rounded-lg font-mono text-xs text-zinc-300 divide-y divide-zinc-800/40">
-              {engineRules.map((rule: any) => (
-                <div key={rule.id} className="flex justify-between items-center py-3 first:pt-0 last:pb-0">
-                  <span>{rule.rule_name || 'Double-Entry Validation Active'}</span>
-                  <button 
-                    type="button"
-                    onClick={() => handleToggleRule(rule.id, rule.is_enabled)}
-                    className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${rule.is_enabled ? "bg-emerald-950 text-emerald-400 border border-emerald-800" : "bg-red-950 text-red-400 border border-red-900"}`}
-                  >
-                    {rule.is_enabled ? "ENFORCED (TOGGLE)" : "BYPASSED (TOGGLE)"}
-                  </button>
-                </div>
-              ))}
+            <div className="flex justify-between items-center">
+              <h2 className="text-sm font-mono uppercase text-zinc-400">Balance Sheet Layout Config</h2>
+              <button onClick={() => setShowBalanceForm(!showBalanceForm)} className="bg-cyan-600 hover:bg-cyan-700 text-zinc-950 font-mono text-xs font-bold py-1.5 px-3 rounded">
+                {showBalanceForm ? 'CLOSE Form' : '+ INITIALIZE BALANCE ITEM'}
+              </button>
             </div>
+
+            {showBalanceForm && (
+              <form onSubmit={handleCreateBalanceRow} className="bg-zinc-900/40 border border-zinc-800 p-4 rounded-lg grid grid-cols-3 gap-3 font-mono text-xs">
+                <input type="text" placeholder="SNO (e.g. 1655)" value={newBalanceRow.sno} onChange={e => setNewBalanceRow({...newBalanceRow, sno: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <select value={newBalanceRow.cat} onChange={e => setNewBalanceRow({...newBalanceRow, cat: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200">
+                  <option value="Assets">Assets</option>
+                  <option value="Liabilities">Liabilities</option>
+                  <option value="Equity">Equity</option>
+                </select>
+                <input type="text" placeholder="SUBCATEGORY (e.g. Gold & Investments)" value={newBalanceRow.subcat} onChange={e => setNewBalanceRow({...newBalanceRow, subcat: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="ITEM LABEL (e.g. AG Asset)" value={newBalanceRow.item} onChange={e => setNewBalanceRow({...newBalanceRow, item: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="DASHBOARD CAT (e.g. Investments)" value={newBalanceRow.dashCat} onChange={e => setNewBalanceRow({...newBalanceRow, dashCat: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" required />
+                <input type="text" placeholder="REMARKS" value={newBalanceRow.remarks} onChange={e => setNewBalanceRow({...newBalanceRow, remarks: e.target.value})} className="bg-zinc-950 border border-zinc-800 p-2 rounded text-zinc-200" />
+                <button type="submit" className="bg-emerald-600 text-zinc-950 font-bold p-2 rounded uppercase col-span-3">Commit Balance Sheet Row</button>
+              </form>
+            )}
+
+            <TableEngine columns={BALANCE_SHEET_COLUMNS} data={balanceSheetRows} />
           </div>
         )}
-
       </div>
     </div>
   );

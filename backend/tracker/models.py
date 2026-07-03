@@ -626,3 +626,83 @@ class JournalEntryMapping(models.Model):
 
     def __str__(self):
         return f"Mapping -> {self.assigned_category.categories_items} (Rule: {self.applied_rule.rule_code if self.applied_rule else 'MANUAL'})"
+
+
+class WIPEvaluationMatrix(models.Model):
+    """
+    🏗️ THE RECONCILIATION WORKSPACE SANDBOX (WIP ENGINE ROOM)
+    Tracks active transaction states using an exact cloned hash key matching staging rows.
+    """
+
+    CONFIDENCE_CHOICES = [
+        ("HIGH", "100% Validated (Staged for Bulk Approval)"),
+        ("ZERO", "Validation Failed (Sent to Uncategorized Container)"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 🔗 Cloned Parent Identity Link from Staging row
+    staging_line = models.ForeignKey(
+        "StatementStagingLine", on_delete=models.CASCADE, related_name="wip_records"
+    )
+
+    # 🛡️ THE ARCHITECTURAL STATE Machine KEY
+    # Generated exactly as: SHA256(date + dr + cr + running_balance) or inherited sequence
+    row_footprint_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Cloned hash state footprint linking back to Staging line",
+    )
+
+    # 💼 Copied Structural Context Bindings
+    account = models.ForeignKey("Account", on_delete=models.CASCADE)
+    bank = models.ForeignKey("Bank", on_delete=models.CASCADE)
+    raw_statement_date = models.DateField()
+    narration_normalized = models.TextField(
+        help_text="Cleaned, lowercase text token scanning target"
+    )
+
+    # 💰 Absolute Value Ledger Matrix Legs (No calculations inside table)
+    debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+
+    # 🔀 Manual Split Layout Infrastructure
+    parent_wip = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="split_children",
+        help_text="Points to the parent container when split across multiple headers",
+    )
+    is_split_component = models.BooleanField(default=False)
+
+    # 🤖 Three-Tier Verification Engine Mappings
+    confidence_level = models.CharField(
+        max_length=10, choices=CONFIDENCE_CHOICES, default="ZERO", db_index=True
+    )
+    matched_category = models.ForeignKey(
+        "MasterFinancialCategory", on_delete=models.SET_NULL, null=True, blank=True
+    )
+    applied_rule = models.ForeignKey(
+        "AccountingRule", on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    # 🛡️ Pipeline Auditing Flags
+    tier_1_passed = models.BooleanField(default=False)
+    tier_2_passed = models.BooleanField(default=False)
+    tier_3_passed = models.BooleanField(default=False)
+    evaluation_errors = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Array listing gate block errors: ['UNMAPPED_PATTERN', 'MISALIGNED_HEADER']",
+    )
+
+    class Meta:
+        db_table = "ledger_wip_evaluation_matrix"
+        verbose_name = "WIP Evaluation Matrix"
+        verbose_name_plural = "WIP Evaluation Matrices"
+        ordering = ["raw_statement_date"]
+
+    def __str__(self):
+        return f"WIP [{self.confidence_level}] - Hash: {self.row_footprint_hash[:8]} - DR: {self.debit} | CR: {self.credit}"

@@ -1,6 +1,13 @@
 import type { AppView } from '../../App.tsx';
-// 🟢 Keep both legacy and dynamic components imported from your views index
-import { MasterInstitutionsContainer, StatementIngestView, StatementIngestionNode,UniversalStatementIngestView, AccountingHeaders } from '../../views'; 
+// 🟢 Keep both legacy and dynamic components imported safely from your views index barrel
+import { 
+  MasterInstitutionsContainer, 
+  StatementIngestView, 
+  StatementIngestionNode, 
+  UniversalStatementIngestView, 
+  AccountingHeaders, 
+  StagingQueueEvaluator 
+} from '../../views'; 
 import StatementMapper from '../mappers/StatementMapper.tsx'; 
 
 interface ShellProps {
@@ -37,11 +44,9 @@ export default function DashboardShell({ currentView, setViewAction }: ShellProp
         return <MasterInstitutionsContainer />;
 
       case 'upload':
-        // 💾 Standard manual upload view preserved here
         return <StatementIngestView />;
 
       case 'ingestDynamic':
-        // ⚡ Smart automated template router view running independently
         return (
           <StatementIngestionNode 
             onRedirectToMapper={() => {
@@ -55,15 +60,17 @@ export default function DashboardShell({ currentView, setViewAction }: ShellProp
         );
 
       case 'ingestDynamicBulk':
-        // ⚡ Smart automated template router view running independently
-        return (
-          <UniversalStatementIngestView />
-        );
+        return <UniversalStatementIngestView />;
 
       case 'schemas':
         return <StatementMapper />; 
+        
       case 'AccountingHeaders':
         return <AccountingHeaders />;
+        
+      case 'StagingQueueEvaluator':
+        // 🎯 FIX: Pass down a context account tracking anchor here (e.g., "1" or a state anchor ID)
+        return <StagingQueueEvaluator accountId="ACC_DEMO_TRACKER_01" />;
         
       default:
         return <MasterInstitutionsContainer />;
