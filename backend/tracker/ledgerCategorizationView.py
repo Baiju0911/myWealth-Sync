@@ -16,7 +16,7 @@ from .serializers import (
     AccountingRuleAdminSerializer,
 )
 
-# 🧠 Import our locked-in transactional hash-based loader
+
 from .serviceWIP import WIPIngestionSweeper
 
 
