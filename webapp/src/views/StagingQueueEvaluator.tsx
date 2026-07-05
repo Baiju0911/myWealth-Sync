@@ -2,9 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { TableEngine } from '../components/ui/data-table/TableEngine';
 import { BULK_APPROVAL_COLUMNS, UNCATEGORIZED_VAULT_COLUMNS } from '../components/ui/data-table/columns';
-
-// 🎯 FIX 1: Enforce explicit 'import type' syntax for verbatimModuleSyntax compliance
-import { stagingQueueApi, ledgerMasterApi } from '../api';
+import { stagingQueueApi, ledgerMasterApi, accountApi } from '../api';
 import type { WorkspaceNode, SplitAllocationPayload } from '../api';
 
 type WorkspaceTab = 'bulk-high' | 'uncategorized-zero';
@@ -15,11 +13,20 @@ interface SplitStateRow {
   amount: number;
 }
 
-export default function StagingQueueEvaluator({ accountId }: { accountId: string }) {
-  // 🎯 FIX 2: Restored all missing scoped state hooks to eliminate 'Cannot find name' blocks
+interface AccountOption {
+  id: string | number;
+  name: string;
+  account_number: string;
+}
+
+export default function StagingQueueEvaluator() {
+  // 🎛️ Account Selector Workspace States
+  const [accounts, setAccounts] = useState<AccountOption[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('bulk-high');
   const [workspaceRows, setWorkspaceRows] = useState<WorkspaceNode[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [selectedRowToSplit, setSelectedRowToSplit] = useState<WorkspaceNode | null>(null);
@@ -28,37 +35,56 @@ export default function StagingQueueEvaluator({ accountId }: { accountId: string
   ]);
   const [availableCategories, setAvailableCategories] = useState<any[]>([]);
 
-  const loadWorkspaceMatrix = async () => {
+  // 📥 Fetch Accounts Dropdown Collection First
+  useEffect(() => {
+    accountApi.getAccounts().then((res: any) => {
+      const accountData = res.results || res.data || res;
+      setAccounts(accountData);
+      // if (accountData.length > 0) {
+      //   setSelectedAccountId(String(accountData[0].id)); // Auto-select first account
+      // }
+    }).catch(() => setErrorMsg('Failed loading registered accounts metadata vector.'));
+
+    ledgerMasterApi.getMasterCategories().then((res: any) => {
+      setAvailableCategories(res.results || res.data || res);
+    });
+  }, []);
+
+  // 🔄 Trigger Evaluator Sweeper Payload when selectedAccountId changes
+  const loadWorkspaceMatrix = async (targetId: string) => {
+    if (!targetId || !targetId.trim()) {
+      setWorkspaceRows([]); 
+      return;
+    }
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const data = await stagingQueueApi.evaluateWorkspace(accountId);
+      const data = await stagingQueueApi.evaluateWorkspace(targetId);
       setWorkspaceRows(data.workspace_queue || []);
     } catch (err: any) {
       setErrorMsg('Failed running verification pipeline over staging collection.');
+      setWorkspaceRows([]);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadWorkspaceMatrix();
-    ledgerMasterApi.getMasterCategories().then((res: any) => {
-      setAvailableCategories(res.results || res.data || res);
-    });
-  }, [accountId]);
+    if (selectedAccountId) {
+      setErrorMsg("");
+      loadWorkspaceMatrix(selectedAccountId);
+    }
+  }, [selectedAccountId]);
 
-  // 🎯 FIX 3: Explicitly calculated baselines ensuring no unexpected zero divisions
+  // Math Interceptor Baselines
   const originalTxnValue = selectedRowToSplit ? (selectedRowToSplit.debit || selectedRowToSplit.credit) : 0;
-  
-  // 🎯 FIX 4: Strong type declarations appended to (.reduce) parameters to clear implicit 'any' flags
   const currentSplitSum = splitLines.reduce((acc: number, curr: SplitStateRow) => acc + curr.amount, 0);
   const mathematicallyBalanced = parseFloat(originalTxnValue.toFixed(2)) === parseFloat(currentSplitSum.toFixed(2));
 
   const handleBulkClearance = async (rowsToApprove: WorkspaceNode[]) => {
     try {
-      await stagingQueueApi.bulkCommitLedger(accountId, rowsToApprove.map(r => r.wip_id));
-      await loadWorkspaceMatrix();
+      await stagingQueueApi.bulkCommitLedger(selectedAccountId, rowsToApprove.map(r => r.wip_id));
+      await loadWorkspaceMatrix(selectedAccountId);
     } catch (err) {
       setErrorMsg('Atomic bulk write failed or rejected by schema validation models.');
     }
@@ -77,7 +103,7 @@ export default function StagingQueueEvaluator({ accountId }: { accountId: string
       await stagingQueueApi.commitSplitAllocation(selectedRowToSplit.wip_id, payload);
       setSelectedRowToSplit(null);
       setSplitLines([{ categoryId: '', subcat: '', amount: 0 }]);
-      await loadWorkspaceMatrix();
+      await loadWorkspaceMatrix(selectedAccountId);
     } catch (err) {
       setErrorMsg('Failed writing split items allocation.');
     }
@@ -117,10 +143,32 @@ export default function StagingQueueEvaluator({ accountId }: { accountId: string
       )
     }));
 
-  if (isLoading) return <div className="p-12 text-center text-xs font-mono text-zinc-500 bg-zinc-950">RUNNING RECONCILIATION ENGINE CRITERIA...</div>;
-
   return (
     <div className="bg-zinc-950 text-zinc-100 p-6 space-y-6 min-h-screen font-sans">
+      {/* 🛠️ TOP CONTROL BAR: Dropdown Context Switcher */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-zinc-900 border border-zinc-800 p-4 rounded-xl gap-4">
+        <div>
+          <h1 className="text-sm font-mono uppercase tracking-wider text-zinc-200 font-bold">Project Sync-Shield</h1>
+          <p className="text-xs text-zinc-500 font-mono">Select target isolation account context to run evaluation gates.</p>
+        </div>
+        <div className="w-full sm:w-72 font-mono text-xs">
+          <select
+            value={selectedAccountId}
+            onChange={(e) => setSelectedAccountId(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 p-2.5 rounded-lg text-zinc-100 font-bold tracking-wide focus:outline-hidden focus:border-zinc-700 cursor-pointer"
+          >
+            <option value="">
+              -- Select Active Ledger Account --
+            </option>
+            {accounts.map((acc) => (
+              <option key={acc.id} value={acc.id}>
+                {acc.name} ({acc.account_number.slice(-4)})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {errorMsg && (
         <div className="bg-red-950/30 border border-red-900 text-red-400 p-3 rounded text-xs font-mono flex justify-between">
           <span>[PIPELINE EXCEPTION] // {errorMsg}</span>
@@ -128,44 +176,53 @@ export default function StagingQueueEvaluator({ accountId }: { accountId: string
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 font-mono text-xs">
-        <div 
-          onClick={() => setActiveTab('bulk-high')} 
-          className={`p-4 rounded-lg border cursor-pointer transition-all ${activeTab === 'bulk-high' ? 'bg-zinc-900 border-emerald-500' : 'bg-zinc-900/40 border-zinc-800 opacity-60'}`}
-        >
-          <div className="text-zinc-500 uppercase">Staged For Bulk High Clearance</div>
-          <div className="text-xl font-bold text-emerald-400 mt-1">{highConfidenceRows.length} Nodes Passed</div>
+      {isLoading ? (
+        <div className="p-12 text-center text-xs font-mono text-zinc-500 bg-zinc-950 border border-zinc-900 rounded-xl">
+          RUNNING RECONCILIATION ENGINE CRITERIA OVER TARGET NODE MATRIX...
         </div>
-        <div 
-          onClick={() => setActiveTab('uncategorized-zero')} 
-          className={`p-4 rounded-lg border cursor-pointer transition-all ${activeTab === 'uncategorized-zero' ? 'bg-zinc-900 border-red-500' : 'bg-zinc-900/40 border-zinc-800 opacity-60'}`}
-        >
-          <div className="text-zinc-500 uppercase">Uncategorized Vault (Zero Confidence)</div>
-          <div className="text-xl font-bold text-red-400 mt-1">{zeroConfidenceRows.length} Nodes Failed</div>
-        </div>
-      </div>
-
-      <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-4 space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xs uppercase font-mono text-zinc-400 font-bold tracking-wider">
-            {activeTab === 'bulk-high' ? 'Auto Clearance Validation Desk' : 'Uncategorized Operations Ledger'}
-          </h2>
-          {activeTab === 'bulk-high' && highConfidenceRows.length > 0 && (
-            <button 
-              onClick={() => handleBulkClearance(workspaceRows.filter(r => r.confidence === 'HIGH'))} 
-              className="bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-mono font-bold text-xs px-3 py-1.5 rounded uppercase tracking-wider"
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-4 font-mono text-xs">
+            <div 
+              onClick={() => setActiveTab('bulk-high')} 
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${activeTab === 'bulk-high' ? 'bg-zinc-900 border-emerald-500' : 'bg-zinc-900/40 border-zinc-800 opacity-60'}`}
             >
-              ⚡ Execute Bulk Sync Release ({highConfidenceRows.length} Rows)
-            </button>
-          )}
-        </div>
+              <div className="text-zinc-500 uppercase">Staged For Bulk High Clearance</div>
+              <div className="text-xl font-bold text-emerald-400 mt-1">{highConfidenceRows.length} Nodes Passed</div>
+            </div>
+            <div 
+              onClick={() => setActiveTab('uncategorized-zero')} 
+              className={`p-4 rounded-lg border cursor-pointer transition-all ${activeTab === 'uncategorized-zero' ? 'bg-zinc-900 border-red-500' : 'bg-zinc-900/40 border-zinc-800 opacity-60'}`}
+            >
+              <div className="text-zinc-500 uppercase">Uncategorized Vault (Zero Confidence)</div>
+              <div className="text-xl font-bold text-red-400 mt-1">{zeroConfidenceRows.length} Nodes Failed</div>
+            </div>
+          </div>
 
-        <TableEngine 
-          columns={activeTab === 'bulk-high' ? BULK_APPROVAL_COLUMNS : UNCATEGORIZED_VAULT_COLUMNS} 
-          data={activeTab === 'bulk-high' ? highConfidenceRows : zeroConfidenceRows} 
-        />
-      </div>
+          <div className="bg-zinc-900/20 border border-zinc-800 rounded-lg p-4 space-y-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xs uppercase font-mono text-zinc-400 font-bold tracking-wider">
+                {activeTab === 'bulk-high' ? 'Auto Clearance Validation Desk' : 'Uncategorized Operations Ledger'}
+              </h2>
+              {activeTab === 'bulk-high' && highConfidenceRows.length > 0 && (
+                <button 
+                  onClick={() => handleBulkClearance(workspaceRows.filter(r => r.confidence === 'HIGH'))} 
+                  className="bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-mono font-bold text-xs px-3 py-1.5 rounded uppercase tracking-wider"
+                >
+                  ⚡ Execute Bulk Sync Release ({highConfidenceRows.length} Rows)
+                </button>
+              )}
+            </div>
 
+            <TableEngine 
+              columns={activeTab === 'bulk-high' ? BULK_APPROVAL_COLUMNS : UNCATEGORIZED_VAULT_COLUMNS} 
+              data={activeTab === 'bulk-high' ? highConfidenceRows : zeroConfidenceRows} 
+            />
+          </div>
+        </>
+      )}
+
+      {/* Split Modal Render Layer remains completely identical below... */}
       {selectedRowToSplit && (
         <div className="fixed inset-0 bg-zinc-950/80 flex items-center justify-center p-4 backdrop-blur-xs z-50">
           <form onSubmit={handleCommitSplit} className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-2xl space-y-4 font-mono text-xs">
@@ -180,7 +237,6 @@ export default function StagingQueueEvaluator({ accountId }: { accountId: string
             </div>
 
             <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
-              {/* 🎯 FIX 5: Explicit type signature tags attached directly inside maps parameters */}
               {splitLines.map((line: SplitStateRow, index: number) => (
                 <div key={index} className="grid grid-cols-3 gap-2 items-center">
                   <select 

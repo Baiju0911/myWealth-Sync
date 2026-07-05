@@ -811,12 +811,6 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (1762, "Cash Cheque", "Cash Expense", "cas cash", ""),
     (1763, "Cash Cheque", "Cheque Expense", "cas chq", ""),
     (1764, "Cash Withdrawal", "Expense", "to atm", ""),
-    (1765, "Charity", "Donation", "42321673786", "wdl tfr"),
-    (1766, "Charity", "Donation", "42321674532", "wdl tfr"),
-    (1767, "Charity", "Donation", "42380688363", "wdl tfr"),
-    (1768, "Charity", "Donation", "42380692084", "wdl tfr"),
-    (1769, "Charity", "Donation", "67091477682", "wdl tfr"),
-    (1770, "Charity", "Donation", "67374881869", "direct dr"),
     (1771, "City Plaza (Expense)", "Expense", "city plaza", "upi"),
     (1772, "City Plaza (Maintenance)", "Expense", "331114505882", "mob"),
     (1773, "City Plaza (Maintenance)", "Expense", "boban  george/upi", "upi"),
@@ -1081,6 +1075,199 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (2032, "Zomato", "Expense", "zomatoonlineorder", ""),
     (2033, "Zomato", "Expense", "zomatoonlineorder.rzp", ""),
     (2034, "Zomato", "Expense", "zomato-order", "UPI"),
+    # 🎯 UPDATED SEED ENTRIES (NO REAL NAMES RECORDED)
+    (
+        2035,
+        "Charity",
+        "Donation",
+        "0511c6db4db5cd73b76173a13eb1f0b084475378cfc3842f96e1b5bbc3378de7",
+        "",
+    ),
+    (
+        2036,
+        "Charity",
+        "Donation",
+        "3f5979368ea97fd1327d13cb80e423fc11cb457bd3fea5de247d74d08fc5e524",
+        "",
+    ),
+    (
+        2037,
+        "Charity",
+        "Donation",
+        "b56acfa18a18fff006223c2a1d5b2183d40e71c2c835f52998643fc87b9a85bb",
+        "",
+    ),
+    (1765, "Charity", "Donation", "42321673786", "wdl tfr"),
+    (1766, "Charity", "Donation", "42321674532", "wdl tfr"),
+    (1767, "Charity", "Donation", "42380688363", "wdl tfr"),
+    (1768, "Charity", "Donation", "42380692084", "wdl tfr"),
+    (1769, "Charity", "Donation", "67091477682", "wdl tfr"),
+    (1770, "Charity", "Donation", "67374881869", "direct dr"),
+    (2041, "Charity", "Donation", "67374881869", "direct"),
+    # P1: 0511c6db4db5cd73b76173a13eb1f0b084475378cfc3842f96e1b5bbc3378de7
+    # P2: 3f5979368ea97fd1327d13cb80e423fc11cb457bd3fea5de247d74d08fc5e524
+    # P3: b56acfa18a18fff006223c2a1d5b2183d40e71c2c835f52998643fc87b9a85bb
+    # this is a different name for the same charity donation, so we can use this to identify the same category
+    # P1: aa99d87586749f3ad2b2e2ed1e07fddf6e569cd532aeb7f00158a6f52eae7f13
+    # P2: 10b274a0ff32dded8515a2c779cca8b965c1b84a12bf4cbd2b7c00e8e12dc380
+    # P3: 083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246
+    (2038, "Payouts", "Investment Cleared", "cemtex", ""),
+    (2039, "Tax", "TAX", "kerala flood", "cess"),
+    (2040, "Income", "Income", "clearing", "cheque"),
+    (2042, "Investment", "Mutual Funds", "MF", "ECS COLLECTION"),
+    (2043, "Expenses", "Insurance Premiums", "DEBIT", "INSURANCE"),
+    (2044, "Investment", "Investment", "FOREX", "0111121TP054863"),
+    (2045, "Investment", "Expense", "FCNB", "STAMP"),
+    (2046, "Suspense", "Uncategorized", "0098324706317", ""),
+    (2047, "Bank Charge", "Expense", "sms banking", "charges"),
+    (2048, "Expenses", "Expense", "By Cash", "Cash"),
+    (2049, "Liabilities", "Loans & Repayments", "loan", "payment"),
+    (2050, "Interest", "Income", "int", "cr"),
+    (2051, "Investment", "Shares", "Trading", ""),
+    (2052, "Investment", "Shares", "Geojith", ""),
+    (2053, "Investment", "Shares", "capstocks", ""),
+    (2054, "Personal Exp", "Expense", "mohanan p", "upi"),
+    (2055, "LAW", "Expense", "POWER", "att"),
+    (2056, "Expenses", "Expense", "DTH", "rech"),
+    (2057, "Temple", "Temple", "devaswom", "board"),
+    (2058, "Temple", "Temple", "temple", "praveen"),
+    (2059, "Expenses", "Expense", "AIRTEL", "BOX"),
+    (2060, "Temple", "Pooja", "sunil shanti", ""),
+    (2061, "Personal Exp", "Expense", "PRAVEEN", ""),
+    (2062, "Investment", "Mutual Funds", "CLG", ""),
+    (2063, "Expenses", "Vehicle Insurance", "Scropio", "Insurance"),
+    (2064, "Expenses", "Vehicle", "Scropio", ""),
+    (2065, "Expenses", "Employee", "Transfer", "Praveen"),
+    (2066, "Expenses", "Employee", "Petty", "Praveen"),
+    (2067, "Expenses", "Employee", "Advance", "Praveen"),
+    (2068, "Expenses", "Office", "Window", "Inst"),
+    (2069, "SUN Medanta", "Expense", "sun medanta", ""),
+    (2070, "SUN Medanta", "Expense", "reement", "fund"),
+    (2071, "Expenses", "Office", "meter", "Praveen"),
+    (2072, "Expenses", "Loan", "BDS", ""),
+    (2073, "Expenses", "Loan", "bluedot", ""),
+    (
+        2074,
+        "Charity",
+        "Donation",
+        "aa99d87586749f3ad2b2e2ed1e07fddf6e569cd532aeb7f00158a6f52eae7f13",
+        "",
+    ),
+    (
+        2075,
+        "Charity",
+        "Donation",
+        "10b274a0ff32dded8515a2c779cca8b965c1b84a12bf4cbd2b7c00e8e12dc380",
+        "",
+    ),
+    (
+        2076,
+        "Charity",
+        "Donation",
+        "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246",
+        "",
+    ),
+    (
+        2077,
+        "Charity",
+        "Donation",
+        "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246",
+        "",
+    ),
+    (2078, "Investment", "Shares", "Geojit", ""),
+    (2079, "Interest", "Income", "int", ""),
+    (2080, "Expenses", "Expense", "self", "exp"),
+    (2081, "SUN Medanta", "Expense", "REMNT", "fund"),
+    (2082, "SUN Medanta", "Expense", "REMNT", "fund"),
+    (2083, "Investment", "Shares", "COCHIN SHIPYARD", ""),
+    (2084, "Bank Charge", "Fees", "DEBit", "charges"),
+    (2085, "Bank Charge", "Fees", "charges", ""),
+    (2086, "Self Transfer", "Transfer", "Friends", "Baiju"),
+    (2085, "Bank Charge", "Fees", "charge", ""),
+    # for UPI's
+    # 🎯 STARTING FROM SNO 2086 (KEY1 COMPILATION, NO KEY2 KEYS SET)
+    (2086, "Arun", "Expense", "baratkgopinath1998", ""),
+    (2087, "Arun", "Expense", "barat k gopinath", ""),
+    (2088, "Vineeth", "Transfer", "vineeth kumar  v ", ""),
+    (2089, "Vineeth", "Transfer", "advvsvk@", ""),
+    (2090, "Vineeth", "Transfer", "lawqua", ""),
+    (2091, "Wife", "Expense", "sumee  s", ""),
+    (2092, "Wife", "Expense", "sumee", ""),
+    (2093, "Wife", "Income", "sumee  s/upi", ""),
+    (2094, "Wife", "Expense", "rtg/sumee s/fdrlr", ""),
+    (2095, "Wife", "Expense", "9446040282@upi", ""),
+    (2096, "Transportation", "Expense", "autotransport", ""),
+    (2097, "Amazon", "Shopping", "amazon", ""),
+    (2098, "Amazon", "Shopping", "amazon india", ""),
+    (2099, "Amazon", "Shopping", "amazon seller", ""),
+    (2100, "Amazon", "Shopping", "amazonupi", ""),
+    (2101, "PVR", "Expense", " pvr limited", ""),
+    (2102, "XUV Insurance", "Expense", "policy-bazar", ""),
+    (2103, "XUV Tyre", "Expense", "royal tyre club", ""),
+    (2104, "Zomato", "Expense", "zomatoonlineorder", ""),
+    (2105, "Zomato", "Expense", "zomato-order", ""),
+    (2106, "Zomato", "Expense", "zomato1paytm", ""),
+    (2107, "Zomato", "Expense", "payzomato", ""),
+    (2108, "Zomato", "Expense", "oidztdupic", ""),
+    (2109, "Zomato", "Expense", "zomato", ""),
+    (2110, "Zomato", "Expense", "zomatoonlineorder.rzp", ""),
+    (2111, "Fish", "Expense", "padhayam fish mart", ""),
+    (2112, "Pharmacy", "Expense", "janashraya community pharmac", ""),
+    (2113, "Beena", "Expense", "ms. beena thingal", ""),
+    (2114, "Beena", "Expense", "beena thingal", ""),
+    (2115, "Disney Hotstar", "Bill", "disney hotsta", ""),
+    (2116, "FUEL", "Fuel", "fuels", ""),
+    (2117, "Fuel", "Expense", "nagarajan and sons", ""),
+    (2118, "Fuel", "Expense", "nagarajan s", ""),
+    (2119, "GAS", "Expense", "gas", ""),
+    (2120, "GODADDY", "Expense", "godaddy", ""),
+    (2121, "Google", "Business", "google", ""),
+    (2122, "Gopinath", "Expense", "gkinter2000-1@", ""),
+    (2123, "Gopinath", "Expense", "gopinath", ""),
+    (2124, "City Plaza (Expense)", "Expense", "city plaza", ""),
+    (2125, "City Plaza (Maintenance)", "Expense", "city plaza flat owners  asso", ""),
+    (2126, "City Plaza (Rent)", "Transfer", "neenu  joseph", ""),
+    (2127, "Sudheer", "Expense", "sudheer  sasidharan", ""),
+    (2128, "Sujith S", "Transfer", "neft:mr  sundaresan  sujith", ""),
+    (2129, "SUN Medanta", "Expense", "sun home", ""),
+    (2130, "SUN Medanta", "Expense", "sunmedanta apartment ownersa", ""),
+    (2131, "SUN Medanta", "Expense", "sunmedanta", ""),
+    (2132, "Sun Store", "Expense", "vinu vijayan/upi", ""),
+    (2133, "Sun Store", "Expense", "vinu vijayan", ""),
+    (2134, "Swiggy", "Expense", "swiggyupi", ""),
+    (2135, "Swiggy", "Expense", "swiggy", ""),
+    (2136, "Swiggy", "Expense", "upiswiggy", ""),
+    (2137, "Swiggy", "Expense", "swiggystores", ""),
+    (2138, "Swiggy", "Expense", "swiggy1online", ""),
+    (2139, "Swiggy", "Expense", "swiggyinstamar", ""),
+    (2140, "TAX", "Tax", "9539056194@upi/tax", ""),
+    (2141, "TAX", "Tax", "tax/upi", ""),
+    (2142, "TAX", "Tax", " kerala mission", ""),
+    (2143, "TAX", "Tax", "tax", ""),
+    (2144, "Temple", "Donation", "9539056194@upi/mukalvata", ""),
+    (2145, "Temple", "Donation", "mukalvat/upi", ""),
+    (2146, "Temple", "Temple", "travancore devaswom board", ""),
+    (2147, "Temple", "Temple", "sree panchami devi temple", ""),
+    (2148, "Monthly Budget", "Expense", "monthly budget", ""),
+    (2149, "MORE", "Expense", "more.61839497@", ""),
+    (2150, "MORE", "Expense", "more.61839878@", ""),
+    (2151, "MORE", "Expense", "moreretail", ""),
+    (2152, "MORE", "Expense", "more", ""),
+    (2153, "MORE", "Bill", "prasanth nagar trivandrum 31", ""),
+    (2154, "MOT", "Expense", "mall of travancore", ""),
+    (2155, "Netflix", "Expense", "netflix", ""),
+    (2156, "JIO", "Bill", "air fiber", ""),
+    (2157, "JIO", "Bill", "jio", ""),
+    (2158, "KSEB", "Bill", "67343257007", ""),
+    (2159, "KSEB", "Bill", "kerala state electricity", ""),
+    (2160, "KSEB", "Bill", "kseb", ""),
+    (2161, "KSEB", "Bill", "rafikseb1972@o", ""),
+    (2162, "KSRTC", "Bill", "kerala state road transport", ""),
+    (2163, "KSSTM", "Bill", "ksstm", ""),
+    (2164, "KWAT", "Bill", "kwat", ""),
+    ####
+    (2165, "Expenses", "Expense", "9539056194", "UPI"),
+    (2166, "Personal Exp", "Expense", "ATM", "self"),
 ]
 
 # ==============================================================================
@@ -1900,6 +2087,24 @@ SELFTRANSFER_SOURCE_ROWS = [
         "By SBI-NRE-4250 To SBI-OD",
         "Self",
     ),
+    (
+        462,
+        "UNKNOWN_ACC",
+        "SBI-NRE-ATTINGAL",
+        "0067133374886",
+        "direct",
+        "Direct Transfer via Attingal NRI Branch",
+        "Self",
+    ),
+    (
+        463,
+        "SBT-NRE",
+        "SBI-NRE-ATTINGAL",
+        "52016120500000968",
+        "SBT",
+        "STATE BANK OF TRAVANCORE",
+        "Self",
+    ),
 ]
 
 
@@ -1932,17 +2137,38 @@ def seed_categories_matrix():
         # ─── PART B: PROCESS STRING TOKEN LOOKUPS (KNOWN_DEFAULT) ───
         kd_count = 0
         for row in KNOWNDEFAULT_SOURCE_ROWS:
-            k1 = row[2].strip().lower() if row[2] else None
-            k2 = row[3].strip().lower() if row[3] else None
+            # 🎯 FIX: Realignment of positional indices
+            act_cat = row[1]
+            sub_cat = row[2]
+
+            # Extract text keys cleanly
+            raw_k1 = row[3]
+            raw_k2 = row[4]
+
+            # Normalize values & convert empty strings into clean JSON null/None values
+            k1 = raw_k1.strip().lower() if (raw_k1 and raw_k1.strip()) else None
+            k2 = raw_k2.strip().lower() if (raw_k2 and raw_k2.strip()) else None
+
+            HASH_MAP = {
+                "0511c6db4db5cd73b76173a13eb1f0b084475378cfc3842f96e1b5bbc3378de7": "BENEFICIARY_01",
+                "3f5979368ea97fd1327d13cb80e423fc11cb457bd3fea5de247d74d08fc5e524": "BENEFICIARY_02",
+                "b56acfa18a18fff006223c2a1d5b2183d40e71c2c835f52998643fc87b9a85bb": "BENEFICIARY_03",
+                "aa99d87586749f3ad2b2e2ed1e07fddf6e569cd532aeb7f00158a6f52eae7f13": "BENEFICIARY_04",
+                "10b274a0ff32dded8515a2c779cca8b965c1b84a12bf4cbd2b7c00e8e12dc380": "BENEFICIARY_04",
+                "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246": "BENEFICIARY_04",
+                "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246": "BENEFICIARY_04",
+            }
+
+            categories_items = HASH_MAP.get(k1, act_cat)
 
             MasterFinancialCategory.objects.create(
                 category_type="KNOWN_DEFAULT",
                 sno=row[0],
-                act_category=row[1],
-                act_subcategory=row[2],
-                categories_items=row[1],
+                act_category=act_cat,
+                act_subcategory=sub_cat,
+                categories_items=categories_items,
                 dashboard_cat="Auto Routed",
-                keys={"key1": k1, "key2": k2},  # 🎯 PACKED INTO JSON
+                keys={"key1": k1, "key2": k2},  # 🎯 Properly packed JSON payload
                 bank_types={},
                 remarks="Automated text parsing lookup entry",
             )
@@ -1954,8 +2180,15 @@ def seed_categories_matrix():
         # ─── PART C: PROCESS INTER-BANK ROUTING NODES (SELF_TRANSFER) ───
         st_count = 0
         for row in SELFTRANSFER_SOURCE_ROWS:
-            k1 = row[3].strip().lower() if row[3] else None
-            k2 = row[4].strip().lower() if row[4] else None
+            # Extract string tokens safely
+            raw_k1 = row[3]
+            raw_k2 = row[4]
+            raw_self = row[6]
+
+            # Convert empty strings ("") or blank spaces into proper database NULL/None values
+            k1 = raw_k1.strip().lower() if (raw_k1 and raw_k1.strip()) else None
+            k2 = raw_k2.strip().lower() if (raw_k2 and raw_k2.strip()) else None
+            self_val = raw_self.strip() if (raw_self and raw_self.strip()) else None
 
             MasterFinancialCategory.objects.create(
                 category_type="SELF_TRANSFER",
@@ -1964,12 +2197,15 @@ def seed_categories_matrix():
                 act_subcategory="Self Inter-Account Transfer",
                 categories_items=row[5],
                 dashboard_cat="Transfers",
-                keys={"key1": k1, "key2": k2},  # 🎯 PACKED INTO JSON
+                keys={
+                    "key1": k1,
+                    "key2": k2,
+                },  # 🎯 Clean structural JSON object payload
                 bank_types={
-                    "from_bank": row[1],
-                    "to_bank": row[2],
-                },  # 🎯 PACKED INTO JSON
-                self_account=row[6],
+                    "from_bank": row[1].strip() if row[1] else None,
+                    "to_bank": row[2].strip() if row[2] else None,
+                },  # 🎯 Packed JSON metadata
+                self_account=self_val,
                 remarks="Inter-bank fund movement rule route",
             )
             st_count += 1
