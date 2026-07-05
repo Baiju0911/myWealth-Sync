@@ -17,10 +17,10 @@ from .serializers import (
 )
 
 
-from .serviceWIP import WIPIngestionSweeper
+from .serviceWIP import WIPIngestionSweeper, WIPReconciliationEngine
 
 
-class AutoCategorizeStagingQueueView(APIView):
+class AutoCategorizeStagingQueueView1(APIView):
     """
     🤖 HIGH-PRECISION RECONCILIATION MATCHING VIEW ENGINE
     Enforces our strict, locked-in Source of Truth ASCII pipeline:
@@ -74,13 +74,14 @@ class AutoCategorizeStagingQueueView(APIView):
             # Scan matching tokens inside keys JSON payload fields
             for cat in master_categories:
                 # Support custom compact json structures or explicit fields securely
+                # 🎯 THE FIX: Using (cat.keys.get("key") or "") to safely handle explicit database NULL / None entries
                 k1 = (
-                    cat.keys.get("key1", "").strip().lower()
+                    (cat.keys.get("key1") or "").strip().lower()
                     if isinstance(cat.keys, dict)
                     else ""
                 )
                 k2 = (
-                    cat.keys.get("key2", "").strip().lower()
+                    (cat.keys.get("key2") or "").strip().lower()
                     if isinstance(cat.keys, dict)
                     else ""
                 )
@@ -102,29 +103,64 @@ class AutoCategorizeStagingQueueView(APIView):
                 else:
                     errors_list.append("MISSING_BALANCE_SHEET_CONTEXT")
 
+            # # 📜 TIER 3: GOLDEN RULE DOUBLE-ENTRY COMPLIANCE CHECK
+            # if t1_pass and t2_pass and matched_cat:
+            #     # Evaluate against our prioritized accounting rules matrix
+            #     for rule in accounting_rules:
+            #         tags = (
+            #             rule.description_tags
+            #             if isinstance(rule.description_tags, list)
+            #             else []
+            #         )
+
+            #         # Verify vector direction match (DR table values vs Rule definitions)
+            #         is_debit_txn = wip_row.debit > 0
+            #         is_correct_direction = (
+            #             rule.entry_type == "Debit" and is_debit_txn
+            #         ) or (rule.entry_type == "Credit" and not is_debit_txn)
+
+            #         if is_correct_direction and any(
+            #             tag.strip().lower() in narration_clean for tag in tags
+            #         ):
+            #             matched_rule = rule
+            #             t3_pass = True
+            #             break
+
+            #     if not t3_pass:
+            #         errors_list.append("RULE_COMPLIANCE_FAILED")
+
             # 📜 TIER 3: GOLDEN RULE DOUBLE-ENTRY COMPLIANCE CHECK
             if t1_pass and t2_pass and matched_cat:
-                # Evaluate against our prioritized accounting rules matrix
+
+                # --- PHASE 1: Try Specific Prioritized Rules First ---
                 for rule in accounting_rules:
                     tags = (
                         rule.description_tags
                         if isinstance(rule.description_tags, list)
                         else []
                     )
-
-                    # Verify vector direction match (DR table values vs Rule definitions)
-                    is_debit_txn = wip_row.debit > 0
-                    is_correct_direction = (
-                        rule.entry_type == "Debit" and is_debit_txn
-                    ) or (rule.entry_type == "Credit" and not is_debit_txn)
-
-                    if is_correct_direction and any(
-                        tag.strip().lower() in narration_clean for tag in tags
-                    ):
+                    if any(tag.strip().lower() in narration_clean for tag in tags):
                         matched_rule = rule
                         t3_pass = True
                         break
 
+                # --- PHASE 2: Universal Mathematical Fallback ---
+                if not t3_pass:
+                    try:
+                        debit_val = float(wip_row.debit or 0)
+                        credit_val = float(wip_row.credit or 0)
+                    except (ValueError, TypeError):
+                        debit_val = 0.0
+                        credit_val = 0.0
+
+                    # 🎯 The Core Accounting Check
+                    if debit_val > 0 or credit_val > 0:
+                        t3_pass = True  # It is a real financial movement
+                    else:
+                        # 🚫 CATCH-ALL: Admin notes, zero-value balances, or empty rows
+                        t3_pass = False
+
+                # --- PHASE 3: Error Log Interceptor ---
                 if not t3_pass:
                     errors_list.append("RULE_COMPLIANCE_FAILED")
 
@@ -188,12 +224,14 @@ class AutoCategorizeStagingQueueView(APIView):
                             else "None"
                         ),
                         "rule_code": (
-                            w.applied_rule.rule_code if w.applied_rule else "MANUAL"
+                            w.applied_rule.rule_code
+                            if w.applied_rule
+                            else "Auto Golden Rule"
                         ),
                         "rule_title": (
                             w.applied_rule.rule_title
                             if w.applied_rule
-                            else "Manual Override State"
+                            else "Auto Override State"
                         ),
                     },
                 }
@@ -206,6 +244,97 @@ class AutoCategorizeStagingQueueView(APIView):
                 "evaluation_summary": {
                     "staged_for_bulk_high": total_promoted_to_high,
                     "uncategorized_vault_zero": total_failed_to_zero,
+                },
+                "workspace_queue": serialized_queue,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AutoCategorizeStagingQueueView(APIView):
+    """
+    🤖 HIGH-PRECISION RECONCILIATION MATCHING VIEW ENGINE
+    Decoupled view proxy layer interacting cleanly with our service tier layer.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        account_id = request.data.get("account_id")
+        if not account_id:
+            return Response(
+                {"error": "Missing parameter tracking field: account_id"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ─── STEP 1: EXECUTE SANDBOX WORKSPACE SWEEP ───
+        sweep_metrics = WIPIngestionSweeper.execute_sweep(account_context_id=account_id)
+
+        # ─── STEP 2: RUN THE MATCHING RECONCILIATION LOOP ENGINE ───
+        engine_result = WIPReconciliationEngine.evaluate_account_queue(
+            account_id=account_id
+        )
+
+        # ─── STEP 3: INSTANT SERIALIZATION FROM IN-MEMORY CACHE ───
+        serialized_queue = []
+        for w in engine_result["processed_rows"]:
+            serialized_queue.append(
+                {
+                    "wip_id": str(w.id),
+                    "hash": w.row_footprint_hash,
+                    "date": (
+                        w.raw_statement_date.strftime("%Y-%m-%d")
+                        if w.raw_statement_date
+                        else ""
+                    ),
+                    "narration": w.staging_line.narration,
+                    "debit": float(w.debit),
+                    "credit": float(w.credit),
+                    "confidence": w.confidence_level,
+                    "errors": w.evaluation_errors,
+                    "routing_status": w.staging_line.routing_status,
+                    "analysis": {
+                        "category_id": (
+                            w.matched_category.id if w.matched_category else None
+                        ),
+                        "category_item": (
+                            w.matched_category.categories_items
+                            if w.matched_category
+                            else "Unassigned"
+                        ),
+                        "dashboard_cat": (
+                            w.matched_category.dashboard_cat
+                            if w.matched_category
+                            else "None"
+                        ),
+                        "group": (
+                            w.matched_category.act_category
+                            if w.matched_category
+                            else "None"
+                        ),
+                        "rule_code": (
+                            w.applied_rule.rule_code
+                            if w.applied_rule
+                            else "Auto Golden Rule"
+                        ),
+                        "rule_title": (
+                            w.applied_rule.rule_title
+                            if w.applied_rule
+                            else "Auto Override State"
+                        ),
+                    },
+                }
+            )
+
+        return Response(
+            {
+                "account_id": account_id,
+                "sweep_metrics": sweep_metrics,
+                "evaluation_summary": {
+                    "staged_for_bulk_high": engine_result["staged_for_bulk_high"],
+                    "uncategorized_vault_zero": engine_result[
+                        "uncategorized_vault_zero"
+                    ],
                 },
                 "workspace_queue": serialized_queue,
             },
