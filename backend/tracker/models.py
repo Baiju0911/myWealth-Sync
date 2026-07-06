@@ -698,6 +698,27 @@ class WIPEvaluationMatrix(models.Model):
         help_text="Array listing gate block errors: ['UNMAPPED_PATTERN', 'MISALIGNED_HEADER']",
     )
 
+    # 🎯 Tier 1: Pattern/Keyword Match Results
+    t1_category = models.CharField(max_length=100, null=True, blank=True)
+    t1_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+    # 🎯 Tier 2: Dashboard Context Match Results
+    t2_category = models.CharField(max_length=100, null=True, blank=True)
+    t2_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+    # 🎯 Tier 3: Accounting Golden Rule Match Results
+    t3_category = models.CharField(max_length=100, null=True, blank=True)
+    t3_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+    # 🏆 Final Resolved Winner (Calculated via Weightage Engine)
+    resolved_category = models.CharField(max_length=100, null=True, blank=True)
+    resolved_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+    confidence_score = models.IntegerField(default=0)  # 0 to 100%
+    confidence_level = models.CharField(
+        max_length=10, default="ZERO"
+    )  # HIGH, MEDIUM, ZERO
+
     class Meta:
         db_table = "ledger_wip_evaluation_matrix"
         verbose_name = "WIP Evaluation Matrix"
@@ -706,3 +727,39 @@ class WIPEvaluationMatrix(models.Model):
 
     def __str__(self):
         return f"WIP [{self.confidence_level}] - Hash: {self.row_footprint_hash[:8]} - DR: {self.debit} | CR: {self.credit}"
+
+
+class DirectionalVectorOverride(models.Model):
+    """
+    🔄 COGNITIVE VECTOR OVERRIDE TABLE
+    Dynamically routes a transaction to its true counterpart group when
+    the financial cashflow direction (Debit vs Credit) conflicts with the rule.
+    """
+
+    source_category = models.CharField(
+        max_length=100, help_text="e.g., Expenses, Charity"
+    )
+    expected_vector = models.CharField(
+        max_length=10,
+        choices=[("DEBIT", "Debit (Outflow)"), ("CREDIT", "Credit (Inflow)")],
+        default="DEBIT",
+        help_text="The directional vector this category normally expects.",
+    )
+
+    # Target values to swap to when the mismatch occurs
+    target_category = models.CharField(max_length=100, help_text="e.g., Income")
+    target_subcategory = models.CharField(
+        max_length=100, help_text="e.g., Refunds & Reversals"
+    )
+
+    is_active = models.BooleanField(default=True)
+    remarks = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "tracker_directional_vector_override"
+        verbose_name = "Directional Vector Override"
+        verbose_name_plural = "Directional Vector Overrides"
+        unique_together = ("source_category", "expected_vector")
+
+    def __str__(self):
+        return f"If {self.source_category} is {self.expected_vector} -> Pivot to {self.target_category}"

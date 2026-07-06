@@ -10,6 +10,7 @@ from .models import (
     MasterFinancialCategory,
     AccountingRule,
     JournalEntryMapping,
+    DirectionalVectorOverride,
 )
 
 # ==============================================================================
@@ -171,3 +172,16 @@ class JournalEntryAdmin(admin.ModelAdmin):
         return "⚠️ Unmapped"
 
     get_mapping_item.short_description = "Personal Finance Category"
+
+
+@admin.register(DirectionalVectorOverride)
+class DirectionalVectorOverrideAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_category",
+        "expected_vector",
+        "target_category",
+        "target_subcategory",
+        "is_active",
+    )
+    list_filter = ("expected_vector", "is_active")
+    search_fields = ("source_category", "target_category")
