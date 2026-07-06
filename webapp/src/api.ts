@@ -171,7 +171,7 @@ export interface WorkspaceNode {
   narration: string;
   debit: number;
   credit: number;
-  confidence: 'HIGH' | 'ZERO';
+  confidence: 'HIGH' | 'MEDIUM' | 'ZERO';
   errors: string[];
   routing_status: string;
   analysis: WorkspaceAnalysis;

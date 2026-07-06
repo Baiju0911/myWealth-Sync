@@ -4,6 +4,8 @@ import { TableEngine } from '../components/ui/data-table/TableEngine';
 import { BULK_APPROVAL_COLUMNS, UNCATEGORIZED_VAULT_COLUMNS } from '../components/ui/data-table/columns';
 import { stagingQueueApi, ledgerMasterApi, accountApi } from '../api';
 import type { WorkspaceNode, SplitAllocationPayload } from '../api';
+//export type ConfidenceLevel = "HIGH" | "MEDIUM" | "ZERO";
+
 
 type WorkspaceTab = 'bulk-high' | 'uncategorized-zero';
 
@@ -110,20 +112,20 @@ export default function StagingQueueEvaluator() {
   };
 
   const highConfidenceRows = workspaceRows
-    .filter(r => r.confidence === 'HIGH')
-    .map(r => ({
-      ...r,
-      category_item: r.analysis.category_item,
-      rule_code: r.analysis.rule_code,
-      actions: (
-        <button 
-          onClick={() => handleBulkClearance([r])} 
-          className="text-xs bg-emerald-950 text-emerald-400 px-2 py-1 rounded border border-emerald-800 hover:bg-emerald-900"
-        >
-          Clear
-        </button>
-      )
-    }));
+      .filter(r => r.confidence === 'HIGH' ||  r.confidence === 'MEDIUM')
+      .map(r => ({
+        ...r,
+        category_item: r.analysis.category_item,
+        rule_code: r.analysis.rule_code,
+        actions: (
+          <button 
+            onClick={() => handleBulkClearance([r])} 
+            className="text-xs bg-emerald-950 text-emerald-400 px-2 py-1 rounded border border-emerald-800 hover:bg-emerald-900"
+          >
+            {r.confidence === 'MEDIUM' ? 'Review & Clear' : 'Clear'}
+          </button>
+        )
+      }));
 
   const zeroConfidenceRows = workspaceRows
     .filter(r => r.confidence === 'ZERO')
