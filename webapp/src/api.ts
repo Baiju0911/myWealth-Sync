@@ -158,10 +158,21 @@ export const ledgerMasterApi = {
 export interface WorkspaceAnalysis {
   category_id: number | null;
   category_item: string;
+  subcategory: string;
   dashboard_cat: string;
   group: string;
   rule_code: string;
   rule_title: string;
+}
+
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'ZERO';
+
+export interface PipelineStopTelemetry {
+  category: string | null;
+  subcategory: string | null;
+  score: number;
+  dashboard?: string | null;
+  rule_id?: number | null;
 }
 
 export interface WorkspaceNode {
@@ -171,10 +182,17 @@ export interface WorkspaceNode {
   narration: string;
   debit: number;
   credit: number;
-  confidence: 'HIGH' | 'MEDIUM' | 'ZERO';
+  confidence: ConfidenceLevel;
   errors: string[];
   routing_status: string;
   analysis: WorkspaceAnalysis;
+
+  pipeline_trace: {
+    stop1_known_default: PipelineStopTelemetry;
+    stop2_self_transfer: PipelineStopTelemetry;
+    stop3_balance_sheet: PipelineStopTelemetry;
+    stop4_accounting_rule: PipelineStopTelemetry;
+  };
 }
 
 export interface SweepMetrics {

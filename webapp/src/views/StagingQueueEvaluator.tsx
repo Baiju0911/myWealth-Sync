@@ -1,11 +1,8 @@
-// src/views/StagingQueueEvaluator.tsx
 import React, { useState, useEffect } from 'react';
 import { TableEngine } from '../components/ui/data-table/TableEngine';
 import { BULK_APPROVAL_COLUMNS, UNCATEGORIZED_VAULT_COLUMNS } from '../components/ui/data-table/columns';
 import { stagingQueueApi, ledgerMasterApi, accountApi } from '../api';
-import type { WorkspaceNode, SplitAllocationPayload } from '../api';
-//export type ConfidenceLevel = "HIGH" | "MEDIUM" | "ZERO";
-
+import type { WorkspaceNode as BaseWorkspaceNode, SplitAllocationPayload } from '../api';
 
 type WorkspaceTab = 'bulk-high' | 'uncategorized-zero';
 
@@ -19,6 +16,16 @@ interface AccountOption {
   id: string | number;
   name: string;
   account_number: string;
+}
+
+interface WorkspaceNode extends BaseWorkspaceNode {
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'ZERO';
+  pipeline_trace: {
+    stop1_known_default: any;
+    stop2_self_transfer: any;
+    stop3_balance_sheet: any;
+    stop4_accounting_rule: any;
+  };
 }
 
 export default function StagingQueueEvaluator() {
@@ -42,9 +49,6 @@ export default function StagingQueueEvaluator() {
     accountApi.getAccounts().then((res: any) => {
       const accountData = res.results || res.data || res;
       setAccounts(accountData);
-      // if (accountData.length > 0) {
-      //   setSelectedAccountId(String(accountData[0].id)); // Auto-select first account
-      // }
     }).catch(() => setErrorMsg('Failed loading registered accounts metadata vector.'));
 
     ledgerMasterApi.getMasterCategories().then((res: any) => {
@@ -111,43 +115,119 @@ export default function StagingQueueEvaluator() {
     }
   };
 
-  const highConfidenceRows = workspaceRows
-      .filter(r => r.confidence === 'HIGH' ||  r.confidence === 'MEDIUM')
-      .map(r => ({
-        ...r,
-        category_item: r.analysis.category_item,
-        rule_code: r.analysis.rule_code,
-        actions: (
-          <button 
-            onClick={() => handleBulkClearance([r])} 
-            className="text-xs bg-emerald-950 text-emerald-400 px-2 py-1 rounded border border-emerald-800 hover:bg-emerald-900"
-          >
-            {r.confidence === 'MEDIUM' ? 'Review & Clear' : 'Clear'}
-          </button>
-        )
-      }));
+// 🎯 INLINE TIER 1 PROXY MAPPING: Displays pure Tier 1 keyword metric lines cleanly
 
-  const zeroConfidenceRows = workspaceRows
-    .filter(r => r.confidence === 'ZERO')
+
+  const processRowMapping = (r: any) => {
+  const t1 = r.tier1_metrics || {};
+  const tier = t1.active_tier_level || 0;
+  
+  let statusText = "FALLBACK MISS";
+  let statusColor = "text-amber-500";
+  let badgeColor = "border-zinc-900/80 bg-zinc-950/60";
+  
+  // Choose which target path to show on the final table column based on the tier rank
+  const displayCategory = tier === 2 ? t1.t2_category : t1.t1_category;
+  const displaySubcategory = tier === 2 ? t1.t2_subcategory : t1.t1_subcategory;
+
+  if (tier === 1) {
+    statusText = "TIER 1: KEYWORD HIT";
+    statusColor = "text-emerald-500";
+    badgeColor = "border-emerald-950 bg-emerald-950/20";
+  } else if (tier === 2) {
+    statusText = "TIER 2: SELF TRANSFER HIT";
+    statusColor = "text-cyan-400 font-bold";
+    badgeColor = "border-cyan-950 bg-cyan-950/30";
+  }
+
+  return {
+    ...r,
+    category_item: displayCategory,
+    rule_code: tier > 0 ? `T${tier} KW: ${t1.matched_keyword_token}` : 'Fallback Default',
+    
+    // 🎯 FIX: Explicitly map table grid keys with clean string fallbacks to avoid undefined leaks
+    T1_item: t1.t1_category ? `${t1.t1_category}→${t1.t1_subcategory}` : "None→None",
+    T2_item: t1.t2_category && t1.t2_category !== "None" ? `${t1.t2_category}→${t1.t2_subcategory}` : "None→None",
+    T3_item: t1.t3_category ? `${t1.t3_category}→${t1.t3_subcategory}` : "None→None",
+    T4_item: t1.t4_category ? `${t1.t4_category}→${t1.t4_subcategory}` : "None→None",
+    
+    narration: (
+      <div className="space-y-1.5 py-1 font-mono">
+        <div className="text-zinc-100 font-sans font-medium text-xs break-words">{r.narration}</div>
+        
+        <div className={`text-[10px] text-zinc-400 p-1.5 rounded-lg border w-full grid grid-cols-2 md:grid-cols-6 gap-2 items-center tracking-tight ${badgeColor}`}>
+          {/* Tier Status */}
+          <div className="col-span-1">
+            <span className="text-zinc-500 uppercase font-bold text-[9px] mr-1">Pipeline:</span>
+            <b className={statusColor}>{statusText}</b>
+          </div>
+          
+          {/* Keyword Token */}
+          <div className="truncate col-span-1">
+            <span className="text-zinc-500 uppercase font-bold text-[9px] mr-1">Token:</span>
+            <b className="text-zinc-300">"{t1.matched_keyword_token || 'None'}"</b>
+          </div>
+
+          {/* Weights & Confidence */}
+          <div className="col-span-1">
+            <span className="text-zinc-500 uppercase font-bold text-[9px] mr-1">W/C:</span>
+            <b className="text-zinc-300">{t1.execution_weight}% / {t1.confidence_level}%</b>
+          </div>
+
+          {/* FULL GRANULAR PATH DISPLAY */}
+          <div className="col-span-3 text-right border-l border-zinc-700/50 pl-2">
+            <span className="text-zinc-500 uppercase font-bold text-[9px] mr-2">Target:</span>
+            <b className="text-cyan-400">{displayCategory}</b>
+            <span className="text-zinc-600 mx-1">/</span>
+            <b className="text-zinc-200">{displaySubcategory}</b>
+          </div>
+        </div>
+      </div>
+    ),
+    
+    actions: (
+      <button 
+        onClick={(e) => { e.stopPropagation(); handleBulkClearance([r]); }}
+        className="text-xs bg-emerald-950 text-emerald-400 px-2.5 py-1 rounded border border-emerald-800 hover:bg-emerald-900 font-mono font-bold cursor-pointer"
+      >
+        Clear
+      </button>
+    )
+  };
+};
+
+
+  const highConfidenceRows1 = workspaceRows
+      .filter(r => r.confidence === 'HIGH' ||  r.confidence === 'MEDIUM')
+      .map(processRowMapping);
+
+  const zeroConfidenceRows1 = workspaceRows
+    .filter(r => r.confidence === 'LOW' || r.confidence === 'ZERO')
     .map(r => ({
       ...r,
       errors: r.errors.join(' | '),
       actions: (
         <button 
-          onClick={() => { 
+          onClick={(e) => {
+            e.stopPropagation();
             setSelectedRowToSplit(r); 
             setSplitLines([{ categoryId: '', subcat: '', amount: r.debit || r.credit }]); 
           }} 
-          className="text-xs bg-cyan-950 text-cyan-400 px-2 py-1 rounded border border-cyan-800 hover:bg-cyan-900"
+          className="text-xs bg-cyan-950 text-cyan-400 px-2.5 py-1 rounded border border-cyan-800 hover:bg-cyan-900 font-mono font-bold cursor-pointer"
         >
           Split / Assign
         </button>
       )
     }));
 
+    // ⚡ UNFILTERED TIER 1 CAPTURE MATRIX: Direct array mapping with no data loss!
+  const highConfidenceRows = workspaceRows.map(processRowMapping);
+  const zeroConfidenceRows = workspaceRows.map(processRowMapping);
+
+
   return (
     <div className="bg-zinc-950 text-zinc-100 p-6 space-y-6 min-h-screen font-sans">
-      {/* 🛠️ TOP CONTROL BAR: Dropdown Context Switcher */}
+      {/* TOP CONTROL BAR: Dropdown Context Switcher */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-zinc-900 border border-zinc-800 p-4 rounded-xl gap-4">
         <div>
           <h1 className="text-sm font-mono uppercase tracking-wider text-zinc-200 font-bold">Project Sync-Shield</h1>
@@ -196,8 +276,8 @@ export default function StagingQueueEvaluator() {
               onClick={() => setActiveTab('uncategorized-zero')} 
               className={`p-4 rounded-lg border cursor-pointer transition-all ${activeTab === 'uncategorized-zero' ? 'bg-zinc-900 border-red-500' : 'bg-zinc-900/40 border-zinc-800 opacity-60'}`}
             >
-              <div className="text-zinc-500 uppercase">Uncategorized Vault (Zero Confidence)</div>
-              <div className="text-xl font-bold text-red-400 mt-1">{zeroConfidenceRows.length} Nodes Failed</div>
+              <div className="text-zinc-500 uppercase">Uncategorized Vault (Suspense / Low Confidence)</div>
+              <div className="text-xl font-bold text-red-400 mt-1">{zeroConfidenceRows.length} Nodes Contained</div>
             </div>
           </div>
 
@@ -208,8 +288,8 @@ export default function StagingQueueEvaluator() {
               </h2>
               {activeTab === 'bulk-high' && highConfidenceRows.length > 0 && (
                 <button 
-                  onClick={() => handleBulkClearance(workspaceRows.filter(r => r.confidence === 'HIGH'))} 
-                  className="bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-mono font-bold text-xs px-3 py-1.5 rounded uppercase tracking-wider"
+                  onClick={() => handleBulkClearance(workspaceRows.filter(r => r.confidence === 'HIGH' || r.confidence === 'MEDIUM'))} 
+                  className="bg-emerald-600 hover:bg-emerald-700 text-zinc-950 font-mono font-bold text-xs px-3 py-1.5 rounded uppercase tracking-wider cursor-pointer"
                 >
                   ⚡ Execute Bulk Sync Release ({highConfidenceRows.length} Rows)
                 </button>
@@ -224,7 +304,7 @@ export default function StagingQueueEvaluator() {
         </>
       )}
 
-      {/* Split Modal Render Layer remains completely identical below... */}
+      {/* Split Modal Render Layer */}
       {selectedRowToSplit && (
         <div className="fixed inset-0 bg-zinc-950/80 flex items-center justify-center p-4 backdrop-blur-xs z-50">
           <form onSubmit={handleCommitSplit} className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-2xl space-y-4 font-mono text-xs">
