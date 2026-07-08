@@ -270,7 +270,7 @@ BALANCESHEET_SOURCE_ROWS = [
     (
         1729,
         "Income",
-        "Salary & Business Income",
+        "Interest Income",
         "FT Income",
         "Income",
         "FT Income",
@@ -286,11 +286,11 @@ BALANCESHEET_SOURCE_ROWS = [
         False,
     ),
     (1731, "Income", "Insurance Payouts", "HDFC Life", "Insurance", "HDFC Life", False),
-    (1732, "Income", "Salary & Business Income", "Int FD", "Income", "Int FD", False),
+    (1732, "Income", "Interest Income", "Int FD", "Income", "Int FD", False),
     (
         1733,
         "Income",
-        "Salary & Business Income",
+        "Interest Income",
         "Int Income",
         "Income",
         "Int Income",
@@ -299,7 +299,7 @@ BALANCESHEET_SOURCE_ROWS = [
     (
         1734,
         "Income",
-        "Salary & Business Income",
+        "Interest Income",
         "Interest",
         "Income",
         "Interest",
@@ -407,7 +407,7 @@ BALANCESHEET_SOURCE_ROWS = [
     (1754, "Liabilities", "Reverse", "Reverse", "Adjustments", "Reverse", False),
     (
         1755,
-        "OCI",
+        "Income",
         "Other Comprehensive Income",
         "ShareMarket",
         "Miscellaneous",
@@ -871,12 +871,12 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (1828, "Hospital", "Expense", "vasan health care", "upi"),
     (1829, "Hospital-M&D", "Expense", "precise", "upi"),
     (1830, "iCloud", "Transfer", "apple media", "wdl tfr"),
-    (1831, "Int FD", "Income", "INT ON FD INR", ""),
-    (1832, "Int Income", "Income", ":int.pd:", ""),
-    (1833, "Int Income", "Income", "INTEREST CREDIT", ""),
-    (1834, "Interest", "Income", "43438795987", "int trf"),
-    (1835, "Interest", "Income", "int trf", "deposit transfer"),
-    (1836, "Interest", "Income", "sbint", ""),
+    (1831, "Income", "Interest Income", "INT ON FD INR", ""),
+    (1832, "Income", "Interest Income", ":int.pd:", ""),
+    (1833, "Income", "Interest Income", "INTEREST CREDIT", ""),
+    (1834, "Income", "Interest Income", "43438795987", "int trf"),
+    (1835, "Income", "Interest Income", "int trf", "deposit transfer"),
+    (1836, "Income", "Interest Income", "sbint", ""),
     (1837, "JIO", "Bill", "air fiber", ""),
     (1838, "JIO", "Bill", "JIO", ""),
     (1839, "KSEB", "Bill", "67343257007", ""),
@@ -1145,8 +1145,8 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (2069, "SUN Medanta", "Expense", "sun medanta", ""),
     (2070, "SUN Medanta", "Expense", "reement", "fund"),
     (2071, "Expenses", "Office", "meter", "Praveen"),
-    (2072, "Expenses", "Loan", "BDS", ""),
-    (2073, "Expenses", "Loan", "bluedot", ""),
+    (2072, "Expenses", "Office", "BDS", ""),
+    (2073, "Expenses", "Office", "bluedot", ""),
     (
         2074,
         "Charity",
@@ -1180,7 +1180,7 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (2080, "Expenses", "Expense", "self", "exp"),
     (2081, "SUN Medanta", "Expense", "REMNT", "fund"),
     (2082, "SUN Medanta", "Expense", "sun", "DANTA"),
-    (2083, "ShareMarket", "Shares", "COCHIN SHIPYARD", ""),
+    (2083, "ShareMarket", "Shares", "nach", "coch"),
     (2084, "Bank Charge", "Fees", "DEBit", "charges"),
     (2085, "Bank Charge", "Fees", "charges", ""),
     (2086, "Self Transfer", "Transfer", "Friends", "Baiju"),
@@ -1269,7 +1269,7 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     ####
     (2165, "Expenses", "Expense", "9539056194", "UPI"),
     (2166, "Personal Exp", "Expense", "ATM", "self"),
-    (2167, "Investment", "Shares", "IPO", ""),
+    (2167, "Investment", "Shares", "IPO", "baiju"),
     (2168, "Expenses", "Cash Withdrawal", "CWDR", "CMN"),
     (2169, "Expenses", "Card Transaction", "PRCR", "CMN"),
     (2170, "Income", "Credit Adjustment", "CRADJT", ""),
@@ -1292,6 +1292,18 @@ KNOWNDEFAULT_SOURCE_ROWS = [
     (2187, "Income", "Office", "transfer", "bluedot"),
     (2188, "Expenses", "Insurance Premiums", "Life", ""),
     (2189, "Income", "Office", "to", "bds"),
+    (2190, "Income", "Office", "bds", "self"),
+    (2191, "Expenses", "Office", "bds", "self"),
+    (2192, "ShareMarket", "Shares", "nach", "datac"),
+    (2193, "ShareMarket", "Shares", "nach", "finan"),
+    (2194, "Sun Homes", "Transfer", "Sun", "Porject"),
+    (2195, "Sun Homes", "Transfer", "ment", "fund"),
+    (2196, "Sun Homes", "Transfer", "Medan", ""),
+    (2197, "Income", "Interest Income", "int", "cr"),
+    (2198, "Income", "Interest Income", "int", "trf"),
+    (2199, "Income", "Interest Income", "sbint", ""),
+    (2200, "Income", "Interest Income", "Interest", "Credit"),
+    (2201, "Income", "Interest Income", "Int", "Credit"),
 ]
 
 # ==============================================================================
@@ -2129,6 +2141,15 @@ SELFTRANSFER_SOURCE_ROWS = [
         "STATE BANK OF TRAVANCORE",
         "Self",
     ),
+    (
+        464,
+        "SELF",
+        "SELF",
+        "transfer",
+        "tr frm",
+        "Inter-bank transfer from self account",
+        "Self",
+    ),
 ]
 
 
@@ -2138,6 +2159,7 @@ def seed_categories_matrix():
     )
 
     with transaction.atomic():
+        # Clear existing data to ensure a fresh rewrite
         MasterFinancialCategory.objects.all().delete()
 
         # ─── PART A: PROCESS BALANCE SHEET REGISTRY (REGULAR) ───
@@ -2161,15 +2183,12 @@ def seed_categories_matrix():
         # ─── PART B: PROCESS STRING TOKEN LOOKUPS (KNOWN_DEFAULT) ───
         kd_count = 0
         for row in KNOWNDEFAULT_SOURCE_ROWS:
-            # 🎯 FIX: Realignment of positional indices
             act_cat = row[1]
             sub_cat = row[2]
 
-            # Extract text keys cleanly
+            # Extract text keys and normalize whitespace
             raw_k1 = row[3]
             raw_k2 = row[4]
-
-            # Normalize values & convert empty strings into clean JSON null/None values
             k1 = raw_k1.strip().lower() if (raw_k1 and raw_k1.strip()) else None
             k2 = raw_k2.strip().lower() if (raw_k2 and raw_k2.strip()) else None
 
@@ -2179,7 +2198,6 @@ def seed_categories_matrix():
                 "b56acfa18a18fff006223c2a1d5b2183d40e71c2c835f52998643fc87b9a85bb": "BENEFICIARY_03",
                 "aa99d87586749f3ad2b2e2ed1e07fddf6e569cd532aeb7f00158a6f52eae7f13": "BENEFICIARY_04",
                 "10b274a0ff32dded8515a2c779cca8b965c1b84a12bf4cbd2b7c00e8e12dc380": "BENEFICIARY_04",
-                "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246": "BENEFICIARY_04",
                 "083aa324f7805d6e016717a0fd3c7d22ab91fa1e120a92bdcb80fdabaefaf246": "BENEFICIARY_04",
             }
 
@@ -2192,7 +2210,7 @@ def seed_categories_matrix():
                 act_subcategory=sub_cat,
                 categories_items=categories_items,
                 dashboard_cat="Auto Routed",
-                keys={"key1": k1, "key2": k2},  # 🎯 Properly packed JSON payload
+                keys={"key1": k1, "key2": k2},
                 bank_types={},
                 remarks="Automated text parsing lookup entry",
             )
@@ -2204,12 +2222,10 @@ def seed_categories_matrix():
         # ─── PART C: PROCESS INTER-BANK ROUTING NODES (SELF_TRANSFER) ───
         st_count = 0
         for row in SELFTRANSFER_SOURCE_ROWS:
-            # Extract string tokens safely
             raw_k1 = row[3]
             raw_k2 = row[4]
             raw_self = row[6]
 
-            # Convert empty strings ("") or blank spaces into proper database NULL/None values
             k1 = raw_k1.strip().lower() if (raw_k1 and raw_k1.strip()) else None
             k2 = raw_k2.strip().lower() if (raw_k2 and raw_k2.strip()) else None
             self_val = raw_self.strip() if (raw_self and raw_self.strip()) else None
@@ -2221,14 +2237,11 @@ def seed_categories_matrix():
                 act_subcategory="Self Inter-Account Transfer",
                 categories_items=row[5],
                 dashboard_cat="Transfers",
-                keys={
-                    "key1": k1,
-                    "key2": k2,
-                },  # 🎯 Clean structural JSON object payload
+                keys={"key1": k1, "key2": k2},
                 bank_types={
                     "from_bank": row[1].strip() if row[1] else None,
                     "to_bank": row[2].strip() if row[2] else None,
-                },  # 🎯 Packed JSON metadata
+                },
                 self_account=self_val,
                 remarks="Inter-bank fund movement rule route",
             )
