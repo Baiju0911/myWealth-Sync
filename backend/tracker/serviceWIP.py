@@ -5,6 +5,7 @@ import re
 import copy
 from decimal import Decimal
 from django.db import transaction
+from collections import Counter
 from .models import (
     StatementStagingLine,
     WIPEvaluationMatrix,
@@ -12,6 +13,7 @@ from .models import (
     AccountingRule,
     DirectionalVectorOverride,
 )
+from django.apps import apps
 
 
 class WIPIngestionSweeper:
@@ -100,46 +102,147 @@ class WIPIngestionSweeper:
 
 class WIPReconciliationEngine:
     """
-    ⚡ MULTI-TIER CASCADING RECONCILIATION ENGINE
-    Tier 1 (KNOWN_DEFAULT) and Tier 2 (SELF_TRANSFER) executed with sequential early-exit gates.
+    ⚡ PARALLEL ENGINE WITH MODULAR DIRECTIONAL OVERRIDES - PRODUCTION OPTIMIZED
     """
+
+    @staticmethod
+    def resolve_directional_placement(
+        credit_val: float, rule_subcategory: str
+    ) -> tuple:
+        """Fast directional resolver with minimal branching."""
+        category = "Income" if credit_val > 0 else "Expenses"
+        if not rule_subcategory:
+            subcategory = "Suspense Account"
+        else:
+            sub_clean = str(rule_subcategory).strip().lower()
+            subcategory = (
+                "Suspense Account"
+                if sub_clean in {"none", "expense", "expenses", "income", "incomes"}
+                else rule_subcategory.strip()
+            )
+        return category, subcategory
+
+    @staticmethod
+    def _safe_subcategory(subcat: str) -> str:
+        """Helper to reduce category sanitization overhead and duplication."""
+        if not subcat:
+            return "Suspense Account"
+        clean = str(subcat).strip().lower()
+        return (
+            "Suspense Account"
+            if clean in {"none", "expense", "expenses", "income", "incomes"}
+            else str(subcat).strip()
+        )
 
     @classmethod
     def evaluate_account_queue(cls, account_id: int) -> dict:
-        # ─── STEP 1: PRE-COMPILE REFERENCE LOOKUPS AT DB LAYER ───
+        # =========================================================================
+        # 🏗️ STAGE 1: GLOBAL COMPILATION INDEX (Run once outside the active loop)
+        # =========================================================================
 
-        # 1a. Load Tier 1 Reference (Known System Defaults)
+        # --- Tier 1 Index Layout ---
         t1_categories = MasterFinancialCategory.objects.filter(
             category_type="KNOWN_DEFAULT"
-        )
+        ).only("act_category", "act_subcategory", "keys")
         t1_lookup = []
         for m_cat in t1_categories:
             if isinstance(m_cat.keys, dict):
                 k1 = (m_cat.keys.get("key1") or "").strip().lower()
                 k2 = (m_cat.keys.get("key2") or "").strip().lower()
                 if k1:
-                    t1_lookup.append((m_cat, k1, k2))
+                    p1 = re.compile(r"\b" + re.escape(k1) + r"\b")
+                    p2 = re.compile(r"\b" + re.escape(k2) + r"\b") if k2 else None
+                    t1_lookup.append((m_cat, k1, k2, p1, p2))
 
-        # 1b. Load Tier 2 Reference (Self Internal Account Transfers)
+        # --- Tier 2 Index Layout ---
         t2_categories = MasterFinancialCategory.objects.filter(
             category_type="SELF_TRANSFER"
-        )
+        ).only("act_category", "act_subcategory", "keys")
         t2_lookup = []
         for m_cat in t2_categories:
             if isinstance(m_cat.keys, dict):
                 k1 = (m_cat.keys.get("key1") or "").strip().lower()
                 k2 = (m_cat.keys.get("key2") or "").strip().lower()
                 if k1:
-                    t2_lookup.append((m_cat, k1, k2))
+                    p1 = re.compile(r"\b" + re.escape(k1) + r"\b")
+                    p2 = re.compile(r"\b" + re.escape(k2) + r"\b") if k2 else None
+                    t2_lookup.append((m_cat, k1, k2, p1, p2))
 
-        # ─── STEP 2: LOAD WIP DATA TARGET MATRIX ───
-        active_wip_rows = WIPEvaluationMatrix.objects.filter(
-            account_id=account_id, is_split_component=False
-        ).select_related("staging_line")
+        # --- Tier 3 Index Layout: O(1) Key Table Map ---
+        t3_lookup = {}
+        t3_categories = MasterFinancialCategory.objects.filter(
+            category_type="REGULAR"
+        ).only("categories_items", "act_category", "act_subcategory")
+        for m_cat in t3_categories:
+            target = (m_cat.categories_items or "").strip().lower()
+            if target:
+                t3_lookup.setdefault(target, []).append(m_cat)
+
+        # --- Tier 4 Index Layout: Double-Index Rulebook Cache ---
+        t4_categories = AccountingRule.objects.filter(is_active="1").only(
+            "description_tags", "rule_metadata", "rule_code", "entry_type"
+        )
+        t4_translation_map = {}  # Instant upstream category translation map
+        t4_lookup = []  # Streamlined fallback text scanning array
+
+        for rule_inst in t4_categories:
+            tags = rule_inst.description_tags
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except json.JSONDecodeError:
+                    tags = []
+            elif not isinstance(tags, list):
+                tags = []
+
+            metadata = rule_inst.rule_metadata
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            elif not isinstance(metadata, dict):
+                metadata = {}
+
+            compiled_tags = []
+            for tag in tags:
+                if tag:
+                    t_clean = str(tag).strip().lower()
+                    compiled_tags.append(
+                        (t_clean, re.compile(r"\b" + re.escape(t_clean) + r"\b"))
+                    )
+                    t4_translation_map.setdefault(t_clean, []).append(
+                        (rule_inst, metadata)
+                    )
+            if compiled_tags:
+                t4_lookup.append((rule_inst, compiled_tags, metadata))
+
+        # =========================================================================
+        # 📥 STAGE 2: DATA ACQUISITION & TOTAL MEMORY CACHING
+        # =========================================================================
+        active_wip_rows = (
+            WIPEvaluationMatrix.objects.filter(
+                account_id=account_id, is_split_component=False
+            )
+            .select_related("staging_line")
+            .only(
+                "id", "debit", "credit", "raw_statement_date", "staging_line__narration"
+            )
+            .iterator()  # Prevents mass RAM dumps via structured backend record streams
+        )
 
         serialized_queue = []
+        summary_counts = {
+            "systemRules": 0,
+            "internalTransfers": 0,
+            "masterRulebook": 0,
+            "ledgerLayout": 0,
+            "fallback": 0,
+        }
 
-        # ─── STEP 3: TRANSACTION PROCESSING LOOP ───
+        # =========================================================================
+        # ⚡ STAGE 3: THE HIGH-SPEED EXECUTION STREAM
+        # =========================================================================
         for wip_row in active_wip_rows:
             raw_narration = (
                 wip_row.staging_line.narration if wip_row.staging_line else ""
@@ -150,53 +253,200 @@ class WIPReconciliationEngine:
                 debit_val = float(wip_row.debit or 0)
                 credit_val = float(wip_row.credit or 0)
             except (ValueError, TypeError):
-                debit_val, credit_val = 0.0, 0.0
+                debit_val = credit_val = 0.0
 
-            # Baseline Directional Fallback state for Tier 1
-            if credit_val > 0:
-                s1_cat = "Income"
-            else:
-                s1_cat = "Expenses"
-            s1_sub = "Suspense Account"
-
-            # Isolated, independent registers for Tier 2 values
-            s2_cat = "None"
-            s2_sub = "None"
-
+            # Safe initializations
+            s1_cat = s1_sub = s2_cat = s2_sub = s3_cat = s3_sub = s4_cat = s4_sub = (
+                "None"
+            )
             matched_token = "None"
             hit_tier = 0
+            t1_raw_db_category = "None"
 
-            # 🛑 PASS A: TIER 1 INDEPENDENT LOOP (No early exit!)
-            for cat_inst, k1, k2 in t1_lookup:
-                if k1 in narration_clean:
-                    if not k2 or (k2 and k2 in narration_clean):
-                        s1_cat = cat_inst.act_category
-                        s1_sub = (
-                            cat_inst.act_subcategory
-                            if cat_inst.act_subcategory
-                            else cat_inst.act_category
+            # 🛑 PASS A: Tier 1 Check (Short-circuits loops instantly on hits)
+            for cat_inst, k1, k2, p1, p2 in t1_lookup:
+                if p1.search(narration_clean) and (
+                    not p2 or p2.search(narration_clean)
+                ):
+                    t1_raw_db_category = (cat_inst.act_category or "").strip()
+                    if t1_raw_db_category and t1_raw_db_category.lower() not in {
+                        "none",
+                        "",
+                        "income",
+                        "expenses",
+                    }:
+                        s1_cat = t1_raw_db_category
+                        s1_sub = cls._safe_subcategory(cat_inst.act_subcategory)
+                    else:
+                        s1_cat, s1_sub = cls.resolve_directional_placement(
+                            credit_val, cat_inst.act_subcategory
                         )
+                    matched_token = k1 if not k2 else f"{k1} + {k2}"
+                    hit_tier = 1
+                    break
+
+            # 🔄 PASS B: Tier 2 Check
+            if hit_tier == 0:
+                for cat_inst, k1, k2, p1, p2 in t2_lookup:
+                    if p1.search(narration_clean) and (
+                        not p2 or p2.search(narration_clean)
+                    ):
+                        if (
+                            cat_inst.act_category
+                            and cat_inst.act_category.strip() not in {"None", ""}
+                        ):
+                            s2_cat = cat_inst.act_category.strip()
+                            s2_sub = cls._safe_subcategory(cat_inst.act_subcategory)
+                        else:
+                            s2_cat, s2_sub = cls.resolve_directional_placement(
+                                credit_val, cat_inst.act_subcategory
+                            )
                         matched_token = k1 if not k2 else f"{k1} + {k2}"
-                        hit_tier = 1
-                        break  # Only breaks out of Tier 1 keywords, moves to Tier 2 check!
-
-            # 🔄 PASS B: TIER 2 INDEPENDENT LOOP (Always checks!)
-            for cat_inst, k1, k2 in t2_lookup:
-                if k1 in narration_clean:
-                    if not k2 or (k2 and k2 in narration_clean):
-                        s2_cat = cat_inst.act_category
-                        s2_sub = (
-                            cat_inst.act_subcategory
-                            if cat_inst.act_subcategory
-                            else cat_inst.act_category
-                        )
-                        # If Tier 1 didn't hit, Tier 2 becomes the primary display driver
-                        if hit_tier == 0:
-                            matched_token = k1 if not k2 else f"{k1} + {k2}"
-                            hit_tier = 2
+                        hit_tier = 2
                         break
 
-            # Append structured payload with cleanly isolated fields
+            # 🎯 PASS C: Tier 3 Check - O(1) Lookup Table Map
+            if hit_tier == 0:
+                # 🛠️ BUG FIX: Perform case-insensitive isolation safely without breaking "None" string references
+                search_target = (
+                    t1_raw_db_category if t1_raw_db_category != "None" else s1_cat
+                )
+                if search_target and search_target.lower() not in {
+                    "none",
+                    "income",
+                    "expenses",
+                    "suspense account",
+                }:
+                    for cat_inst in t3_lookup.get(search_target.lower(), []):
+                        db_row_cat = (cat_inst.act_category or "").strip().lower()
+                        if (credit_val > 0 and "expense" in db_row_cat) or (
+                            credit_val <= 0
+                            and ("income" in db_row_cat or db_row_cat == "oci")
+                        ):
+                            continue
+                        s3_cat = cat_inst.act_category.strip() or "None"
+                        s3_sub = cat_inst.act_subcategory.strip() or "None"
+                        matched_token = cat_inst.categories_items
+                        hit_tier = 3
+                        break
+
+            # 📖 PASS D: Tier 4 Auditor Pass (Multi-Index Router Execution)
+            t4_rule_hit = False
+            meta_cat = meta_sub = ""
+            tag_matched = None
+
+            # Pin the active upstream category based on parallel processing weight
+            resolved_upstream = "None"
+            if s2_cat != "None":
+                resolved_upstream = s2_cat.lower()
+            elif s1_cat != "None":
+                resolved_upstream = s1_cat.lower()
+            elif s3_cat != "None":
+                resolved_upstream = s3_cat.lower()
+
+            # Track A: Instant Category Translation Matrix Hit (No Loops!)
+            if resolved_upstream in t4_translation_map:
+                for rule_inst, metadata in t4_translation_map[resolved_upstream]:
+                    rule_direction = (rule_inst.entry_type or "").strip().lower()
+                    if (rule_direction == "credit" and credit_val <= 0) or (
+                        rule_direction == "debit" and debit_val <= 0
+                    ):
+                        continue
+                    meta_cat = metadata.get("category", "").strip()
+                    meta_sub = metadata.get("subcategory", "").strip()
+                    tag_matched = f"Translated [{resolved_upstream}]"
+                    matched_token = f"{rule_inst.rule_code}: {tag_matched}"
+                    t4_rule_hit = True
+                    break
+
+            # Track B: High-Speed Substring Fallback Scan
+            if not t4_rule_hit and resolved_upstream in {"none", "suspense account"}:
+                for rule_inst, compiled_tags, metadata in t4_lookup:
+                    rule_direction = (rule_inst.entry_type or "").strip().lower()
+                    if (rule_direction == "credit" and credit_val <= 0) or (
+                        rule_direction == "debit" and debit_val <= 0
+                    ):
+                        continue
+                    for tag_str, pattern in compiled_tags:
+                        if tag_str in narration_clean or pattern.search(
+                            narration_clean
+                        ):
+                            meta_cat = metadata.get("category", "").strip()
+                            meta_sub = metadata.get("subcategory", "").strip()
+                            tag_matched = f"Text match [{tag_str}]"
+                            matched_token = f"{rule_inst.rule_code}: {tag_matched}"
+                            t4_rule_hit = True
+                            break
+                    if t4_rule_hit:
+                        break
+
+            # Consolidate Tier 4 Target Outputs
+            if t4_rule_hit:
+                if meta_cat and meta_cat.lower() not in {"none", ""}:
+                    s4_cat = meta_cat
+                    s4_sub = (
+                        meta_sub
+                        if meta_sub and meta_sub.lower() not in {"none", ""}
+                        else "Suspense Account"
+                    )
+                else:
+                    s4_cat, s4_sub = cls.resolve_directional_placement(
+                        credit_val, meta_sub
+                    )
+            else:
+                if resolved_upstream not in {"none", "suspense account"}:
+                    s4_cat = (
+                        s2_cat
+                        if s2_cat != "None"
+                        else (s1_cat if s1_cat != "None" else s3_cat)
+                    )
+                    s4_sub = (
+                        s2_sub
+                        if s2_sub != "None"
+                        else (s1_sub if s1_sub != "None" else s3_sub)
+                    )
+                else:
+                    s4_cat, s4_sub = cls.resolve_directional_placement(
+                        credit_val, "Suspense Account"
+                    )
+
+            # =========================================================================
+            # 🏛️ THE ELECTION ROUTER & CARD ACCOUNTING AGGREGATIONS
+            # =========================================================================
+            if s2_cat != "None":
+                final_cat = s4_cat if t4_rule_hit else s2_cat
+                final_sub = s4_sub if t4_rule_hit else s2_sub
+                elected_tier, confidence = 2, 98
+                winner_token = (
+                    f"Internal Transfers: {matched_token if t4_rule_hit else s2_cat}"
+                )
+                summary_counts[
+                    "masterRulebook" if t4_rule_hit else "internalTransfers"
+                ] += 1
+            elif s1_cat != "None":
+                final_cat = s4_cat if t4_rule_hit else s1_cat
+                final_sub = s4_sub if t4_rule_hit else s1_sub
+                elected_tier, confidence = 1, 95
+                winner_token = (
+                    f"System Rules: {matched_token if t4_rule_hit else s1_cat}"
+                )
+                summary_counts["masterRulebook" if t4_rule_hit else "systemRules"] += 1
+            elif s3_cat != "None":
+                final_cat = s4_cat if t4_rule_hit else s3_cat
+                final_sub = s4_sub if t4_rule_hit else s3_sub
+                elected_tier, confidence = 3, 75
+                winner_token = (
+                    f"Ledger Layout: {matched_token if t4_rule_hit else s3_cat}"
+                )
+                summary_counts["masterRulebook" if t4_rule_hit else "ledgerLayout"] += 1
+            else:
+                final_cat, final_sub = s4_cat, s4_sub
+                elected_tier = 4 if t4_rule_hit else 0
+                confidence = 85 if t4_rule_hit else 50
+                winner_token = matched_token if t4_rule_hit else "Golden Rule Fallback"
+                summary_counts["masterRulebook" if t4_rule_hit else "fallback"] += 1
+
+            # Compile serialization queue payload data packet
             serialized_queue.append(
                 {
                     "wip_id": str(wip_row.id),
@@ -209,23 +459,375 @@ class WIPReconciliationEngine:
                     "debit": debit_val,
                     "credit": credit_val,
                     "tier1_metrics": {
-                        "active_tier_level": hit_tier,
-                        "matched_keyword_token": matched_token,
-                        "execution_weight": (
-                            100 if hit_tier == 1 else (90 if hit_tier == 2 else 50)
-                        ),
-                        "confidence_level": (
-                            100 if hit_tier == 1 else (95 if hit_tier == 2 else 20)
-                        ),
+                        "active_tier_level": elected_tier,
+                        "matched_keyword_token": winner_token,
+                        "execution_weight": [100, 90, 80, 70, 50][min(elected_tier, 4)],
+                        "confidence_level": confidence,
                         "t1_category": s1_cat,
                         "t1_subcategory": s1_sub,
                         "t2_category": s2_cat,
                         "t2_subcategory": s2_sub,
+                        "t3_category": s3_cat,
+                        "t3_subcategory": s3_sub,
+                        "t4_category": s4_cat,
+                        "t4_subcategory": s4_sub,
+                        "elected_category": final_cat,
+                        "elected_subcategory": final_sub,
                     },
                 }
             )
 
-        return {"workspace_queue": serialized_queue}
+        return {"workspace_queue": serialized_queue, "summary_stats": summary_counts}
+
+
+# class WIPReconciliationEngine2:
+#     """
+#     ⚡ PARALLEL ENGINE WITH MODULAR DIRECTIONAL OVERRIDES
+#     """
+
+#     @staticmethod
+#     def resolve_directional_placement(
+#         credit_val: float, rule_subcategory: str
+#     ) -> tuple:
+#         """
+#         🎯 REUSABLE CORE HELPER WITH TEXT SANITIZATION
+#         Enforces category anchoring based strictly on cash vector direction (Dr/Cr)
+#         and prevents generic words ('Expense' / 'Income') from leaking into subcategories.
+#         """
+#         # 1. Force the top-level category based strictly on Dr vs Cr flow
+#         if credit_val > 0:
+#             category = "Income"
+#         else:
+#             category = "Expenses"
+
+#         # Clean and normalize the incoming database string text
+#         sub_clean = str(rule_subcategory).strip() if rule_subcategory else ""
+
+#         # 🎯 THE GUARDRAIL: If subcategory is empty, "None", or just repeats generic words, force Suspense
+#         if not sub_clean or sub_clean.lower() in [
+#             "none",
+#             "expense",
+#             "expenses",
+#             "income",
+#             "incomes",
+#         ]:
+#             subcategory = "Suspense Account"
+#         else:
+#             subcategory = sub_clean
+
+#         return category, subcategory
+
+#     @classmethod
+#     def evaluate_account_queue(cls, account_id: int) -> dict:
+#         # 1a. Load Tier 1 Reference (Known System Defaults)
+#         t1_categories = MasterFinancialCategory.objects.filter(
+#             category_type="KNOWN_DEFAULT"
+#         )
+#         t1_lookup = []
+#         for m_cat in t1_categories:
+#             if isinstance(m_cat.keys, dict):
+#                 k1 = (m_cat.keys.get("key1") or "").strip().lower()
+#                 k2 = (m_cat.keys.get("key2") or "").strip().lower()
+#                 if k1:
+#                     t1_lookup.append((m_cat, k1, k2))
+
+#         # 1b. Load Tier 2 Reference (Self Internal Account Transfers)
+#         t2_categories = MasterFinancialCategory.objects.filter(
+#             category_type="SELF_TRANSFER"
+#         )
+#         t2_lookup = []
+#         for m_cat in t2_categories:
+#             if isinstance(m_cat.keys, dict):
+#                 k1 = (m_cat.keys.get("key1") or "").strip().lower()
+#                 k2 = (m_cat.keys.get("key2") or "").strip().lower()
+#                 if k1:
+#                     t2_lookup.append((m_cat, k1, k2))
+
+#         # 1c. Load Tier 3 Reference (Balance Sheet Core Layout Targets)
+#         t3_categories = MasterFinancialCategory.objects.filter(category_type="REGULAR")
+#         t3_lookup = []
+#         for m_cat in t3_categories:
+#             target_item = (m_cat.categories_items or "").strip().lower()
+#             if target_item:
+#                 t3_lookup.append((m_cat, target_item))
+
+#         # 🎯 1d. Load Tier 4 Reference (Direct from the native AccountingRule book table)
+#         t4_categories = AccountingRule.objects.filter(is_active="1")
+#         t4_lookup = []
+#         for rule_inst in t4_categories:
+#             # Safely decode description_tags JSON array from your table
+#             tags = (
+#                 rule_inst.description_tags
+#                 if isinstance(rule_inst.description_tags, list)
+#                 else []
+#             )
+#             if isinstance(rule_inst.description_tags, str):
+#                 try:
+#                     tags = json.loads(rule_inst.description_tags)
+#                 except json.JSONDecodeError:
+#                     tags = []
+
+#             # Safely decode rule_metadata JSON object from your table
+#             metadata = (
+#                 rule_inst.rule_metadata
+#                 if isinstance(rule_inst.rule_metadata, dict)
+#                 else {}
+#             )
+#             if isinstance(rule_inst.rule_metadata, str):
+#                 try:
+#                     metadata = json.loads(rule_inst.rule_metadata)
+#                 except json.JSONDecodeError:
+#                     metadata = {}
+
+#             if tags:
+#                 # Normalize tags to lower case for ultra-fast loop comparison
+#                 clean_tags = [str(t).strip().lower() for t in tags if t]
+#                 t4_lookup.append((rule_inst, clean_tags, metadata))
+
+#         # 2. Fetch target WIP records
+#         active_wip_rows = WIPEvaluationMatrix.objects.filter(
+#             account_id=account_id, is_split_component=False
+#         ).select_related("staging_line")
+
+#         serialized_queue = []
+
+#         # 3. Processing Loop
+#         for wip_row in active_wip_rows:
+#             raw_narration = (
+#                 wip_row.staging_line.narration if wip_row.staging_line else ""
+#             )
+#             narration_clean = raw_narration.strip().lower()
+
+#             try:
+#                 debit_val = float(wip_row.debit or 0)
+#                 credit_val = float(wip_row.credit or 0)
+#             except (ValueError, TypeError):
+#                 debit_val, credit_val = 0.0, 0.0
+
+#             # Base placeholders default strictly to "None" strings
+#             s1_cat, s1_sub = "None", "None"
+#             s2_cat, s2_sub = "None", "None"
+#             s3_cat, s3_sub = "None", "None"
+#             s4_cat, s4_sub = "None", "None"  # Tier 4 placeholder registers
+
+#             matched_token = "None"
+#             hit_tier = 0
+
+#             # Internal register to preserve the raw string name for Tier 3 cross-referencing
+#             t1_raw_db_category = "None"
+
+#             # 🛑 PASS A: PURE TIER 1 CHECK
+#             for cat_inst, k1, k2 in t1_lookup:
+#                 if k1 in narration_clean:
+#                     if not k2 or (k2 and k2 in narration_clean):
+#                         t1_raw_db_category = (cat_inst.act_category or "").strip()
+
+#                         if t1_raw_db_category and t1_raw_db_category.lower() not in [
+#                             "none",
+#                             "",
+#                             "income",
+#                             "expenses",
+#                         ]:
+#                             s1_cat = t1_raw_db_category
+#                             sub_clean = (
+#                                 str(cat_inst.act_subcategory).strip()
+#                                 if cat_inst.act_subcategory
+#                                 else ""
+#                             )
+#                             if not sub_clean or sub_clean.lower() in [
+#                                 "none",
+#                                 "expense",
+#                                 "expenses",
+#                                 "income",
+#                                 "incomes",
+#                             ]:
+#                                 s1_sub = "Suspense Account"
+#                             else:
+#                                 s1_sub = sub_clean
+#                         else:
+#                             s1_cat, s1_sub = cls.resolve_directional_placement(
+#                                 credit_val=credit_val,
+#                                 rule_subcategory=cat_inst.act_subcategory,
+#                             )
+
+#                         matched_token = k1 if not k2 else f"{k1} + {k2}"
+#                         hit_tier = 1
+#                         break
+
+#             # 🔄 PASS B: PURE TIER 2 CHECK (Self-Transfers Only)
+#             for cat_inst, k1, k2 in t2_lookup:
+#                 if k1 in narration_clean:
+#                     if not k2 or (k2 and k2 in narration_clean):
+#                         if (
+#                             cat_inst.act_category
+#                             and cat_inst.act_category.strip() not in ["None", ""]
+#                         ):
+#                             s2_cat = cat_inst.act_category.strip()
+#                             sub_clean = (
+#                                 str(cat_inst.act_subcategory).strip()
+#                                 if cat_inst.act_subcategory
+#                                 else ""
+#                             )
+#                             s2_sub = (
+#                                 "Suspense Account"
+#                                 if sub_clean.lower()
+#                                 in ["none", "expense", "expenses", "income", "incomes"]
+#                                 else sub_clean
+#                             )
+#                         else:
+#                             s2_cat, s2_sub = cls.resolve_directional_placement(
+#                                 credit_val=credit_val,
+#                                 rule_subcategory=cat_inst.act_subcategory,
+#                             )
+
+#                         if hit_tier == 0:
+#                             matched_token = k1 if not k2 else f"{k1} + {k2}"
+#                             hit_tier = 2
+#                         break
+
+#             # 🎯 PASS C: PURE TIER 3 CHECK (Dynamic Directional Balance Sheet Mapping)
+#             search_target = (
+#                 t1_raw_db_category.lower()
+#                 if t1_raw_db_category != "None"
+#                 else s1_cat.lower()
+#             )
+
+#             if search_target and search_target not in [
+#                 "none",
+#                 "income",
+#                 "expenses",
+#                 "suspense account",
+#             ]:
+#                 for cat_inst, target_item in t3_lookup:
+#                     if target_item == search_target:
+#                         db_row_cat = (cat_inst.act_category or "").strip().lower()
+
+#                         if credit_val > 0:
+#                             if "expense" in db_row_cat:
+#                                 continue
+#                         else:
+#                             if "income" in db_row_cat or db_row_cat == "oci":
+#                                 continue
+
+#                         s3_cat = (
+#                             cat_inst.act_category.strip()
+#                             if cat_inst.act_category
+#                             else "None"
+#                         )
+#                         s3_sub = (
+#                             cat_inst.act_subcategory.strip()
+#                             if cat_inst.act_subcategory
+#                             else "None"
+#                         )
+
+#                         if hit_tier == 0:
+#                             matched_token = cat_inst.categories_items
+#                             hit_tier = 3
+#                         break
+
+#             # 📖 PASS D: PURE TIER 4 CHECK (AccountingRule Table Engine)
+#             t4_rule_hit = False
+#             for rule_inst, tags, metadata in t4_lookup:
+#                 # 💸 Rule Gate 1: Cash Flow Direction Filter Match (Debit vs Credit entry_type)
+#                 rule_direction = (rule_inst.entry_type or "").strip().lower()
+#                 if rule_direction == "credit" and credit_val <= 0:
+#                     continue
+#                 if rule_direction == "debit" and debit_val <= 0:
+#                     continue
+
+#                 # 🔍 Rule Gate 2: JSON Tag Token Substring Search
+#                 tag_matched = None
+#                 for tag in tags:
+#                     if tag in narration_clean:
+#                         tag_matched = tag
+#                         break
+
+#                 if not tag_matched:
+#                     continue
+
+#                 # 🏆 Core hit extracted directly from rule_metadata values
+#                 meta_cat = metadata.get("category", "").strip()
+#                 meta_sub = metadata.get("subcategory", "").strip()
+
+#                 if meta_cat and meta_cat.lower() not in ["none", ""]:
+#                     s4_cat = meta_cat
+#                     s4_sub = (
+#                         meta_sub
+#                         if (meta_sub and meta_sub.lower() not in ["none", ""])
+#                         else "Suspense Account"
+#                     )
+#                 else:
+#                     s4_cat, s4_sub = cls.resolve_directional_placement(
+#                         credit_val=credit_val, rule_subcategory=meta_sub
+#                     )
+
+#                 if hit_tier == 0:
+#                     matched_token = f"{rule_inst.rule_code}: {tag_matched}"
+#                     hit_tier = 4
+
+#                 t4_rule_hit = True
+#                 break
+
+#             # 🎯 THE GOLDEN RULE TWEAK: If it misses all 700+ explicit rules, enforce the directional fallback
+#             if not t4_rule_hit:
+#                 s4_cat, s4_sub = cls.resolve_directional_placement(
+#                     credit_val=credit_val, rule_subcategory="Suspense Account"
+#                 )
+
+#             # Append the structured parallel payload telemetry packet
+#             serialized_queue.append(
+#                 {
+#                     "wip_id": str(wip_row.id),
+#                     "date": (
+#                         wip_row.raw_statement_date.strftime("%Y-%m-%d")
+#                         if wip_row.raw_statement_date
+#                         else ""
+#                     ),
+#                     "narration": raw_narration,
+#                     "debit": debit_val,
+#                     "credit": credit_val,
+#                     "tier1_metrics": {
+#                         "active_tier_level": hit_tier,
+#                         "matched_keyword_token": matched_token,
+#                         "execution_weight": (
+#                             100
+#                             if hit_tier == 1
+#                             else (
+#                                 90
+#                                 if hit_tier == 2
+#                                 else (
+#                                     80
+#                                     if hit_tier == 3
+#                                     else (70 if hit_tier == 4 else 50)
+#                                 )
+#                             )
+#                         ),
+#                         "confidence_level": (
+#                             100
+#                             if hit_tier == 1
+#                             else (
+#                                 95
+#                                 if hit_tier == 2
+#                                 else (
+#                                     85
+#                                     if hit_tier == 3
+#                                     else (75 if hit_tier == 4 else 20)
+#                                 )
+#                             )
+#                         ),
+#                         "t1_category": s1_cat,
+#                         "t1_subcategory": s1_sub,
+#                         "t2_category": s2_cat,
+#                         "t2_subcategory": s2_sub,
+#                         "t3_category": s3_cat,
+#                         "t3_subcategory": s3_sub,
+#                         "t4_category": s4_cat,
+#                         "t4_subcategory": s4_sub,
+#                     },
+#                 }
+#             )
+
+#         return {"workspace_queue": serialized_queue}
 
 
 # class WIPReconciliationEngine1:
