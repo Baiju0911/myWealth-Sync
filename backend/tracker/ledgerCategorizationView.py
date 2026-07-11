@@ -20,45 +20,6 @@ from .serializers import (
 from .serviceWIP import WIPIngestionSweeper, WIPReconciliationEngine
 
 
-class AutoCategorizeStagingQueueView1(APIView):
-    """
-    🤖 TIER 1 ISOLATION PROXY ADAPTER
-    Wraps Tier 1 outputs inside expected schema boundaries to unblock frontend loading.
-    """
-
-    permission_classes = [AllowAny]
-
-    def post(self, request, *args, **kwargs):
-        account_id = request.data.get("account_id")
-        if not account_id:
-            return Response(
-                {"error": "Missing parameter tracking field: account_id"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Execute your isolated Tier 1 script
-        engine_result = WIPReconciliationEngine.evaluate_account_queue(
-            account_id=account_id
-        )
-
-        # 🎯 FIX: Inject expected structural summaries so React tables don't crash
-        queue_data = engine_result.get("workspace_queue", [])
-        total_nodes = len(queue_data)
-
-        return Response(
-            {
-                "account_id": account_id,
-                "evaluation_summary": {
-                    "staged_for_bulk_high": total_nodes,
-                    "staged_for_bulk_medium": 0,
-                    "uncategorized_vault_zero": 0,
-                },
-                "workspace_queue": queue_data,  # Delivers Tier 1 payload block smoothly
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
 class AutoCategorizeStagingQueueView(APIView):
     """
     🤖 TIER 1 ISOLATION PROXY ADAPTER
@@ -75,14 +36,25 @@ class AutoCategorizeStagingQueueView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Run your isolated Tier 1 engine script
+        # Run your isolated multi-track evaluation matrix engine script
         engine_result = WIPReconciliationEngine.evaluate_account_queue(
             account_id=account_id
         )
 
-        # 🎯 FIX: Pull directly from 'workspace_queue' keys safely inside the engine return dictionary
         workspace_queue = engine_result.get("workspace_queue", [])
         total_nodes = len(workspace_queue)
+
+        # 🎯 THE VIEW COUPLING RESOLUTION: Pull the matrix stats calculated by the parallel threads
+        matrix_summary_stats = engine_result.get(
+            "matrix_summary_stats",
+            {
+                "t1_system": {"real": 0, "suspense": 0},
+                "t2_internal": {"real": 0, "suspense": 0},
+                "t3_layout": {"real": 0, "suspense": 0},
+                "t4_rulebook": {"real": 0, "suspense": 0},
+                "total_processed": total_nodes,
+            },
+        )
 
         return Response(
             {
@@ -92,7 +64,8 @@ class AutoCategorizeStagingQueueView(APIView):
                     "staged_for_bulk_medium": 0,
                     "uncategorized_vault_zero": 0,  # Keeps both tabs active for data visualization
                 },
-                "workspace_queue": workspace_queue,  # Delivers Tier 1 payload block smoothly
+                "workspace_queue": workspace_queue,  # Delivers matrix payload block smoothly
+                "matrix_summary_stats": matrix_summary_stats,  # 🎯 THE FIX: Sends the complete Real vs Suspense matrix structure down to the frontend!
             },
             status=status.HTTP_200_OK,
         )
