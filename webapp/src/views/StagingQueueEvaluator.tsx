@@ -51,6 +51,7 @@ interface WorkspaceNode extends BaseWorkspaceNode {
 export default function StagingQueueEvaluator() {
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('bulk-high');
   const [workspaceRows, setWorkspaceRows] = useState<WorkspaceNode[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -124,6 +125,8 @@ export default function StagingQueueEvaluator() {
   const handleBulkClearance = async (rowsToApprove: any[]) => {
     try {
       await stagingQueueApi.bulkCommitLedger(selectedAccountId, rowsToApprove.map(r => r.wip_id));
+      setSelectedRowKeys([]);
+      //setWorkspaceRows([]);
       await loadWorkspaceMatrix(selectedAccountId);
     } catch (err) {
       setErrorMsg('Atomic bulk write failed or rejected by schema validation models.');
