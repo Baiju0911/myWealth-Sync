@@ -5,11 +5,9 @@ from .models import (
     Role,
     Permission,
     Account,
-    TransactionHeader,
     JournalEntry,
     MasterFinancialCategory,
     AccountingRule,
-    JournalEntryMapping,
     DirectionalVectorOverride,
 )
 
@@ -49,11 +47,10 @@ class MasterFinancialCategoryAdmin(admin.ModelAdmin):
         "act_subcategory",
         "categories_items",
         "dashboard_cat",
-        "get_primary_match_key",  # 🎯 FIXED: Points to our custom json getter method below
+        "get_primary_match_key",  # 🎯 Points to our custom json getter method below
     )
     list_filter = ("category_type", "act_category", "dashboard_cat")
 
-    # 🎯 FIXED: Removed match_key1 and match_key2 since Django cannot search inside raw JSON strings out-of-the-box
     search_fields = (
         "categories_items",
         "act_subcategory",
@@ -62,24 +59,16 @@ class MasterFinancialCategoryAdmin(admin.ModelAdmin):
     )
     ordering = ("category_type", "act_category", "categories_items")
 
-    # Custom getter method to display the nested string token in your admin dashboard grid cleanly
     def get_primary_match_key(self, obj):
         if obj.keys and isinstance(obj.keys, dict):
             return obj.keys.get("key1", "")
         return ""
 
-    # Set the column title header label name inside Django Admin interface grid
     get_primary_match_key.short_description = "Primary Match Key"
-
-
-# ==============================================================================
-# 🎯 2. METADATA RULES & TAXONOMY CONFIGURATIONS
-# ==============================================================================
 
 
 @admin.register(AccountingRule)
 class AccountingRuleAdmin(admin.ModelAdmin):
-    # 🎯 FIXED: Display the type by calling a custom method that extracts it from JSON
     list_display = (
         "rule_code",
         "rule_title",
@@ -89,19 +78,15 @@ class AccountingRuleAdmin(admin.ModelAdmin):
         "is_active",
     )
 
-    # 🎯 FIXED: Removed 'golden_rule_type' from list_filter since it can't index inside JSON directly
     list_filter = ("entry_type", "is_active")
-
     search_fields = ("rule_code", "rule_title", "description_tags")
     ordering = ("rule_priority",)
 
-    # Custom getter method to show the value in your admin dashboard list grid view cleanly
     def get_golden_rule_type(self, obj):
         if obj.rule_metadata and isinstance(obj.rule_metadata, dict):
             return obj.rule_metadata.get("golden_rule_type", "None")
         return "None"
 
-    # Set the column title header name inside Django Admin interface view
     get_golden_rule_type.short_description = "Golden Rule Type"
 
 
@@ -117,61 +102,46 @@ class AccountAdmin(admin.ModelAdmin):
     search_fields = ["name", "ifsc_code", "branch_name"]
 
 
-class JournalEntryMappingInline(admin.StackedInline):
-    """
-    🎯 THE EXTENSION LAYER BRIDGE
-    Allows you to instantly view or edit the multi-tier personal finance categories
-    and applied rules right inside the individual splitting row view!
-    """
-
-    model = JournalEntryMapping
-    extra = 0
-    autocomplete_fields = ["assigned_category", "applied_rule"]
-
-
-class JournalEntryInline(admin.TabularInline):
-    """
-    Shows Debit and Credit splits nested cleanly right inside the Parent Transaction layout view
-    """
-
-    model = JournalEntry
-    extra = 2
-
-
-@admin.register(TransactionHeader)
-class TransactionHeaderAdmin(admin.ModelAdmin):
-    list_display = ("date", "narration", "source", "user", "upi_rrn", "created_at")
-    list_filter = ("source", "date")
-    search_fields = ("narration", "upi_rrn", "user__email")
-    inlines = [JournalEntryInline]
-
-
 @admin.register(JournalEntry)
 class JournalEntryAdmin(admin.ModelAdmin):
+    # 🎯 UPDATED: Reflects the flat, decoupled table grid architecture
     list_display = (
-        "transaction",
+        "transaction_date",
         "account",
-        "amount",
-        "get_mapping_item",
+        "row_identifier",
+        "debit",
+        "credit",
+        "get_resolved_category",
         "created_at",
     )
+
     list_filter = (
-        "account__account_type",
-        "category_mapping__assigned_category__act_category",
+        "account",
+        "transaction_date",
     )
+
     search_fields = (
-        "transaction__narration",
+        "row_identifier",
         "account__name",
-        "category_mapping__assigned_category__categories_items",
     )
-    inlines = [JournalEntryMappingInline]
 
-    def get_mapping_item(self, obj):
-        if hasattr(obj, "category_mapping"):
-            return f"🏷️ {obj.category_mapping.assigned_category.categories_items}"
-        return "⚠️ Unmapped"
+    # 🤖 Pulls the engine snapshot evaluation metadata cleanly for display in the grid columns
+    def get_resolved_category(self, obj):
+        if obj.evaluation_matrix_snapshot and isinstance(
+            obj.evaluation_matrix_snapshot, dict
+        ):
+            resolved_cat = obj.evaluation_matrix_snapshot.get("resolved_category")
+            resolved_sub = obj.evaluation_matrix_snapshot.get("resolved_subcategory")
+            if resolved_cat:
+                return f"🏷️ {resolved_cat} -> {resolved_sub}"
 
-    get_mapping_item.short_description = "Personal Finance Category"
+            # Context indicator for the balancing bank statement anchor row side
+            if obj.evaluation_matrix_snapshot.get("leg_context") == "LIQUIDITY_CORE":
+                return "🏦 Bank Account Pool Leg"
+
+        return "⚠️ Unmapped / Neutral Anchor"
+
+    get_resolved_category.short_description = "Resolved Rule Category"
 
 
 @admin.register(DirectionalVectorOverride)

@@ -19,6 +19,7 @@ from .ledgerCategorizationView import (
     AutoCategorizeStagingQueueView,
     MasterFinancialCategoryViewSet,
     AccountingRuleViewSet,
+    CommitStagingQueue,
 )
 
 urlpatterns = [
@@ -146,5 +147,10 @@ urlpatterns += [
         "staging/auto-categorize/",
         AutoCategorizeStagingQueueView.as_view(),
         name="auto-categorize-staging",
+    ),
+    path(
+        "accounting/bulk-commit-ledger/",
+        CommitStagingQueue,
+        name="commit-staging-journal",
     ),
 ]

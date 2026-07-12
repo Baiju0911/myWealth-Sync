@@ -200,23 +200,33 @@ class TransactionHeader(models.Model):
 
 class JournalEntry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    transaction = models.ForeignKey(
-        TransactionHeader, on_delete=models.CASCADE, related_name="entries"
-    )
+
+    # 🏛️ Core Context Mappings
     account = models.ForeignKey(
         Account, on_delete=models.PROTECT, related_name="journal_lines"
     )
-    # Positive = Debit (Asset Up, Expense Up)
-    # Negative = Credit (Asset Down, Income Up, Liability Up)
-    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    # 📅 Date & Tracking Vectors
+    transaction_date = models.DateField(default=timezone.now)
+
+    # 🛡️ THE AUDIT LINK: Matches the Hex fingerprint signature inside StatementStagingLine
+    row_identifier = models.CharField(max_length=64, db_index=True)
+
+    # 💰 Explicit Double-Entry Matrix Fields
+    debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+
+    # 🤖 Multi-Tier Evaluation Metadata JSON Repository
+    evaluation_matrix_snapshot = models.JSONField(
+        default=dict,
+        help_text="Stores: {t1_cat, t2_cat, t3_cat, resolved_cat, resolved_sub, applied_rule}",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "ledger_journal_entry"
         verbose_name_plural = "Journal Entries"
-
-    def __str__(self):
-        type_prefix = "Dr" if self.amount >= 0 else "Cr"
-        return f"{type_prefix}: {self.account.name} | Row Value: ₹{abs(self.amount)}"
 
 
 ########
@@ -718,6 +728,12 @@ class WIPEvaluationMatrix(models.Model):
     confidence_level = models.CharField(
         max_length=10, default="ZERO"
     )  # HIGH, MEDIUM, ZERO
+
+    processing_status = models.CharField(
+        max_length=20,
+        default="PENDING",
+        choices=[("PENDING", "Pending Ledger Sync"), ("COMPLETED", "Synced to Ledger")],
+    )
 
     class Meta:
         db_table = "ledger_wip_evaluation_matrix"
