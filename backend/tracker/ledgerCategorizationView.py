@@ -200,7 +200,7 @@ class AccountingRuleViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-def execute_bulk_sync_release(user, account_entity, wip_row_ids):
+def execute_bulk_sync_release_older(user, account_entity, wip_row_ids):
     """
     Executes an optimized, normalized double-entry release:
     1. Generates 2 flat JournalEntry rows cross-referenced via Hex row footprints.
@@ -282,6 +282,222 @@ def execute_bulk_sync_release(user, account_entity, wip_row_ids):
             )
 
             # 4. STATUS CLOSE: Mark matching source staging rows as COMPLETED
+            StatementStagingLine.objects.filter(
+                id__in=staging_line_ids_to_complete
+            ).update(routing_status="COMPLETED")
+
+        return {"status": "success", "processed_nodes": len(wip_row_ids)}
+
+    except Exception as e:
+        return {"status": "error", "message": f"Database transaction aborted: {str(e)}"}
+
+
+def execute_bulk_sync_release_older1(user, account_entity, wip_row_ids):
+    """
+    Executes an optimized, normalized double-entry release using your exact models:
+    1. Generates Leg 1 (Liquidity) targeting the real physical bank Account entity.
+    2. Generates Leg 2 (Taxonomy) targeting a system-wide category accounting node.
+    3. Cross-references both entries via the identical Hex row footprint anchor.
+    """
+    try:
+        with transaction.atomic():
+            # Fetch the pending sandboxed lines
+            wip_nodes = WIPEvaluationMatrix.objects.filter(
+                id__in=wip_row_ids, account=account_entity, processing_status="PENDING"
+            ).select_related("staging_line", "applied_rule")
+
+            if not wip_nodes.exists():
+                return {
+                    "status": "error",
+                    "message": "No active staging nodes found to process.",
+                }
+
+            # 🎯 GET OR CREATE THE TAXONOMY GATEWAY ACCOUNT:
+            # Spawns a single master node inside your existing Account table
+            # to handle Leg 2 classifications cleanly without a COA table.
+            taxonomy_master_account, _ = Account.objects.get_or_create(
+                name="System Taxonomy Master",
+                defaults={
+                    "bank": account_entity.bank,  # Inherit the bank reference context
+                    "account_type": "SYSTEM_CORE",
+                    "ifsc_code": "SYSTEM00000",
+                    "branch_name": "System Engine Core",
+                    "address": "In-Memory System Virtual Gateway",
+                },
+            )
+
+            entries_to_create = []
+            staging_line_ids_to_complete = []
+
+            for node in wip_nodes:
+                staging_line_ids_to_complete.append(node.staging_line_id)
+
+                # 🏦 BANK DIRECTION CONVENTION CHECK:
+                # node.debit > 0 means money left the account (Outflow)
+                # node.credit > 0 means money entered the account (Inflow)
+                is_outflow = node.debit > 0
+                amount_value = node.debit if is_outflow else node.credit
+                decimal_amount = Decimal(str(amount_value))
+
+                # Inherit the exact hex code token anchor from staging
+                true_hex_anchor = node.staging_line.row_identifier
+
+                # Compile the full multi-tier execution audit trace payload safely
+                matrix_snapshot = {
+                    "t1_category": node.t1_category,
+                    "t1_subcategory": node.t1_subcategory,
+                    "t2_category": node.t2_category,
+                    "t2_subcategory": node.t2_subcategory,
+                    "t3_category": node.t3_category,
+                    "t3_subcategory": node.t3_subcategory,
+                    "resolved_category": node.resolved_category,
+                    "resolved_subcategory": node.resolved_subcategory,
+                    "confidence_score": node.confidence_score,
+                    "applied_rule_code": (
+                        node.applied_rule.rule_code if node.applied_rule else "MANUAL"
+                    ),
+                }
+
+                # ─── LEG 1: THE LIQUIDITY POOL (BANK LEGER SIDE) ───
+                # Outflow: Credits the bank account (reduces cash balance)
+                # Inflow: Debits the bank account (increases cash balance)
+                entries_to_create.append(
+                    JournalEntry(
+                        account=account_entity,  # HDFC / SBI physical instance
+                        transaction_date=node.raw_statement_date,
+                        row_identifier=true_hex_anchor,
+                        debit=decimal_amount if not is_outflow else Decimal("0.00"),
+                        credit=Decimal("0.00") if not is_outflow else decimal_amount,
+                        evaluation_matrix_snapshot={"leg_context": "LIQUIDITY_CORE"},
+                    )
+                )
+
+                # ─── LEG 2: THE CONTRA MATRIX DESTINATION (TAXONOMY SIDE) ───
+                # Outflow: Debits the taxonomy master (tracks expenses)
+                # Inflow: Credits the taxonomy master (tracks revenue)
+                entries_to_create.append(
+                    JournalEntry(
+                        account=taxonomy_master_account,  # 👈 Routed to our system master node
+                        transaction_date=node.raw_statement_date,
+                        row_identifier=true_hex_anchor,
+                        debit=decimal_amount if is_outflow else Decimal("0.00"),
+                        credit=Decimal("0.00") if is_outflow else decimal_amount,
+                        evaluation_matrix_snapshot=matrix_snapshot,  # Holds your rule classifications
+                    )
+                )
+
+            # 2. Bulk insert execution block
+            JournalEntry.objects.bulk_create(entries_to_create)
+
+            # 3. WORKSPACE STATUS CLOSE: Flag rows as COMPLETED (ready for future purges)
+            WIPEvaluationMatrix.objects.filter(id__in=wip_row_ids).update(
+                processing_status="COMPLETED"
+            )
+
+            # 4. STAGING STATUS CLOSE: Mark matching staging records out of queue
+            StatementStagingLine.objects.filter(
+                id__in=staging_line_ids_to_complete
+            ).update(routing_status="COMPLETED")
+
+        return {"status": "success", "processed_nodes": len(wip_row_ids)}
+
+    except Exception as e:
+        return {"status": "error", "message": f"Database transaction aborted: {str(e)}"}
+
+
+def execute_bulk_sync_release(user, account_entity, wip_row_ids):
+    """
+    Executes a structurally isolated double-entry release:
+    1. Guarantees 100% matching hex keys by anchoring directly to row_footprint_hash.
+    2. Dynamically isolates the virtual taxonomy master from physical bank accounts.
+    """
+    try:
+        with transaction.atomic():
+            wip_nodes = WIPEvaluationMatrix.objects.filter(
+                id__in=wip_row_ids, account=account_entity, processing_status="PENDING"
+            ).select_related("staging_line", "applied_rule")
+
+            if not wip_nodes.exists():
+                return {
+                    "status": "error",
+                    "message": "No active staging nodes found to process.",
+                }
+
+            # 🎯 SYSTEM ACCOUNT ISOLATION SAFEGUARD:
+            # We enforce a dedicated virtual name to prevent it from overlapping
+            # with your physical bank account records (like account_id 8).
+            taxonomy_master_account, _ = Account.objects.get_or_create(
+                name="SYSTEM_TAXONOMY_INTEGRATION_NODE",
+                defaults={
+                    "bank": account_entity.bank,
+                    "account_type": "SYSTEM_CORE",
+                    "ifsc_code": "SYS00000000",
+                    "branch_name": "System Kernel",
+                    "address": "Virtual Ledger Gateway Node",
+                },
+            )
+
+            entries_to_create = []
+            staging_line_ids_to_complete = []
+
+            for node in wip_nodes:
+                staging_line_ids_to_complete.append(node.staging_line_id)
+
+                is_outflow = node.debit > 0
+                amount_value = node.debit if is_outflow else node.credit
+                decimal_amount = Decimal(str(amount_value))
+
+                # 🎯 CORRECTION: Use row_footprint_hash directly to guarantee 100% identical hex matching pairs
+                true_hex_anchor = node.row_footprint_hash
+
+                matrix_snapshot = {
+                    "t1_category": node.t1_category,
+                    "t1_subcategory": node.t1_subcategory,
+                    "t2_category": node.t2_category,
+                    "t2_subcategory": node.t2_subcategory,
+                    "t3_category": node.t3_category,
+                    "t3_subcategory": node.t3_subcategory,
+                    "resolved_category": node.resolved_category,
+                    "resolved_subcategory": node.resolved_subcategory,
+                    "confidence_score": node.confidence_score,
+                    "applied_rule_code": (
+                        node.applied_rule.rule_code if node.applied_rule else "MANUAL"
+                    ),
+                }
+
+                # ─── LEG 1: THE LIQUIDITY POOL (BANK SIDE) ───
+                entries_to_create.append(
+                    JournalEntry(
+                        account=account_entity,  # Physical Bank (e.g., account_id 3)
+                        transaction_date=node.raw_statement_date,
+                        row_identifier=true_hex_anchor,
+                        debit=decimal_amount if not is_outflow else Decimal("0.00"),
+                        credit=Decimal("0.00") if not is_outflow else decimal_amount,
+                        evaluation_matrix_snapshot={"leg_context": "LIQUIDITY_CORE"},
+                    )
+                )
+
+                # ─── LEG 2: THE CONTRA POOL (TAXONOMY SIDE) ───
+                entries_to_create.append(
+                    JournalEntry(
+                        account=taxonomy_master_account,  # Isolated Virtual Node
+                        transaction_date=node.raw_statement_date,
+                        row_identifier=true_hex_anchor,
+                        debit=decimal_amount if is_outflow else Decimal("0.00"),
+                        credit=Decimal("0.00") if is_outflow else decimal_amount,
+                        evaluation_matrix_snapshot=matrix_snapshot,
+                    )
+                )
+
+            # 2. Bulk create transactions simultaneously
+            JournalEntry.objects.bulk_create(entries_to_create)
+
+            # 3. Close out the workspace sandbox rows
+            WIPEvaluationMatrix.objects.filter(id__in=wip_row_ids).update(
+                processing_status="COMPLETED"
+            )
+
+            # 4. Mark source staging rows out of the pending queue
             StatementStagingLine.objects.filter(
                 id__in=staging_line_ids_to_complete
             ).update(routing_status="COMPLETED")
