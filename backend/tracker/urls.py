@@ -1,5 +1,5 @@
 # S:\_BaijSoft\myWealth-Sync\backend\tracker\urls.py
-from django.urls import path
+from django.urls import path, include
 from .views import (
     SystemConfigView,
     AccountListCreateView,
@@ -153,4 +153,9 @@ urlpatterns += [
         CommitStagingQueue,
         name="commit-staging-journal",
     ),
+]
+
+
+urlpatterns += [
+    path("dashboard/", include("tracker.dashboard.urls")),
 ]
