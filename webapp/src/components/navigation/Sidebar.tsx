@@ -18,6 +18,7 @@ export default function Sidebar({ currentView, setCurrentView }: SidebarProps) {
     { id: 'schemas', label: 'Mapping Schemas', icon: '📋' }, 
     { id: 'AccountingHeaders', label: 'Accounting Headers', icon: '📋' },
     { id: 'StagingQueueEvaluator', label: 'Staging Queue Evaluator', icon: '📋' },
+    { id: 'Ledgerdashboard', label: 'ledger Dashboard', icon: '📋' },
   ];
 
   return (
