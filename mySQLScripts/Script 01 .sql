@@ -38,7 +38,7 @@ JOIN ledger_account a ON j.account_id = a.id
 WHERE j.row_identifier IN (
     SELECT row_identifier 
     FROM ledger_journal_entry 
-    WHERE account_id = 7
+    
 )
 GROUP BY j.account_id, a.name, a.account_type;
 
@@ -143,3 +143,169 @@ FROM ledger_journal_entry j
 WHERE j.row_identifier IN (SELECT row_identifier FROM ledger_journal_entry WHERE account_id = 7)
 GROUP BY j.row_identifier
 HAVING transaction_variance != 0;
+
+
+
+
+
+
+
+
+SELECT 
+    CASE 
+        WHEN a.account_type = 'SYSTEM_CORE' THEN CONCAT('Virtual System Node (ID: ', a.id, ' - ', a.name, ')')
+        ELSE CONCAT('Real Physical Account (ID: ', a.id, ' - ', a.name, ')')
+    END AS account_node_context,
+    COUNT(*) AS entries_processed,
+    SUM(j.debit) AS entry_debit_total,
+    SUM(j.credit) AS entry_credit_total,
+    ROUND(SUM(j.debit) - SUM(j.credit), 2) AS node_variance
+FROM ledger_journal_entry j
+JOIN ledger_account a ON j.account_id = a.id
+WHERE j.row_identifier IN (
+    SELECT row_identifier 
+    FROM ledger_journal_entry 
+ 
+)
+GROUP BY a.id, a.name, a.account_type;
+
+
+
+select distinct(lje.account_id)  from ledger_journal_entry lje 
+
+
+
+
+
+
+
+
+SELECT 
+    id,
+    rule_code,
+    rule_title,
+    entry_type,
+    JSON_UNQUOTE(JSON_EXTRACT(rule_metadata, '$.category')) AS primary_category,
+    JSON_UNQUOTE(JSON_EXTRACT(rule_metadata, '$.subcategory')) AS subcategory,
+    description_tags
+FROM ledger_accountingrule la 
+WHERE is_active = 1
+ORDER BY id ASC;
+
+
+SELECT 
+    JSON_UNQUOTE(JSON_EXTRACT(rule_metadata, '$.category')) AS primary_category,
+    JSON_UNQUOTE(JSON_EXTRACT(rule_metadata, '$.subcategory')) AS subcategory,
+    COUNT(*) AS rule_count
+FROM ledger_accountingrule la 
+WHERE is_active = 1
+GROUP BY primary_category, subcategory
+ORDER BY primary_category, subcategory;
+
+
+
+
+
+
+SELECT 
+    resolved_category AS primary_category,
+    resolved_subcategory AS subcategory,
+    COUNT(*) AS transaction_count,
+    FORMAT(SUM(debit), 2) AS total_debit,
+    FORMAT(SUM(credit), 2) AS total_credit,
+    FORMAT(SUM(debit) - SUM(credit), 2) AS net_balance
+FROM ledger_wip_evaluation_matrix
+WHERE account_id = 3
+GROUP BY resolved_category, resolved_subcategory
+ORDER BY resolved_category, resolved_subcategory;
+
+
+
+
+
+SELECT 
+    primary_category,
+    subcategory,
+    COUNT(*) AS transaction_count,
+    FORMAT(SUM(debit), 2) AS total_debit,
+    FORMAT(SUM(credit), 2) AS total_credit,
+    FORMAT(SUM(debit) - SUM(credit), 2) AS net_balance
+FROM ledger_journal_entry lje 
+WHERE account_id = 60
+GROUP BY primary_category, subcategory
+ORDER BY primary_category, subcategory;
+
+
+
+SELECT 
+    resolved_category AS primary_category,
+    resolved_subcategory AS subcategory,
+    COUNT(*) AS transaction_count,
+    FORMAT(SUM(debit), 2) AS total_debit,
+    FORMAT(SUM(credit), 2) AS total_credit,
+    FORMAT(SUM(debit) - SUM(credit), 2) AS net_balance
+FROM ledger_journal_entry lje 
+WHERE account_id = 60
+GROUP BY resolved_category, resolved_subcategory
+ORDER BY resolved_category, resolved_subcategory;
+
+
+
+
+
+
+
+SELECT 
+    JSON_UNQUOTE(JSON_EXTRACT(j.evaluation_matrix_snapshot, '$.resolved_category')) AS primary_category,
+    JSON_UNQUOTE(JSON_EXTRACT(j.evaluation_matrix_snapshot, '$.resolved_subcategory')) AS subcategory,
+    COUNT(DISTINCT j.row_identifier) AS transaction_count,
+    
+    -- Account 3 (Physical Bank Liquidity Leg)
+    FORMAT(SUM(CASE WHEN j.account_id = 3 THEN j.debit ELSE 0 END), 2) AS bank_debit_acc3,
+    FORMAT(SUM(CASE WHEN j.account_id = 3 THEN j.credit ELSE 0 END), 2) AS bank_credit_acc3,
+    
+    -- Account 99 (System Taxonomy Integration Leg)
+    FORMAT(SUM(CASE WHEN j.account_id = 99 THEN j.debit ELSE 0 END), 2) AS taxonomy_debit_acc99,
+    FORMAT(SUM(CASE WHEN j.account_id = 99 THEN j.credit ELSE 0 END), 2) AS taxonomy_credit_acc99,
+    
+    -- Double-Entry Balance Proof (Should equal 0.00)
+    FORMAT(
+        SUM(CASE WHEN j.account_id = 3 THEN j.debit - j.credit ELSE 0 END) +
+        SUM(CASE WHEN j.account_id = 99 THEN j.debit - j.credit ELSE 0 END),
+        2
+    ) AS leg_variance_proof
+
+FROM ledger_journal_entry j
+WHERE j.row_identifier IN (
+    SELECT row_identifier FROM ledger_journal_entry WHERE account_id = 3
+)
+GROUP BY 1, 2
+ORDER BY primary_category, subcategory;
+
+
+
+
+
+
+SELECT 
+    CASE 
+        WHEN j.account_id = 3 THEN 'Account 3: Bank Liquidity Node (SIB)'
+        WHEN j.account_id = 99 THEN 'Account 99: System Taxonomy Node'
+        ELSE CONCAT('Account ID: ', j.account_id)
+    END AS account_node,
+    COALESCE(
+        JSON_UNQUOTE(JSON_EXTRACT(j.evaluation_matrix_snapshot, '$.resolved_category')),
+        'Bank Cash Movement'
+    ) AS primary_category,
+    COALESCE(
+        JSON_UNQUOTE(JSON_EXTRACT(j.evaluation_matrix_snapshot, '$.resolved_subcategory')),
+        'Liquidity Core'
+    ) AS subcategory,
+    COUNT(*) AS transaction_count,
+    FORMAT(SUM(j.debit), 2) AS total_debit,
+    FORMAT(SUM(j.credit), 2) AS total_credit,
+    FORMAT(SUM(j.debit) - SUM(j.credit), 2) AS net_balance
+FROM ledger_journal_entry j
+WHERE j.account_id IN (3, 99)
+GROUP BY j.account_id, 2, 3
+ORDER BY j.account_id, primary_category, subcategory;
