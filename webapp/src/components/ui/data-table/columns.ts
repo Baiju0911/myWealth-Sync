@@ -302,3 +302,51 @@ export const UNCATEGORIZED_VAULT_COLUMNS: ColumnConfig[] = [
   },
   { key: 'actions', label: 'Manual Allocation', width: '10%', align: 'center' },
 ];
+
+export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'category',
+    label: 'Primary Class',
+    width: '15%',
+    align: 'left',
+    textColor: 'text-zinc-200 font-bold',
+  },
+  {
+    key: 'subcategory',
+    label: 'Subcategory',
+    width: '25%',
+    align: 'left',
+    textColor: 'text-zinc-300',
+  },
+  {
+    key: 'transaction_count',
+    label: 'Txn Count',
+    width: '10%',
+    align: 'center',
+    textColor: 'text-zinc-400 font-mono text-xs',
+  },
+  {
+    key: 'total_debit',
+    label: 'Debit (DR)',
+    width: '15%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-amber-400 font-mono text-xs',
+  },
+  {
+    key: 'total_credit',
+    label: 'Credit (CR)',
+    width: '15%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-emerald-400 font-mono text-xs',
+  },
+  {
+    key: 'net_balance',
+    label: 'Net Balance',
+    width: '20%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-zinc-100 font-bold font-mono text-xs',
+  },
+];

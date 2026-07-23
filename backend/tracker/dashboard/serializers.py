@@ -1,11 +1,16 @@
 from rest_framework import serializers
 
 
+class DateBoundsSerializer(serializers.Serializer):
+    min_date = serializers.CharField(allow_null=True)
+    max_date = serializers.CharField(allow_null=True)
+    applied_from_date = serializers.CharField(allow_null=True)
+    applied_to_date = serializers.CharField(allow_null=True)
+
+
 class CategoryBreakdownSerializer(serializers.Serializer):
-    category = serializers.CharField(source="resolved_cat", default="Uncategorized")
-    subcategory = serializers.CharField(
-        source="resolved_subcat", default="Suspense Account"
-    )
+    category = serializers.CharField(allow_null=True, required=False)
+    subcategory = serializers.CharField(allow_null=True, required=False)
     transaction_count = serializers.IntegerField()
     total_debit = serializers.DecimalField(max_digits=15, decimal_places=2)
     total_credit = serializers.DecimalField(max_digits=15, decimal_places=2)
@@ -30,6 +35,7 @@ class KPISummarySerializer(serializers.Serializer):
 
 
 class DashboardSummaryResponseSerializer(serializers.Serializer):
+    date_bounds = DateBoundsSerializer()
     kpis = KPISummarySerializer()
     symmetry_proof = LedgerSymmetrySerializer()
     category_breakdown = CategoryBreakdownSerializer(many=True)

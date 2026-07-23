@@ -6,7 +6,8 @@ import {
   StatementIngestionNode, 
   UniversalStatementIngestView, 
   AccountingHeaders, 
-  StagingQueueEvaluator 
+  StagingQueueEvaluator,
+  LedgerDashboard,
 } from '../../views'; 
 import StatementMapper from '../mappers/StatementMapper.tsx'; 
 
@@ -71,7 +72,9 @@ export default function DashboardShell({ currentView, setViewAction }: ShellProp
       case 'StagingQueueEvaluator':
         // 🎯 FIX: Pass down a context account tracking anchor here (e.g., "1" or a state anchor ID)
         return <StagingQueueEvaluator accountId="ACC_DEMO_TRACKER_01" />;
-        
+
+      case 'Ledgerdashboard':
+        return <LedgerDashboard />;
       default:
         return <MasterInstitutionsContainer />;
     }
