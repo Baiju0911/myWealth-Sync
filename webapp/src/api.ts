@@ -261,3 +261,181 @@ export const stagingQueueApi = {
     });
   },
 };
+
+//DashBoards
+
+export interface AccountNode {
+  id: string | number;
+  name: string;
+  account_number: string;
+}
+
+export const getAccounts = async (): Promise<AccountNode[]> => {
+  const response = await api.get<AccountNode[]>('/accounts/');
+  return response.data;
+};
+
+export interface DashboardParams {
+  bank_account_id?: string | number;
+  taxonomy_account_id?: string | number;
+  from_date?: string;
+  to_date?: string;
+}
+
+export interface DateBounds {
+  min_date: string;
+  max_date: string;
+  applied_from_date: string;
+  applied_to_date: string;
+}
+
+export interface KPISummary {
+  net_liquidity: number;
+  total_income: number;
+  total_expense: number;
+  suspense_count: number;
+  suspense_amount: number;
+}
+
+export interface SymmetryProof {
+  bank_account_id: number;
+  taxonomy_account_id: number;
+  bank_net: number;
+  taxonomy_net: number;
+  variance: number;
+  is_balanced: boolean;
+}
+
+export interface CategoryRow {
+  category: string | null;
+  subcategory: string | null;
+  transaction_count: number;
+  total_debit: string;
+  total_credit: string;
+  net_balance: string;
+}
+
+export interface DashboardSummaryResponse {
+  date_bounds: DateBounds;
+  kpis: KPISummary;
+  symmetry_proof: SymmetryProof;
+  category_breakdown: CategoryRow[];
+}
+
+// Centrally managed call using your application's client instance
+export const getDashboardSummary = async (
+  params: DashboardParams
+): Promise<DashboardSummaryResponse> => {
+  const response = await api.get<DashboardSummaryResponse>(
+    '/dashboard/summary/',
+    { params }
+  );
+  return response.data;
+};
+
+//Classifications
+
+// Classifications
+
+export interface ClusterItem {
+  id: string;
+  narration: string;
+  amount: number;
+}
+
+export interface ApplyReclassificationParams {
+  transaction_ids: string[];
+  target_category: string;
+  target_subcategory: string;
+  pattern?: string | null; // 👈 Allow null here
+  save_rule: boolean;
+}
+
+export interface Cluster {
+  pattern: string;
+  count: number;
+  total_amount: number;
+  sample_descriptions: string[];
+  transaction_ids: string[];
+  items?: ClusterItem[];
+}
+
+export interface SuspenseWorkbenchResponse {
+  status: string;
+  total_clusters: number;
+  clusters: Cluster[];
+}
+
+export interface ReclassifyPayload {
+  transaction_ids: string[];
+  target_category: string;
+  target_subcategory: string;
+  pattern?: string;
+  save_rule?: boolean;
+}
+
+/**
+ * Fetches auto-clustered merchant patterns for Suspense Account transactions.
+ */
+export const getSuspenseClusters1 =
+  async (): Promise<SuspenseWorkbenchResponse> => {
+    const response = await api.get<SuspenseWorkbenchResponse>(
+      '/get_suspense_workbench_data/'
+    );
+    return response.data;
+  };
+
+// src/api.ts (or wherever getSuspenseClusters is declared)
+// export const getSuspenseClusters = async (
+//   subcategory?: string
+// ): Promise<any> => {
+//   const url = subcategory
+//     ? `/api/get_suspense_workbench_data/?subcategory=${encodeURIComponent(subcategory)}`
+//     : '/api/get_suspense_workbench_data/';
+//   const response = await fetch(url);
+//   return response.json();
+// };
+// export const getSuspenseClusters = async (
+//   subcategory?: string
+// ): Promise<any> => {
+//   // 🟢 Use encodeURIComponent to safely handle spaces and special chars like '&'
+//   const subParam = subcategory
+//     ? encodeURIComponent(subcategory)
+//     : 'Suspense%20Account';
+
+//   // Note the trailing slash before '?' to avoid Django 301 redirects!
+//   const url = `/get_suspense_workbench_data/?subcategory=${subParam}`;
+
+//   const response = await fetch(url);
+
+//   if (!response.ok) {
+//     throw new Error(`Server returned status ${response.status}`);
+//   }
+
+//   return response.json();
+// };
+
+export const getSuspenseClusters = async (
+  subcategory?: string
+): Promise<SuspenseWorkbenchResponse> => {
+  const response = await api.get<SuspenseWorkbenchResponse>(
+    '/get_suspense_workbench_data/',
+    {
+      params: {
+        subcategory: subcategory || 'Suspense Account',
+      },
+    }
+  );
+  return response.data;
+};
+
+/**
+ * Applies bulk reclassification and updates/learns classification rules.
+ */
+export const applyReclassification = async (payload: ReclassifyPayload) => {
+  const response = await api.post(
+    '/apply_reclassification_and_learn/',
+    payload
+  );
+  return response.data;
+};

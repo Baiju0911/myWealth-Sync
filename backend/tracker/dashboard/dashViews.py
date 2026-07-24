@@ -16,9 +16,12 @@ def dashboard_summary_view(request):
     from_date = request.GET.get("from_date") or bounds["min_date"]
     to_date = request.GET.get("to_date") or bounds["max_date"]
 
-    # 3. Query aggregated metrics using date filters
+    # 3. Query aggregated metrics using date filters (🎯 Added bank_account_id)
     category_qs = DashboardSelectors.get_category_breakdowns(
-        taxonomy_account_id=taxonomy_account_id, from_date=from_date, to_date=to_date
+        bank_account_id=bank_account_id,
+        taxonomy_account_id=taxonomy_account_id,
+        from_date=from_date,
+        to_date=to_date,
     )
     symmetry_data = DashboardSelectors.get_ledger_symmetry(
         bank_account_id=bank_account_id,

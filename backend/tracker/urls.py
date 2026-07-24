@@ -21,6 +21,7 @@ from .ledgerCategorizationView import (
     AccountingRuleViewSet,
     CommitStagingQueue,
 )
+from tracker.classification import classificationViews
 
 urlpatterns = [
     # 🏛️ Master Bank Collection Endpoints
@@ -158,4 +159,17 @@ urlpatterns += [
 
 urlpatterns += [
     path("dashboard/", include("tracker.dashboard.urls")),
+]
+
+urlpatterns += [
+    path(
+        "get_suspense_workbench_data/",
+        classificationViews.get_suspense_workbench_data,
+        name="get_suspense_workbench_data",
+    ),
+    path(
+        "apply_reclassification_and_learn/",
+        classificationViews.apply_reclassification_and_learn,
+        name="apply_reclassification_and_learn",
+    ),
 ]
