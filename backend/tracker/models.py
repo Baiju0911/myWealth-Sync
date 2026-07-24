@@ -779,3 +779,44 @@ class DirectionalVectorOverride(models.Model):
 
     def __str__(self):
         return f"If {self.source_category} is {self.expected_vector} -> Pivot to {self.target_category}"
+
+
+###For Classification Future AI thing
+
+
+class ClassificationRule(models.Model):
+    RULE_TYPES = (
+        ("CONTAINS", "Contains Pattern"),
+        ("EXACT", "Exact Match"),
+        ("REGEX", "Regex Pattern"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, help_text="e.g. Swiggy Auto-Classify")
+    pattern = models.CharField(
+        max_length=255, db_index=True, help_text="Search anchor e.g. SWIGGY"
+    )
+    rule_type = models.CharField(max_length=20, choices=RULE_TYPES, default="CONTAINS")
+
+    target_category = models.CharField(max_length=100)
+    target_subcategory = models.CharField(max_length=100)
+
+    priority = models.IntegerField(
+        default=10, help_text="Higher priority rules run first"
+    )
+    is_active = models.BooleanField(default=True)
+
+    # Audit & Metrics
+    created_from_manual_override = models.BooleanField(default=True)
+    match_count = models.IntegerField(
+        default=0, help_text="Total transactions classified by this rule"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_classification_rule"
+        ordering = ["-priority", "-created_at"]
+
+    def __str__(self):
+        return f"{self.pattern} ➔ {self.target_category} > {self.target_subcategory}"
