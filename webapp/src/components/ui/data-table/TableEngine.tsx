@@ -1,12 +1,19 @@
+import React from 'react';
 import type { ColumnConfig } from './columns';
 
 interface TableEngineProps {
   columns: ColumnConfig[];
   data: any[];
   isDuplicateRow?: (row: any) => boolean;
+  showFooter?: boolean; // 🟢 Defaulted to FALSE so existing tables remain untouched
 }
 
-export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps) {
+export function TableEngine({ 
+  columns, 
+  data, 
+  isDuplicateRow, 
+  showFooter = false // 👈 Opt-in only!
+}: TableEngineProps) {
   return (
     <div className="w-full overflow-x-auto rounded-lg border border-zinc-800/80 bg-zinc-900/40 backdrop-blur-sm">
       <table className="w-full text-left text-xs text-zinc-300 table-fixed border-collapse" style={{ minWidth: "1100px" }}>
@@ -39,7 +46,7 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                   isDuplicate 
                     ? 'bg-zinc-950/20 text-zinc-500 hover:bg-zinc-950/30 border-l-2 border-zinc-700' 
                     : isEnriched
-                    ? 'bg-amber-950/10 text-zinc-200 hover:bg-amber-950/20 border-l-2 border-amber-500/80' // Distinct container highlighting
+                    ? 'bg-amber-950/10 text-zinc-200 hover:bg-amber-950/20 border-l-2 border-amber-500/80'
                     : 'hover:bg-zinc-950/40 text-zinc-300'
                 }`}
                 style={{ 
@@ -80,7 +87,6 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
                                 {row.tran_type}
                               </span>
                             )}
-                            {/* 💎 INLINE AMBER CHIP FOR ENRICHED LABELS */}
                             {isEnriched}
                           </div>
                           <span className={isDuplicate ? 'text-zinc-600 line-through decoration-zinc-800/60' : 'text-zinc-200'}>
@@ -117,6 +123,67 @@ export function TableEngine({ columns, data, isDuplicateRow }: TableEngineProps)
             );
           })}
         </tbody>
+
+        {/* 🟢 FOOTER RENDERS ONLY IF EXPLICITLY SET TO TRUE */}
+        {showFooter && data.length > 0 && (
+          <tfoot className="border-t-2 border-zinc-700 bg-zinc-950/90 font-mono text-xs font-bold text-zinc-100">
+            <tr>
+              {columns.map((col, index) => {
+                if (index === 0) {
+                  return (
+                    <td key={col.key} style={{ width: col.width, textAlign: col.align }} className="py-3.5 px-2">
+                      <span className="px-2 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 rounded text-[10px] font-bold uppercase tracking-wider">
+                        GRAND TOTALS
+                      </span>
+                    </td>
+                  );
+                }
+
+                if (col.renderFooter) {
+                  const footerVal = col.renderFooter(data);
+                  const numVal = parseFloat(String(footerVal).replace(/,/g, ''));
+
+                  return (
+                    <td 
+                      key={col.key} 
+                      style={{ width: col.width, textAlign: col.align }} 
+                      className={`py-3.5 px-2 text-[13px] font-bold tabular-nums ${
+                        isNaN(numVal) ? 'text-zinc-100' : numVal < 0 ? 'text-amber-400' : 'text-emerald-400'
+                      }`}
+                    >
+                      {footerVal}
+                    </td>
+                  );
+                }
+
+                if (col.isCurrency || col.key === 'transaction_count' || col.key === 'txn_count') {
+                  const total = data.reduce((acc, row) => {
+                    const val = row[col.key];
+                    const num = typeof val === 'number' ? val : parseFloat(String(val || '0').replace(/,/g, ''));
+                    return acc + (isNaN(num) ? 0 : num);
+                  }, 0);
+
+                  const textColor = col.textColor || (col.isCurrency ? 'text-zinc-100' : 'text-zinc-400');
+
+                  return (
+                    <td 
+                      key={col.key} 
+                      style={{ width: col.width, textAlign: col.align }} 
+                      className={`py-3.5 px-2 text-[13px] font-bold tabular-nums ${textColor}`}
+                    >
+                      {col.isCurrency
+                        ? `${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                        : total.toLocaleString('en-IN')}
+                    </td>
+                  );
+                }
+
+                return <td key={col.key} style={{ width: col.width }} className="py-3.5 px-2"></td>;
+              })}
+            </tr>
+          </tfoot>
+        )}
+
       </table>
     </div>
   );

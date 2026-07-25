@@ -23,7 +23,7 @@ import {
 } from 'recharts';
 
 import { TableEngine } from '../components/ui/data-table/TableEngine';
-import { CATEGORY_BREAKDOWN_COLUMNS } from '../components/ui/data-table/columns';
+import { CATEGORY_BREAKDOWN_COLUMNS,KPI_SUMMARY_COLUMNS } from '../components/ui/data-table/columns';
 import { ClassificationWorkbenchModal } from './classificationWorkbenchmodal';
 
 import { 
@@ -106,6 +106,103 @@ export const LedgerDashboard: React.FC = () => {
       to_date: toDate
     }, false);
   };
+
+//   const tableTotals = useMemo(() => {
+//   if (!data?.category_breakdown || data.category_breakdown.length === 0) {
+//     return { totalTxns: 0, totalDebit: 0, totalCredit: 0, netBalance: 0 };
+//   }
+
+//   return data.category_breakdown.reduce(
+//     (acc, row) => {
+//       const txns = typeof row.transaction_count === 'number' 
+//         ? row.transaction_count 
+//         : parseInt(row.transaction_count || '0', 10);
+//       const dr = parseFloat(row.total_debit || '0');
+//       const cr = parseFloat(row.total_credit || '0');
+
+//       acc.totalTxns += txns;
+//       acc.totalDebit += dr;
+//       acc.totalCredit += cr;
+//       return acc;
+//     },
+//     { totalTxns: 0, totalDebit: 0, totalCredit: 0 }
+//   );
+// }, [data]);
+
+ // const grandNetBalance = tableTotals.totalDebit - tableTotals.totalCredit;
+  
+  const kpiTableData = useMemo(() => {
+  if (!data?.kpis || !data?.category_breakdown) return [];
+
+  // Calculate totals from breakdown
+  let totalRevenueDr = 0, totalRevenueCr = 0, totalRevenueCount = 0;
+  let totalExpenseDr = 0, totalExpenseCr = 0, totalExpenseCount = 0;
+  let suspenseDr = 0, suspenseCr = 0, suspenseCount = 0;
+
+  data.category_breakdown.forEach((row) => {
+    const dr = parseFloat(row.total_debit || '0');
+    const cr = parseFloat(row.total_credit || '0');
+    const txns = typeof row.transaction_count === 'number' 
+      ? row.transaction_count 
+      : parseInt(row.transaction_count || '0', 10);
+
+    if (row.category === 'Income') {
+      totalRevenueDr += dr;
+      totalRevenueCr += cr;
+      totalRevenueCount += txns;
+    } else if (row.category === 'Expense') {
+      totalExpenseDr += dr;
+      totalExpenseCr += cr;
+      totalExpenseCount += txns;
+    }
+
+    if (row.subcategory === 'Suspense Account') {
+      suspenseDr += dr;
+      suspenseCr += cr;
+      suspenseCount += txns;
+    }
+  });
+
+  return [
+    {
+      id: 'net_liquidity',
+      kpi_name: 'Net Liquidity (Net Cash Flow)',
+      description: 'Period Net Recognized Movement (Inflows vs Outflows)',
+      count: totalRevenueCount + totalExpenseCount,
+      debit: totalExpenseDr,
+      credit: totalRevenueCr,
+      net_flow: data.kpis.net_liquidity,
+    },
+    {
+      id: 'total_revenue',
+      kpi_name: 'Total Revenue & Recognized Income',
+      description: 'Total credited inflows across Statements & returns',
+      count: totalRevenueCount,
+      debit: totalRevenueDr,
+      credit: totalRevenueCr,
+      net_flow: data.kpis.total_income,
+    },
+    {
+      id: 'total_expenses',
+      kpi_name: 'Total Operating Expenses',
+      description: 'Total debited outflows across all expense heads',
+      count: totalExpenseCount,
+      debit: totalExpenseDr,
+      credit: totalExpenseCr,
+      net_flow: data.kpis.total_expense,
+    },
+    {
+      id: 'suspense_unclassified',
+      kpi_name: 'Unclassified Suspense Vault',
+      description: 'Transactions pending manual or automated rules learning',
+      count: data.kpis.suspense_count,
+      debit: suspenseDr,
+      credit: suspenseCr,
+      net_flow: data.kpis.suspense_amount,
+      status: 'ENRI', 
+    },
+  ];
+}, [data]);
 
   const handleResetFilter = () => {
     if (data) {
@@ -327,11 +424,12 @@ export const LedgerDashboard: React.FC = () => {
                 ) : (
                   <AlertTriangle className="w-3.5 h-3.5" />
                 )}
-                <span>{data.symmetry_proof.is_balanced ? 'DOUBLE-ENTRY BALANCED' : 'LEDGER IMBALANCE'}</span>
-              </div>
+                <span>{data.symmetry_proof.is_balanced ? 'DOUBLE-ENTRY BALANCED ' : 'LEDGER IMBALANCE '}</span>
+              
               <span className="text-zinc-500">
-                Variance: <strong className="text-zinc-300">₹{data.symmetry_proof.variance.toFixed(2)}</strong>
+                 Variance: <strong className="text-zinc-300">₹{data.symmetry_proof.variance.toFixed(2)}</strong>
               </span>
+              </div>
             </div>
           </div>
         )}
@@ -352,10 +450,8 @@ export const LedgerDashboard: React.FC = () => {
                 onChange={(e) => setFromDate(e.target.value)}
                 className="bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-zinc-200 outline-none focus:border-zinc-700"
               />
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <label className="text-zinc-400 uppercase tracking-wider text-[11px]">To:</label>
+          
+              <label className="text-zinc-400 uppercase tracking-wider text-[11px]"> To:</label>
               <input 
                 type="date" 
                 value={toDate}
@@ -391,7 +487,7 @@ export const LedgerDashboard: React.FC = () => {
           </div>
         </form>
       )}
-
+<br/>
       {/* Loading Overlay */}
       {loading && (
         <div className="flex flex-col justify-center items-center h-64 text-zinc-500 font-mono gap-3">
@@ -423,7 +519,7 @@ export const LedgerDashboard: React.FC = () => {
       {data && data.category_breakdown.length > 0 && (
         <>
           {/* 3. Refined KPI Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-zinc-900/80 border border-zinc-800 p-5 rounded-2xl shadow-md relative overflow-hidden group hover:border-zinc-700 transition-colors">
               <div className="flex items-center justify-between text-zinc-400 font-mono text-xs">
                 <span className="tracking-wider uppercase">Net Liquidity</span>
@@ -467,36 +563,86 @@ export const LedgerDashboard: React.FC = () => {
               </p>
               <p className="text-[11px] text-amber-500/80 font-mono mt-1">{formatINR(data.kpis.suspense_amount)} pending</p>
             </div>
-          </div>
+          </div> */}
+          {/* 3. Detailed KPI Summary TableEngine */}
+            <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6 shadow-md space-y-3">
+              <div className="flex items-center justify-between border-b border-zinc-800/60 pb-3">
+                <div>
+                  <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-100 font-bold">
+                    Executive KPI Summary Matrix
+                  </h2>
+                  <p className="text-xs text-zinc-500 font-mono">
+                    Detailed breakdown of high-level net liquidity, inflows, outflows, and pending suspense.
+                  </p>
+                </div>
+                <span className="text-xs font-mono bg-zinc-950 border border-zinc-800 px-3 py-1 rounded-lg text-cyan-400 font-bold">
+                  4 Primary Metric Groups
+                </span>
+              </div>
+<br/>
+              <TableEngine 
+                columns={KPI_SUMMARY_COLUMNS} 
+                data={kpiTableData} 
+                showFooter={false} // Clean table view without bottom totals
+              />
+            </div>
 
-          
+
+          <br/>
           {/* Polished Recharts Major Expense Bar Chart */}
           <div className="bg-zinc-900/80 border border-zinc-800 p-6 rounded-2xl shadow-md space-y-4">
             
-            {/* Header with Quick Stat Pill Callouts */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800/60 pb-4">
-              <div>
-                <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-100 font-bold">
-                  Major Expense Distribution
-                </h2>
-                <p className="text-xs text-zinc-500 font-mono">
-                  Visual concentration analysis of top operating spend categories.
-                </p>
-              </div>
+          {/* Header with Quick Stat Pill Callouts */}
+<div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+  {/* Title & Description */}
+  <div className="space-y-1">
+    <div className="flex items-center space-x-2">
+      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+      <h2 className="text-sm font-mono uppercase tracking-wider text-zinc-100 font-extrabold" style={{ fontWeight: 800 }}>
+        Major Expense Distribution
+      </h2>
+    </div>
+    <p className="text-xs text-zinc-400 font-mono">
+      Visual concentration analysis of top operating spend categories.
+    </p>
+  </div>
 
-              {chartData.length > 0 && (
-                <div className="flex items-center space-x-2 font-mono text-xs">
-                  <div className="bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-xl">
-                    <span className="text-zinc-500 text-[10px] block uppercase">Top Outflow Category</span>
-                    <span className="text-cyan-400 font-bold">{topCategoryName} ({topCategoryPct}%)</span>
-                  </div>
-                  <div className="bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-xl">
-                    <span className="text-zinc-500 text-[10px] block uppercase">Analyzed Spend</span>
-                    <span className="text-zinc-200 font-bold">{formatINR(totalExpenseSum)}</span>
-                  </div>
-                </div>
-              )}
-            </div>
+  {/* Stat Pills */}
+  {chartData.length > 0 && (
+    <div className="flex flex-wrap items-center gap-3 font-mono">
+      {/* Pill 1: Top Outflow Category */}
+      <div className="bg-zinc-950/90 border border-zinc-800/90 px-4 py-2 rounded-xl flex flex-col justify-center space-y-1 shadow-inner">
+        <span className="text-zinc-500 text-[10px] uppercase tracking-wider block" style={{ fontWeight: 600 }}>
+          Top Outflow Category
+        </span>&nbsp;
+        
+          <span className="text-cyan-300 text-xs" style={{ fontWeight: 800 }}>
+            {topCategoryName}
+          </span>&nbsp;
+          <span 
+            className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 rounded text-[10px]"
+            style={{ fontWeight: 800 }}
+          >&nbsp;
+            {topCategoryPct}%
+          </span>
+       
+      </div>
+
+      {/* Pill 2: Analyzed Spend */}
+      <div className="bg-zinc-950/90 border border-zinc-800/90 px-4 py-2 rounded-xl flex flex-col justify-center space-y-1 shadow-inner">
+        <span className="text-zinc-500 text-[10px] uppercase tracking-wider block" style={{ fontWeight: 600 }}>
+          Analyzed Spend
+        </span>
+        <span 
+          className="text-emerald-400 text-sm tabular-nums" 
+          style={{ fontWeight: 900, textShadow: '0 0 1px rgba(52,211,153,0.4)' }}
+        >&nbsp;          {formatINR(totalExpenseSum)}
+        </span>
+      </div>
+    </div>
+  )}
+</div>
+
             
             {/* Chart Canvas */}
             <div className="w-full pt-2 min-h-[340px]">
@@ -567,9 +713,12 @@ export const LedgerDashboard: React.FC = () => {
 
             <TableEngine 
               columns={CATEGORY_BREAKDOWN_COLUMNS} 
-              data={data.category_breakdown} 
+              data={data.category_breakdown} showFooter={true}
             />
           </div>
+
+
+
         </>
       )}
 
@@ -578,9 +727,8 @@ export const LedgerDashboard: React.FC = () => {
         isOpen={isWorkbenchOpen}
         targetSubcategory={selectedSubcategoryForWorkbench}
         onClose={() => setIsWorkbenchOpen(false)}
-        onSuccess= {handleWorkbenchSuccess
-          
-        }
+        onSuccess= {handleWorkbenchSuccess}
+        accountId={selectedAccountId ? Number(selectedAccountId) : undefined}
       />
 
     </div>
