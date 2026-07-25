@@ -8,6 +8,7 @@ export interface ColumnConfig {
   isCurrency?: boolean;
   headerClass?: string;
   //HEXA?: string; // 🎯 Added to clean up header styles dynamically
+  renderFooter?: (data: any[]) => string | number;
 }
 
 export const LEDGER_COLUMNS: ColumnConfig[] = [
@@ -348,5 +349,66 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
     align: 'right',
     isCurrency: true,
     textColor: 'text-zinc-100 font-bold font-mono text-xs',
+    // 🟢 Return pure string formatted currency (no JSX tags in .ts file!)
+    renderFooter: (data: any[]) => {
+      const net = data.reduce((acc, row) => {
+        const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
+        const cr = parseFloat(
+          String(row.total_credit || '0').replace(/,/g, '')
+        );
+        return acc + (dr - cr);
+      }, 0);
+
+      return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    },
+  },
+];
+
+//Ledger Dashboard
+export const KPI_SUMMARY_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'kpi_name',
+    label: 'KPI Metric / Ledger Flow',
+    width: '25%',
+    align: 'left',
+    textColor: 'text-zinc-100 font-bold',
+  },
+  {
+    key: 'description',
+    label: 'Description / Accounting Context',
+    width: '30%',
+    align: 'left',
+    textColor: 'text-zinc-400 font-mono text-xs',
+  },
+  {
+    key: 'count',
+    label: 'Volume',
+    width: '10%',
+    align: 'center',
+    textColor: 'text-cyan-400 font-mono text-xs font-bold',
+  },
+  {
+    key: 'debit',
+    label: 'Debit (DR)',
+    width: '12.5%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-rose-400 font-mono text-xs',
+  },
+  {
+    key: 'credit',
+    label: 'Credit (CR)',
+    width: '12.5%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-emerald-400 font-mono text-xs',
+  },
+  {
+    key: 'net_flow',
+    label: 'Net Balance Impact',
+    width: '10%',
+    align: 'right',
+    isCurrency: true,
+    textColor: 'text-amber-400 font-bold font-mono text-xs',
   },
 ];

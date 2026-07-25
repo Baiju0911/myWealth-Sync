@@ -337,10 +337,22 @@ export const getDashboardSummary = async (
 
 // Classifications
 
+// export interface ClusterItem {
+//   id: string;
+//   narration: string;
+//   amount: number;
+// }
+
 export interface ClusterItem {
   id: string;
+  row_identifier?: string;
+  transaction_date?: string;
   narration: string;
   amount: number;
+  direction?: 'OUTFLOW' | 'INFLOW';
+  flag_color?: 'rose' | 'green';
+  debit?: number;
+  credit?: number;
 }
 
 export interface ApplyReclassificationParams {
@@ -356,7 +368,8 @@ export interface Cluster {
   count: number;
   total_amount: number;
   sample_descriptions: string[];
-  transaction_ids: string[];
+
+  transaction_ids?: string[];
   items?: ClusterItem[];
 }
 
@@ -370,6 +383,7 @@ export interface ReclassifyPayload {
   transaction_ids: string[];
   target_category: string;
   target_subcategory: string;
+  patterns?: string[];
   pattern?: string;
   save_rule?: boolean;
 }
@@ -377,13 +391,13 @@ export interface ReclassifyPayload {
 /**
  * Fetches auto-clustered merchant patterns for Suspense Account transactions.
  */
-export const getSuspenseClusters1 =
-  async (): Promise<SuspenseWorkbenchResponse> => {
-    const response = await api.get<SuspenseWorkbenchResponse>(
-      '/get_suspense_workbench_data/'
-    );
-    return response.data;
-  };
+// export const getSuspenseClusters1 =
+//   async (): Promise<SuspenseWorkbenchResponse> => {
+//     const response = await api.get<SuspenseWorkbenchResponse>(
+//       '/get_suspense_workbench_data/'
+//     );
+//     return response.data;
+//   };
 
 // src/api.ts (or wherever getSuspenseClusters is declared)
 // export const getSuspenseClusters = async (
@@ -415,14 +429,30 @@ export const getSuspenseClusters1 =
 //   return response.json();
 // };
 
+// export const getSuspenseClusters = async (
+//   subcategory?: string
+// ): Promise<SuspenseWorkbenchResponse> => {
+//   const response = await api.get<SuspenseWorkbenchResponse>(
+//     '/get_suspense_workbench_data/',
+//     {
+//       params: {
+//         subcategory: subcategory || 'Suspense Account',
+//       },
+//     }
+//   );
+//   return response.data;
+// };
+
 export const getSuspenseClusters = async (
-  subcategory?: string
+  subcategoryName: string = 'Suspense Account',
+  accountId?: number
 ): Promise<SuspenseWorkbenchResponse> => {
   const response = await api.get<SuspenseWorkbenchResponse>(
     '/get_suspense_workbench_data/',
     {
       params: {
-        subcategory: subcategory || 'Suspense Account',
+        subcategory: subcategoryName,
+        ...(accountId && { account_id: accountId }),
       },
     }
   );
@@ -438,4 +468,52 @@ export const applyReclassification = async (payload: ReclassifyPayload) => {
     payload
   );
   return response.data;
+};
+
+export interface TaxonomyOption {
+  category: string;
+  subcategories: string[];
+}
+
+export interface TaxonomyResponse {
+  status: string;
+  taxonomy: TaxonomyOption[];
+}
+
+export interface ExtendedCluster {
+  pattern: string;
+  count: number;
+  total_amount: number;
+  total_outflow?: number;
+  total_inflow?: number;
+  transaction_ids?: string[];
+  items?: ClusterItem[];
+  sample_descriptions: string[];
+}
+
+export const getTaxonomyTree = async (): Promise<TaxonomyOption[]> => {
+  // Use your `api` client so it routes through the proper base URL/proxy!
+  const response = await api.get<TaxonomyResponse>('/get_taxonomy_tree/');
+
+  if (response.data && response.data.status === 'success') {
+    return response.data.taxonomy;
+  }
+  return [];
+};
+
+export interface AddTaxonomyPayload {
+  category: string;
+  subcategory: string;
+}
+
+export const addTaxonomyNode = async (
+  payload: AddTaxonomyPayload
+): Promise<boolean> => {
+  try {
+    const response = await api.post('/add_taxonomy_node/', payload);
+    return response.data?.status === 'success';
+  } catch (err) {
+    console.error('Failed to add new taxonomy node:', err);
+    return false;
+  }
 };

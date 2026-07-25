@@ -168,8 +168,18 @@ urlpatterns += [
         name="get_suspense_workbench_data",
     ),
     path(
+        "get_taxonomy_tree/",
+        classificationViews.get_taxonomy_tree_view,
+        name="get_taxonomy_tree",
+    ),
+    path(
         "apply_reclassification_and_learn/",
         classificationViews.apply_reclassification_and_learn,
         name="apply_reclassification_and_learn",
+    ),
+    path(
+        "add_taxonomy_node/",
+        classificationViews.add_taxonomy_node,
+        name="add_taxonomy_node",
     ),
 ]

@@ -6,6 +6,8 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.utils import timezone
 import json
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 
 # ==========================================
 # 1. AUTHENTICATION & SECURITY TABLES (RBAC)
@@ -198,35 +200,35 @@ class TransactionHeader(models.Model):
         return f"{self.date} - {self.narration[:30]}"
 
 
-class JournalEntry(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+# class JournalEntry(models.Model):
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # 🏛️ Core Context Mappings
-    account = models.ForeignKey(
-        Account, on_delete=models.PROTECT, related_name="journal_lines"
-    )
+#     # 🏛️ Core Context Mappings
+#     account = models.ForeignKey(
+#         Account, on_delete=models.PROTECT, related_name="journal_lines"
+#     )
 
-    # 📅 Date & Tracking Vectors
-    transaction_date = models.DateField(default=timezone.now)
+#     # 📅 Date & Tracking Vectors
+#     transaction_date = models.DateField(default=timezone.now)
 
-    # 🛡️ THE AUDIT LINK: Matches the Hex fingerprint signature inside StatementStagingLine
-    row_identifier = models.CharField(max_length=64, db_index=True)
+#     # 🛡️ THE AUDIT LINK: Matches the Hex fingerprint signature inside StatementStagingLine
+#     row_identifier = models.CharField(max_length=64, db_index=True)
 
-    # 💰 Explicit Double-Entry Matrix Fields
-    debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
-    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+#     # 💰 Explicit Double-Entry Matrix Fields
+#     debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+#     credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
 
-    # 🤖 Multi-Tier Evaluation Metadata JSON Repository
-    evaluation_matrix_snapshot = models.JSONField(
-        default=dict,
-        help_text="Stores: {t1_cat, t2_cat, t3_cat, resolved_cat, resolved_sub, applied_rule}",
-    )
+#     # 🤖 Multi-Tier Evaluation Metadata JSON Repository
+#     evaluation_matrix_snapshot = models.JSONField(
+#         default=dict,
+#         help_text="Stores: {t1_cat, t2_cat, t3_cat, resolved_cat, resolved_sub, applied_rule}",
+#     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        db_table = "ledger_journal_entry"
-        verbose_name_plural = "Journal Entries"
+#     class Meta:
+#         db_table = "ledger_journal_entry"
+#         verbose_name_plural = "Journal Entries"
 
 
 ########
@@ -784,6 +786,39 @@ class DirectionalVectorOverride(models.Model):
 ###For Classification Future AI thing
 
 
+# ============================================================================
+# 1. TAXONOMY TREE
+# ============================================================================
+class TaxonomyTree(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    category = models.CharField(max_length=100)
+    subcategory = models.CharField(max_length=100)
+    display_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_taxonomy_tree"
+        unique_together = ("category", "subcategory")
+        ordering = ["category", "display_order", "subcategory"]
+
+    def __str__(self):
+        return f"{self.category} ➔ {self.subcategory}"
+
+
+# ============================================================================
+# 2. CLASSIFICATION STATUS ENUM
+# ============================================================================
+class ClassificationStatus(models.TextChoices):
+    INITIAL = "INITIAL", "Initial Auto-Classification"
+    RECLASSIFIED = "RECLASSIFIED", "Manually Reclassified"
+    SUSPENSE = "SUSPENSE", "Pending Suspense"
+
+
+# ============================================================================
+# 3. CLASSIFICATION RULE
+# ============================================================================
 class ClassificationRule(models.Model):
     RULE_TYPES = (
         ("CONTAINS", "Contains Pattern"),
@@ -792,31 +827,228 @@ class ClassificationRule(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Rule Identification Code (e.g., 'RULE_102', 'GR66', 'MANUAL_SWIGGY')
+    rule_code = models.CharField(
+        max_length=50,
+        unique=True,
+        blank=True,
+        help_text="Unique shorthand code mapped to Node 99 metadata tracking.",
+    )
+
     name = models.CharField(max_length=255, help_text="e.g. Swiggy Auto-Classify")
-    pattern = models.CharField(
-        max_length=255, db_index=True, help_text="Search anchor e.g. SWIGGY"
+
+    patterns = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='List of search anchors, e.g. ["SWIGGY", "ZOMATO"]',
     )
     rule_type = models.CharField(max_length=20, choices=RULE_TYPES, default="CONTAINS")
 
-    target_category = models.CharField(max_length=100)
-    target_subcategory = models.CharField(max_length=100)
+    # Direct Taxonomy Tree Reference (Clean Foreign Key)
+    taxonomy = models.ForeignKey(
+        TaxonomyTree,
+        on_delete=models.PROTECT,
+        related_name="classification_rules",
+        help_text="Target taxonomy node in TaxonomyTree",
+        null=True,
+        blank=True,
+    )
+
+    # Denormalized strings for rapid lookup/filtering without extra joins
+    target_category = models.CharField(max_length=100, editable=False)
+    target_subcategory = models.CharField(max_length=100, editable=False)
 
     priority = models.IntegerField(
         default=10, help_text="Higher priority rules run first"
     )
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
 
-    # Audit & Metrics
     created_from_manual_override = models.BooleanField(default=True)
     match_count = models.IntegerField(
         default=0, help_text="Total transactions classified by this rule"
     )
+    last_executed_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "ledger_classification_rule"
         ordering = ["-priority", "-created_at"]
+        indexes = [
+            models.Index(fields=["is_active", "-priority"]),
+            models.Index(fields=["rule_code"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        # 1. Auto-generate rule_code if missing
+        if not self.rule_code:
+            short_id = str(self.id).replace("-", "")[:6].upper()
+            self.rule_code = f"RULE_{short_id}"
+
+        # 2. Sync denormalized category & subcategory from FK
+        if self.taxonomy:
+            self.target_category = self.taxonomy.category
+            self.target_subcategory = self.taxonomy.subcategory
+
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+
+        # Enforce validation against TaxonomyTree node status
+        if self.taxonomy and not self.taxonomy.is_active:
+            raise ValidationError(
+                f"Selected Taxonomy Target '{self.taxonomy.category} ➔ {self.taxonomy.subcategory}' is inactive."
+            )
+
+        # Validate patterns array structure
+        if not isinstance(self.patterns, list):
+            raise ValidationError("Patterns must be a valid JSON array of strings.")
+
+        # Clean and uppercase patterns for CONTAINS / EXACT matching
+        if self.rule_type in ["CONTAINS", "EXACT"] and isinstance(self.patterns, list):
+            self.patterns = [
+                p.strip().upper()
+                for p in self.patterns
+                if isinstance(p, str) and p.strip()
+            ]
+
+        if self.is_active and not self.patterns:
+            raise ValidationError(
+                "An active classification rule must contain at least one valid search pattern."
+            )
+
+    def record_match(self, count: int = 1):
+        """Atomically increments match count when a rule classifies transactions."""
+        self.match_count = models.F("match_count") + count
+        self.last_executed_at = timezone.now()
+        self.save(update_fields=["match_count", "last_executed_at"])
 
     def __str__(self):
-        return f"{self.pattern} ➔ {self.target_category} > {self.target_subcategory}"
+        pattern_preview = (
+            ", ".join(self.patterns[:3])
+            if isinstance(self.patterns, list) and self.patterns
+            else "No Patterns"
+        )
+        return f"[{self.rule_code}] [{pattern_preview}] ➔ {self.target_category} > {self.target_subcategory}"
+
+
+class JournalEntry(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 🏛️ Core Context Mappings
+    account = models.ForeignKey(
+        "Account", on_delete=models.PROTECT, related_name="journal_lines"
+    )
+
+    # 📅 Date & Tracking Vectors
+    transaction_date = models.DateField(default=timezone.now)
+
+    # 🛡️ THE AUDIT LINK: Matches the Hex fingerprint signature inside StatementStagingLine
+    row_identifier = models.CharField(max_length=64, db_index=True)
+
+    # 💰 Explicit Double-Entry Matrix Fields
+    debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+
+    # 🟢 Reclassification & Audit Tracking Flags
+    is_reclassified = models.BooleanField(default=False, db_index=True)
+    classification_status = models.CharField(
+        max_length=20,
+        choices=ClassificationStatus.choices,
+        default=ClassificationStatus.INITIAL,
+        db_index=True,
+    )
+
+    # 🤖 Multi-Tier Evaluation Metadata JSON Repository (Stores t1/t2/t3, rules, audit history)
+    evaluation_matrix_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Stores: {t1_cat, t2_cat, t3_cat, resolved_cat, resolved_sub, applied_rule, audit_history}",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "ledger_journal_entry"
+        verbose_name_plural = "Journal Entries"
+        indexes = [
+            models.Index(fields=["row_identifier", "account"]),
+            models.Index(fields=["account", "is_reclassified"]),
+            models.Index(fields=["classification_status"]),
+        ]
+
+    def __str__(self):
+        return f"Account #{self.account_id} | DR: {self.debit} | CR: {self.credit} | Status: {self.classification_status}"
+
+    @classmethod
+    @transaction.atomic
+    def reclassify_statement_line(
+        cls,
+        row_identifier: str,
+        new_category: str,
+        new_subcategory: str,
+        rule_code: str = "MANUAL",
+        taxonomy_node_account_id: int = 99,
+    ):
+        """
+        Safely reclassifies Node 99 counter-entry for a specific row_identifier while preserving
+        the historical audit trail inside evaluation_matrix_snapshot JSON.
+        """
+        # Fetch Taxonomy Counter-Entry for the given row_identifier
+        entry_99 = (
+            cls.objects.select_for_update()
+            .filter(row_identifier=row_identifier, account_id=taxonomy_node_account_id)
+            .first()
+        )
+
+        if not entry_99:
+            raise ValueError(
+                f"No Taxonomy Node ({taxonomy_node_account_id}) counter-entry found for row_identifier: {row_identifier}"
+            )
+
+        current_snapshot = entry_99.evaluation_matrix_snapshot or {}
+
+        # Extract current state to write as 'previous' audit trail
+        prev_cat = current_snapshot.get("resolved_category") or current_snapshot.get(
+            "resolved_cat", "Uncategorized"
+        )
+        prev_sub = current_snapshot.get("resolved_subcategory") or current_snapshot.get(
+            "resolved_sub", "Suspense Account"
+        )
+        prev_rule = current_snapshot.get("applied_rule_code") or current_snapshot.get(
+            "applied_rule", "UNKNOWN"
+        )
+
+        # Construct updated metadata payload with full history
+        updated_snapshot = {
+            **current_snapshot,
+            # Audit Trail History
+            "previous_category": prev_cat,
+            "previous_subcategory": prev_sub,
+            "previous_rule_code": prev_rule,
+            # Active Target Classification
+            "resolved_category": new_category,
+            "resolved_subcategory": new_subcategory,
+            "applied_rule_code": rule_code,
+            "confidence_score": 100,
+            # Timestamps
+            "is_reclassified": True,
+            "reclassified_at": timezone.now().isoformat(),
+        }
+
+        # Update Entry
+        entry_99.evaluation_matrix_snapshot = updated_snapshot
+        entry_99.is_reclassified = True
+        entry_99.classification_status = ClassificationStatus.RECLASSIFIED
+        entry_99.save(
+            update_fields=[
+                "evaluation_matrix_snapshot",
+                "is_reclassified",
+                "classification_status",
+            ]
+        )
+
+        return entry_99
