@@ -182,4 +182,5 @@ urlpatterns += [
         classificationViews.add_taxonomy_node,
         name="add_taxonomy_node",
     ),
+    path("classification/", include("tracker.classification.urls")),
 ]

@@ -71,7 +71,7 @@ export default function DashboardShell({ currentView, setViewAction }: ShellProp
         
       case 'StagingQueueEvaluator':
         // 🎯 FIX: Pass down a context account tracking anchor here (e.g., "1" or a state anchor ID)
-        return <StagingQueueEvaluator accountId="ACC_DEMO_TRACKER_01" />;
+        return <StagingQueueEvaluator/>;
 
       case 'Ledgerdashboard':
         return <LedgerDashboard />;

@@ -9,6 +9,89 @@ import json
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 
+
+class BulkAuditQuerySet(models.QuerySet):
+    """
+    Custom QuerySet that intercepts bulk operations (bulk_create, bulk_update)
+    and automatically emits AuditLog records for high-performance ingestion engines.
+    """
+
+    def bulk_create(self, objs, *args, **kwargs):
+        created_objs = super().bulk_create(objs, *args, **kwargs)
+
+        # Lazy import inside method to prevent circular import issues
+        from tracker.models import AuditLog
+
+        audit_logs = []
+        for obj in created_objs:
+            account_id = getattr(obj, "account_id", None)
+            row_identifier = getattr(obj, "row_identifier", None)
+            applied_rule = None
+
+            if hasattr(obj, "evaluation_matrix_snapshot") and isinstance(
+                obj.evaluation_matrix_snapshot, dict
+            ):
+                applied_rule = obj.evaluation_matrix_snapshot.get(
+                    "applied_rule_code"
+                ) or obj.evaluation_matrix_snapshot.get("applied_rule")
+
+            audit_logs.append(
+                AuditLog(
+                    action_type=f"{obj.__class__.__name__.upper()}_BULK_CREATE",
+                    target_table=obj._meta.db_table,
+                    account_id=account_id,
+                    row_identifier=row_identifier,
+                    previous_state={},
+                    new_state={
+                        f.name: str(getattr(obj, f.name))
+                        for f in obj._meta.concrete_fields
+                        if getattr(obj, f.name) is not None
+                    },
+                    applied_rule_code=applied_rule,
+                    notes=f"Bulk created via engine pipeline (PK: {obj.pk})",
+                )
+            )
+
+        if audit_logs:
+            AuditLog.objects.bulk_create(audit_logs, batch_size=1000)
+
+        return created_objs
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        result = super().bulk_update(objs, fields, *args, **kwargs)
+
+        from tracker.models import AuditLog
+
+        audit_logs = []
+        for obj in objs:
+            account_id = getattr(obj, "account_id", None)
+            row_identifier = getattr(obj, "row_identifier", None)
+
+            audit_logs.append(
+                AuditLog(
+                    action_type=f"{obj.__class__.__name__.upper()}_BULK_UPDATE",
+                    target_table=obj._meta.db_table,
+                    account_id=account_id,
+                    row_identifier=row_identifier,
+                    previous_state={},
+                    new_state={
+                        f: str(getattr(obj, f)) for f in fields if hasattr(obj, f)
+                    },
+                    notes=f"Bulk updated fields {fields} (PK: {obj.pk})",
+                )
+            )
+
+        if audit_logs:
+            AuditLog.objects.bulk_create(audit_logs, batch_size=1000)
+
+        return result
+
+
+class BulkAuditManager(models.Manager):
+    def get_queryset(self):
+        return BulkAuditQuerySet(self.model, using=self._db)
+
+
 # ==========================================
 # 1. AUTHENTICATION & SECURITY TABLES (RBAC)
 # ==========================================
@@ -235,6 +318,9 @@ class TransactionHeader(models.Model):
 
 
 class StatementStagingLine(models.Model):
+
+    objects = BulkAuditManager()
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # 🎯 TARGET CONNECTIONS
@@ -310,12 +396,7 @@ class StatementStagingLine(models.Model):
 
 
 class StatementIngestRegistry(models.Model):
-    """
-    📜 STATEMENT INGEST AUDIT REGISTRY:
-    Tracks structural audit meta-profiles, balancing parameters, and source properties
-    for every individual statement processing run.
-    """
-
+    objects = BulkAuditManager()
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     account = models.ForeignKey(
         "Account", on_delete=models.CASCADE, related_name="ingest_logs"
@@ -489,10 +570,7 @@ class UserStatementTemplate(models.Model):
 
 
 class MasterFinancialCategory(models.Model):
-    """
-    🎯 CONSOLIDATED MASTER CATEGORY & PATTERN MATRIX
-    Clubs balancesheetheader, knowndefaultheader, and selftransferheader into one framework.
-    """
+    objects = BulkAuditManager()
 
     CATEGORY_TYPES = [
         ("REGULAR", "Standard Balance Sheet / Expense Item"),
@@ -540,10 +618,7 @@ class MasterFinancialCategory(models.Model):
 
 
 class AccountingRule(models.Model):
-    """
-    📜 TIERED ACCOUNTING POLICIES & GOLDEN RULES MATRIX
-    Maintains traditional financial evaluation tracking vectors (GR01 - GR75).
-    """
+    objects = BulkAuditManager()
 
     id = models.BigAutoField(primary_key=True)
     rule_code = models.CharField(
@@ -600,12 +675,7 @@ class AccountingRule(models.Model):
 
 
 class JournalEntryMapping(models.Model):
-    """
-    🔗 THE RELATIONAL INTEGRATION LINK
-    Instead of building a separate transaction ledger table, this extends your
-    existing core JournalEntry row. It decorates your double-entry rows with
-    your multi-tier category structures and tracking rule codes.
-    """
+    objects = BulkAuditManager()
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -641,10 +711,7 @@ class JournalEntryMapping(models.Model):
 
 
 class WIPEvaluationMatrix(models.Model):
-    """
-    🏗️ THE RECONCILIATION WORKSPACE SANDBOX (WIP ENGINE ROOM)
-    Tracks active transaction states using an exact cloned hash key matching staging rows.
-    """
+    objects = BulkAuditManager()
 
     CONFIDENCE_CHOICES = [
         ("HIGH", "100% Validated (Staged for Bulk Approval)"),
@@ -790,6 +857,7 @@ class DirectionalVectorOverride(models.Model):
 # 1. TAXONOMY TREE
 # ============================================================================
 class TaxonomyTree(models.Model):
+    objects = BulkAuditManager()
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     category = models.CharField(max_length=100)
     subcategory = models.CharField(max_length=100)
@@ -820,6 +888,7 @@ class ClassificationStatus(models.TextChoices):
 # 3. CLASSIFICATION RULE
 # ============================================================================
 class ClassificationRule(models.Model):
+    objects = BulkAuditManager()
     RULE_TYPES = (
         ("CONTAINS", "Contains Pattern"),
         ("EXACT", "Exact Match"),
@@ -936,6 +1005,7 @@ class ClassificationRule(models.Model):
 
 
 class JournalEntry(models.Model):
+    objects = BulkAuditManager()
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # 🏛️ Core Context Mappings
@@ -960,6 +1030,13 @@ class JournalEntry(models.Model):
         choices=ClassificationStatus.choices,
         default=ClassificationStatus.INITIAL,
         db_index=True,
+    )
+
+    # 📝 Integrated JSON Remarks Repository (Stores structured text, payee, upi_ref, user_note)
+    remarks = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Stores: {display_text, directional_prefix, target_account_name, payee, upi_ref, user_note, rule_code}",
     )
 
     # 🤖 Multi-Tier Evaluation Metadata JSON Repository (Stores t1/t2/t3, rules, audit history)
@@ -992,16 +1069,25 @@ class JournalEntry(models.Model):
         new_subcategory: str,
         rule_code: str = "MANUAL",
         taxonomy_node_account_id: int = 99,
+        user_note: str = None,
     ):
         """
         Safely reclassifies Node 99 counter-entry for a specific row_identifier while preserving
-        the historical audit trail inside evaluation_matrix_snapshot JSON.
+        the historical audit trail inside evaluation_matrix_snapshot JSON and storing structured
+        JSON remarks on BOTH legs.
         """
-        # Fetch Taxonomy Counter-Entry for the given row_identifier
-        entry_99 = (
-            cls.objects.select_for_update()
-            .filter(row_identifier=row_identifier, account_id=taxonomy_node_account_id)
-            .first()
+        # 1. Fetch BOTH double-entry legs for this row_identifier
+        all_legs = list(
+            cls.objects.select_for_update().filter(row_identifier=row_identifier)
+        )
+
+        entry_99 = next(
+            (leg for leg in all_legs if leg.account_id == taxonomy_node_account_id),
+            None,
+        )
+        bank_leg = next(
+            (leg for leg in all_legs if leg.account_id != taxonomy_node_account_id),
+            None,
         )
 
         if not entry_99:
@@ -1011,7 +1097,7 @@ class JournalEntry(models.Model):
 
         current_snapshot = entry_99.evaluation_matrix_snapshot or {}
 
-        # Extract current state to write as 'previous' audit trail
+        # 2. Extract current state for audit trail
         prev_cat = current_snapshot.get("resolved_category") or current_snapshot.get(
             "resolved_cat", "Uncategorized"
         )
@@ -1022,33 +1108,133 @@ class JournalEntry(models.Model):
             "applied_rule", "UNKNOWN"
         )
 
-        # Construct updated metadata payload with full history
+        # 3. Construct updated metadata payload with full history
         updated_snapshot = {
             **current_snapshot,
-            # Audit Trail History
             "previous_category": prev_cat,
             "previous_subcategory": prev_sub,
             "previous_rule_code": prev_rule,
-            # Active Target Classification
             "resolved_category": new_category,
             "resolved_subcategory": new_subcategory,
             "applied_rule_code": rule_code,
             "confidence_score": 100,
-            # Timestamps
             "is_reclassified": True,
             "reclassified_at": timezone.now().isoformat(),
         }
 
-        # Update Entry
+        target_account_label = f"{new_category} > {new_subcategory}"
+        existing_remark_99 = (
+            entry_99.remarks if isinstance(entry_99.remarks, dict) else {}
+        )
+
+        # 4. Generate updated JSON remark for Counter/Taxonomy Leg
+        prefix_99 = "By" if entry_99.debit > 0 else "To"
+        display_text_99 = (
+            f"{prefix_99} {target_account_label} | Classified via {rule_code}"
+        )
+        if user_note and user_note.strip():
+            display_text_99 += f" | Note: {user_note.strip()}"
+
+        json_remark_99 = {
+            **existing_remark_99,
+            "directional_prefix": prefix_99,
+            "target_account_name": target_account_label,
+            "display_text": display_text_99,
+            "rule_code": rule_code,
+            "user_note": user_note.strip() if user_note else None,
+            "updated_at": timezone.now().isoformat(),
+        }
+
         entry_99.evaluation_matrix_snapshot = updated_snapshot
         entry_99.is_reclassified = True
         entry_99.classification_status = ClassificationStatus.RECLASSIFIED
+        entry_99.remarks = json_remark_99
         entry_99.save(
             update_fields=[
                 "evaluation_matrix_snapshot",
                 "is_reclassified",
                 "classification_status",
+                "remarks",
             ]
         )
 
+        # 5. Generate updated JSON remark for Bank Leg if present
+        if bank_leg:
+            existing_remark_bank = (
+                bank_leg.remarks if isinstance(bank_leg.remarks, dict) else {}
+            )
+            prefix_bank = "By" if bank_leg.debit > 0 else "To"
+            display_text_bank = f"{prefix_bank} Bank A/c | Reclassified to {target_account_label} via {rule_code}"
+            if user_note and user_note.strip():
+                display_text_bank += f" | Note: {user_note.strip()}"
+
+            json_remark_bank = {
+                **existing_remark_bank,
+                "directional_prefix": prefix_bank,
+                "target_account_name": "Bank A/c",
+                "display_text": display_text_bank,
+                "rule_code": rule_code,
+                "user_note": user_note.strip() if user_note else None,
+                "updated_at": timezone.now().isoformat(),
+            }
+
+            bank_leg.classification_status = ClassificationStatus.RECLASSIFIED
+            bank_leg.is_reclassified = True
+            bank_leg.remarks = json_remark_bank
+            bank_leg.save(
+                update_fields=["classification_status", "is_reclassified", "remarks"]
+            )
+
         return entry_99
+
+
+class AuditLog(models.Model):
+    """
+    📜 IMMUTABLE FINANCIAL & SYSTEM AUDIT TRAIL
+    Centralized event logger for CISA/SOC-2 compliance tracking across all ledger operations.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+
+    # User / Actor Reference
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_actions",
+    )
+
+    # Target Entity Mapping
+    action_type = models.CharField(
+        max_length=50, db_index=True
+    )  # e.g. 'JOURNALENTRY_UPDATE', 'RULE_CREATE'
+    target_table = models.CharField(
+        max_length=100, db_index=True
+    )  # e.g. 'ledger_journal_entry'
+    account_id = models.IntegerField(null=True, blank=True, db_index=True)
+    row_identifier = models.CharField(
+        max_length=64, null=True, blank=True, db_index=True
+    )
+
+    # State Diffs (JSON)
+    previous_state = models.JSONField(default=dict, blank=True)
+    new_state = models.JSONField(default=dict, blank=True)
+
+    # Execution Metadata
+    applied_rule_code = models.CharField(max_length=50, null=True, blank=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "ledger_audit_log"
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["account_id", "action_type"]),
+            models.Index(fields=["target_table", "row_identifier"]),
+            models.Index(fields=["timestamp"]),
+        ]
+
+    def __str__(self):
+        user_str = self.user.email if self.user else "SYSTEM"
+        return f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] {self.action_type} by {user_str} on {self.target_table}"

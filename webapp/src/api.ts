@@ -343,6 +343,17 @@ export const getDashboardSummary = async (
 //   amount: number;
 // }
 
+export interface RemarksJSON {
+  directional_prefix?: 'By' | 'To' | null;
+  target_account_name?: string | null;
+  display_text?: string | null;
+  payee?: string | null;
+  upi_ref?: string | null;
+  user_note?: string | null;
+  rule_code?: string | null;
+  source?: string | null;
+}
+
 export interface ClusterItem {
   id: string;
   row_identifier?: string;
@@ -353,6 +364,7 @@ export interface ClusterItem {
   flag_color?: 'rose' | 'green';
   debit?: number;
   credit?: number;
+  remarks?: RemarksJSON | string | null;
 }
 
 export interface ApplyReclassificationParams {
@@ -515,5 +527,28 @@ export const addTaxonomyNode = async (
   } catch (err) {
     console.error('Failed to add new taxonomy node:', err);
     return false;
+  }
+};
+
+export interface UpdateUserNotePayload {
+  entry_id: string;
+  user_note: string;
+}
+
+export interface UpdateUserNoteResponse {
+  status: string;
+  entry_id: string;
+  remarks: any;
+}
+
+export const updateEntryUserNote = async (
+  payload: UpdateUserNotePayload
+): Promise<UpdateUserNoteResponse | null> => {
+  try {
+    const response = await api.post('/classification/entry-note/', payload);
+    return response.data;
+  } catch (err) {
+    console.error('Failed to update entry user note:', err);
+    return null;
   }
 };
