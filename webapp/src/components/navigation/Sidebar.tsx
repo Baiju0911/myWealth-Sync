@@ -12,13 +12,13 @@ export default function Sidebar({ currentView, setCurrentView }: SidebarProps) {
   const menuItems: { id: AppView; label: string; icon: string }[] = [
     { id: 'summary', label: 'Financial Summary', icon: '📊' },
     { id: 'banks', label: 'Institutions Matrix', icon: '🏛️' }, 
-    { id: 'ingestDynamicBulk', label: 'Universal Statement Ingestion [NEW]', icon: '📂' },
-    { id: 'upload', label: 'Statement Ingestion [Legacy]', icon: '📂' },
-    { id: 'ingestDynamic', label: 'Statement Ingestion Dynamic [Testing]', icon: '📂' },
-    { id: 'schemas', label: 'Mapping Schemas', icon: '📋' }, 
+    { id: 'ingestDynamicBulk', label: '1. Universal Statement Ingestion [NEW]', icon: '📂' },
+    // { id: 'upload', label: 'Statement Ingestion [Legacy]', icon: '📂' },
+    //{ id: 'ingestDynamic', label: 'Statement Ingestion Dynamic [Testing]', icon: '📂' },
+   // { id: 'schemas', label: 'Mapping Schemas', icon: '📋' }, 
     { id: 'AccountingHeaders', label: 'Accounting Headers', icon: '📋' },
-    { id: 'StagingQueueEvaluator', label: 'Staging Queue Evaluator', icon: '📋' },
-    { id: 'Ledgerdashboard', label: 'ledger Dashboard', icon: '📋' },
+    { id: 'StagingQueueEvaluator', label: '2. Staging Queue Evaluator', icon: '📋' },
+    { id: 'Ledgerdashboard', label: '3. ledger Dashboard', icon: '📋' },
   ];
 
   return (

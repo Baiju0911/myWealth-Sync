@@ -309,3 +309,64 @@ FROM ledger_journal_entry j
 WHERE j.account_id IN (3, 99)
 GROUP BY j.account_id, 2, 3
 ORDER BY j.account_id, primary_category, subcategory;
+
+
+
+
+
+SELECT 
+    row_identifier,
+    SUM(debit) AS total_debit,
+    SUM(credit) AS total_credit,
+    (SUM(debit) - SUM(credit)) AS imbalance_amount
+FROM ledger_journal_entry
+GROUP BY row_identifier
+HAVING imbalance_amount <> 0;
+
+
+
+
+SELECT 
+    SUM(debit) AS global_total_debit,
+    SUM(credit) AS global_total_credit,
+    (SUM(debit) - SUM(credit)) AS global_difference
+FROM ledger_journal_entry;
+
+
+
+-- 1. Check Staging Table
+SELECT 
+    '1. STAGING' AS table_source,
+    row_identifier,
+    narration,
+    routing_status,
+    applied_rule_code,
+    updated_at
+FROM ledger_statementstagingline
+WHERE row_identifier = '052cc276-600a-4de5-bbb1-a8de05a75285'
+
+UNION ALL
+
+-- 2. Check WIP Evaluation Matrix
+SELECT 
+    '2. WIP MATRIX' AS table_source,
+    row_identifier,
+    applied_rule_code,
+    resolved_category AS category,
+    resolved_subcategory AS subcategory,
+    updated_at
+FROM ledger_wip_evaluation_matrix
+WHERE row_identifier = '052cc276-600a-4de5-bbb1-a8de05a75285'
+
+UNION ALL
+
+-- 3. Check Journal Entries (Both Legs)
+SELECT 
+    '3. JOURNAL ENTRY' AS table_source,
+    row_identifier,
+    classification_status,
+    account_id,
+    CAST(debit AS CHAR) AS debit,
+    updated_at
+FROM ledger_journal_entry
+WHERE row_identifier = '052cc276-600a-4de5-bbb1-a8de05a75285';

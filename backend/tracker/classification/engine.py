@@ -173,6 +173,7 @@ def get_suspense_clusters(
                 "flag_color": flag_color,
                 "debit": float(entry.debit),
                 "credit": float(entry.credit),
+                "remarks": entry.remarks,
             }
         )
 

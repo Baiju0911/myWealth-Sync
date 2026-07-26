@@ -122,16 +122,29 @@ export default function StagingQueueEvaluator() {
     }
   }, [selectedAccountId, loadWorkspaceMatrix]);
 
-  const handleBulkClearance = async (rowsToApprove: any[]) => {
-    try {
-      await stagingQueueApi.bulkCommitLedger(selectedAccountId, rowsToApprove.map(r => r.wip_id));
-      setSelectedRowKeys([]);
-      //setWorkspaceRows([]);
-      await loadWorkspaceMatrix(selectedAccountId);
-    } catch (err) {
-      setErrorMsg('Atomic bulk write failed or rejected by schema validation models.');
-    }
-  };
+  // const handleBulkClearance = async (rowsToApprove: any[]) => {
+  //   try {
+  //     await stagingQueueApi.bulkCommitLedger(selectedAccountId, rowsToApprove.map(r => r.wip_id));
+  //     setSelectedRowKeys([]);
+  //     //setWorkspaceRows([]);
+  //     await loadWorkspaceMatrix(selectedAccountId);
+  //   } catch (err) {
+  //     setErrorMsg('Atomic bulk write failed or rejected by schema validation models.');
+  //   }
+  // };
+
+  const handleBulkClearance = async (rowsToApprove?: any[]) => {
+  try {
+    // 💡 Fall back to selectedRowKeys if rowsToApprove isn't provided
+    const targetIds = rowsToApprove ? rowsToApprove.map(r => r.wip_id) : selectedRowKeys;
+    
+    await stagingQueueApi.bulkCommitLedger(selectedAccountId, targetIds);
+    setSelectedRowKeys([]);
+    await loadWorkspaceMatrix(selectedAccountId);
+  } catch (err) {
+    setErrorMsg('Atomic bulk write failed or rejected by schema validation models.');
+  }
+};
 
   const handleCommitSplit = async (e: React.FormEvent) => {
     e.preventDefault();
