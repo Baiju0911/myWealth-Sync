@@ -345,6 +345,10 @@ SELECT
 FROM ledger_statementstagingline
 WHERE row_identifier = '052cc276-600a-4de5-bbb1-a8de05a75285'
 
+
+
+
+
 UNION ALL
 
 -- 2. Check WIP Evaluation Matrix
@@ -370,3 +374,113 @@ SELECT
     updated_at
 FROM ledger_journal_entry
 WHERE row_identifier = '052cc276-600a-4de5-bbb1-a8de05a75285';
+
+
+
+
+
+
+
+-- 1. Find Staging Line
+SELECT 
+    '1. STAGING' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    narration AS detail_1,
+    routing_status AS detail_2
+FROM ledger_statementstagingline
+WHERE narration LIKE '%BHIMA JEWELLERY%'
+
+UNION ALL
+
+-- 2. Find WIP Matrix
+SELECT 
+    '2. WIP MATRIX' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    'WIP Record Found' AS detail_1,
+    'Evaluated' AS detail_2
+FROM ledger_wip_evaluation_matrix
+WHERE id IN (
+    SELECT id FROM ledger_statementstagingline WHERE narration LIKE '%BHIMA JEWELLERY%'
+)
+
+UNION ALL
+
+-- 3. Find Journal Entry
+SELECT 
+    '3. JOURNAL ENTRY' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    classification_status AS detail_1,
+    CAST(account_id AS CHAR) AS detail_2
+FROM ledger_journal_entry
+WHERE id = '052cc276-600a-4de5-bbb1-a8de05a75285'
+   OR row_identifier IN (
+       SELECT row_identifier FROM ledger_statementstagingline WHERE narration LIKE '%BHIMA JEWELLERY%'
+   );
+
+
+
+
+
+
+SELECT 
+    j.id AS journal_id,
+    s.narration,
+    s.debit,
+    s.credit,
+    j.classification_status,
+    j.account_id,
+    j.is_reclassified
+FROM ledger_statementstagingline s
+JOIN ledger_journal_entry j 
+    ON j.row_identifier = s.row_identifier 
+    OR j.id = s.id
+WHERE s.narration LIKE '%BHIMA JEWELLERY%'
+ORDER BY s.id, j.id;
+
+
+
+
+   -- 1. Find Staging Line
+SELECT 
+    '1. STAGING' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    CAST(row_identifier AS CHAR) AS row_identifier,
+    narration AS detail_1,
+    routing_status AS detail_2,
+    CAST(amount AS CHAR) AS amount_val,
+    'N/A' AS is_reclassified
+FROM ledger_statementstagingline
+WHERE narration LIKE '%BHIMA JEWELLERY%'
+
+UNION ALL
+
+-- 2. Find WIP Matrix
+SELECT 
+    '2. WIP MATRIX' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    CAST(id AS CHAR) AS row_identifier,
+    'WIP Record Found' AS detail_1,
+    'Evaluated' AS detail_2,
+    'N/A' AS amount_val,
+    'N/A' AS is_reclassified
+FROM ledger_wip_evaluation_matrix
+WHERE id IN (
+    SELECT id FROM ledger_statementstagingline WHERE narration LIKE '%BHIMA JEWELLERY%'
+)
+
+UNION ALL
+
+-- 3. Find Journal Entry
+SELECT 
+    '3. JOURNAL ENTRY' AS source_table,
+    CAST(id AS CHAR) AS primary_key,
+    CAST(row_identifier AS CHAR) AS row_identifier,
+    classification_status AS detail_1,
+    CAST(account_id AS CHAR) AS detail_2,
+    CAST(COALESCE(debit, credit) AS CHAR) AS amount_val,
+    CAST(is_reclassified AS CHAR) AS is_reclassified
+FROM ledger_journal_entry
+WHERE id = '052cc276-600a-4de5-bbb1-a8de05a75285'
+   OR row_identifier IN (
+       SELECT row_identifier FROM ledger_statementstagingline WHERE narration LIKE '%BHIMA JEWELLERY%'
+   );

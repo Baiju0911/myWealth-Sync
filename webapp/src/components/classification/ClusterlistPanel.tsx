@@ -39,65 +39,35 @@ export const ClusterListPanel: React.FC<Props> = ({
   const [savingNote, setSavingNote] = useState<boolean>(false);
 
   // Populate state when opening the inspection modal
-const handleOpenInspectionModal = (item: any) => {
-  setRemarksModalItem(item);
-  const parsed = parseRemarks(item.remarks);
-  setUserNoteInput(parsed.user_note || '');
-};
+  const handleOpenInspectionModal = (item: any) => {
+    setRemarksModalItem(item);
+    const parsed = parseRemarks(item.remarks);
+    setUserNoteInput(parsed.user_note || '');
+  };
 
-// const handleSaveUserNote = async () => {
-//   if (!remarksModalItem) return;
-//   setSavingNote(true);
+  const handleSaveUserNote = async () => {
+    if (!remarksModalItem) return;
+    setSavingNote(true);
 
-//   try {
-//     const res = await fetch('/api/classification/entry-note/', {
-//       method: 'POST',
-//       headers: { 'Content-Type': 'application/json' },
-//       body: JSON.stringify({
-//         entry_id: remarksModalItem.id,
-//         user_note: userNoteInput,
-//       }),
-//     });
+    try {
+      const data = await updateEntryUserNote({
+        entry_id: remarksModalItem.id,
+        user_note: userNoteInput,
+      });
 
-//     if (res.ok) {
-//       const data = await res.json();
-      
-//       // Mutate local remarks reference so the UI updates live
-//       remarksModalItem.remarks = data.remarks;
-//       setRemarksModalItem(null);
-//     } else {
-//       alert('Failed to save user note.');
-//     }
-//   } catch (err) {
-//     console.error('Save note error:', err);
-//   } finally {
-//     setSavingNote(false);
-//   }
-// };
-
-const handleSaveUserNote = async () => {
-  if (!remarksModalItem) return;
-  setSavingNote(true);
-
-  try {
-    const data = await updateEntryUserNote({
-      entry_id: remarksModalItem.id,
-      user_note: userNoteInput,
-    });
-
-    if (data && data.status === 'success') {
-      // Mutate local remarks reference so UI reflects instantly
-      remarksModalItem.remarks = data.remarks;
-      setRemarksModalItem(null);
-    } else {
-      alert('Failed to save user note. Check backend endpoint & logs.');
+      if (data && data.status === 'success') {
+        // Mutate local remarks reference so UI reflects instantly
+        remarksModalItem.remarks = data.remarks;
+        setRemarksModalItem(null);
+      } else {
+        alert('Failed to save user note. Check backend endpoint & logs.');
+      }
+    } catch (err) {
+      console.error('Save note error:', err);
+    } finally {
+      setSavingNote(false);
     }
-  } catch (err) {
-    console.error('Save note error:', err);
-  } finally {
-    setSavingNote(false);
-  }
-};
+  };
 
   return (
     <div style={{ width: '58%', borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column', backgroundColor: '#09090b' }}>
@@ -171,6 +141,9 @@ const handleSaveUserNote = async () => {
             const clusterOutflow = cluster.total_outflow ?? cluster.total_amount ?? 0;
             const clusterInflow = cluster.total_inflow ?? 0;
 
+            // Strip any leading hashtag from cluster pattern to guarantee single '#' display
+            const displayTag = (cluster.pattern || 'GENERAL_SUSPENSE').replace(/^#+/, '');
+
             return (
               <div
                 key={clusterKey}
@@ -196,7 +169,7 @@ const handleSaveUserNote = async () => {
                       style={{ width: '16px', height: '16px', accentColor: '#f59e0b', cursor: 'pointer' }}
                     />
                     <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#f4f4f5' }}>
-                      #{cluster.pattern || 'GENERAL_SUSPENSE'}
+                      #{displayTag}
                     </span>
                   </div>
 
@@ -346,141 +319,141 @@ const handleSaveUserNote = async () => {
       </div>
 
       {/* 💬 POPUP MODAL FOR ROW REMARKS INSPECTION & USER NOTE */}
-{remarksModalItem && (
-  <div 
-    onClick={() => setRemarksModalItem(null)}
-    style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0,0,0,0.75)',
-      zIndex: 9999999,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '16px'
-    }}
-  >
-    <div 
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        backgroundColor: '#18181b',
-        border: '1px solid #3f3f46',
-        borderRadius: '12px',
-        padding: '20px',
-        maxWidth: '500px',
-        width: '100%',
-        color: '#f4f4f5',
-        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase' }}>
-          Line Item Audit & Remarks
-        </h3>
-        <button 
-          onClick={() => setRemarksModalItem(null)}
-          style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', fontSize: '16px' }}
-        >
-          ✕
-        </button>
-      </div>
-
-      {/* Original Narration */}
-      <div style={{ marginBottom: '12px' }}>
-        <label style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '2px' }}>
-          Original Bank Statement Narration
-        </label>
-        <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace', color: '#38bdf8', wordBreak: 'break-word' }}>
-          {remarksModalItem.narration}
-        </div>
-      </div>
-
-      {/* Auto-Generated System Remarks */}
-      <div style={{ marginBottom: '12px' }}>
-        <label style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '2px' }}>
-          Auto-Generated Audit Text
-        </label>
-        <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', color: '#a1a1aa' }}>
-          {parseRemarks(remarksModalItem.remarks).display_text || 'No system remarks generated.'}
-        </div>
-      </div>
-
-      {/* Metadata Chips */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-        {parseRemarks(remarksModalItem.remarks).payee && (
-          <div style={{ backgroundColor: '#1e1b4b', color: '#818cf8', border: '1px solid #312e81', padding: '4px 8px', borderRadius: '6px', fontSize: '11px' }}>
-            💳 Payee: <strong>{parseRemarks(remarksModalItem.remarks).payee}</strong>
-          </div>
-        )}
-        {parseRemarks(remarksModalItem.remarks).upi_ref && (
-          <div style={{ backgroundColor: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace' }}>
-            Ref: {parseRemarks(remarksModalItem.remarks).upi_ref}
-          </div>
-        )}
-      </div>
-
-      {/* 📝 Editable User Comment Field */}
-      <div style={{ marginBottom: '16px' }}>
-        <label style={{ fontSize: '10px', color: '#f59e0b', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>
-          User Comment / Note (Saved in remarks.user_note)
-        </label>
-        <input
-          type="text"
-          placeholder="e.g., Personal payment for tea at Technopark..."
-          value={userNoteInput}
-          onChange={(e) => setUserNoteInput(e.target.value)}
-          style={{
-            width: '100%',
-            backgroundColor: '#09090b',
-            border: '1px solid #3f3f46',
-            borderRadius: '6px',
-            padding: '8px 12px',
-            fontSize: '12px',
-            color: '#f4f4f5',
-            outline: 'none',
-            boxSizing: 'border-box'
-          }}
-        />
-      </div>
-
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        <button
+      {remarksModalItem && (
+        <div 
           onClick={() => setRemarksModalItem(null)}
           style={{
-            flex: 1,
-            padding: '8px',
-            backgroundColor: '#27272a',
-            border: 'none',
-            borderRadius: '6px',
-            color: '#a1a1aa',
-            fontSize: '12px',
-            cursor: 'pointer'
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.75)',
+            zIndex: 9999999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
           }}
         >
-          Cancel
-        </button>
-        <button
-          onClick={handleSaveUserNote}
-          disabled={savingNote}
-          style={{
-            flex: 1,
-            padding: '8px',
-            backgroundColor: '#f59e0b',
-            border: 'none',
-            borderRadius: '6px',
-            color: '#09090b',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            cursor: savingNote ? 'wait' : 'pointer'
-          }}
-        >
-          {savingNote ? 'Saving...' : 'Save Comment'}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#18181b',
+              border: '1px solid #3f3f46',
+              borderRadius: '12px',
+              padding: '20px',
+              maxWidth: '500px',
+              width: '100%',
+              color: '#f4f4f5',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase' }}>
+                Line Item Audit & Remarks
+              </h3>
+              <button 
+                onClick={() => setRemarksModalItem(null)}
+                style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', fontSize: '16px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Original Narration */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '2px' }}>
+                Original Bank Statement Narration
+              </label>
+              <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace', color: '#38bdf8', wordBreak: 'break-word' }}>
+                {remarksModalItem.narration}
+              </div>
+            </div>
+
+            {/* Auto-Generated System Remarks */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '2px' }}>
+                Auto-Generated Audit Text
+              </label>
+              <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', color: '#a1a1aa' }}>
+                {parseRemarks(remarksModalItem.remarks).display_text || 'No system remarks generated.'}
+              </div>
+            </div>
+
+            {/* Metadata Chips */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+              {parseRemarks(remarksModalItem.remarks).payee && (
+                <div style={{ backgroundColor: '#1e1b4b', color: '#818cf8', border: '1px solid #312e81', padding: '4px 8px', borderRadius: '6px', fontSize: '11px' }}>
+                  💳 Payee: <strong>{parseRemarks(remarksModalItem.remarks).payee}</strong>
+                </div>
+              )}
+              {parseRemarks(remarksModalItem.remarks).upi_ref && (
+                <div style={{ backgroundColor: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace' }}>
+                  Ref: {parseRemarks(remarksModalItem.remarks).upi_ref}
+                </div>
+              )}
+            </div>
+
+            {/* 📝 Editable User Comment Field */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ fontSize: '10px', color: '#f59e0b', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>
+                User Comment / Note (Saved in remarks.user_note)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g., Personal payment for tea at Technopark..."
+                value={userNoteInput}
+                onChange={(e) => setUserNoteInput(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#09090b',
+                  border: '1px solid #3f3f46',
+                  borderRadius: '6px',
+                  padding: '8px 12px',
+                  fontSize: '12px',
+                  color: '#f4f4f5',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => setRemarksModalItem(null)}
+                style={{
+                  flex: 1,
+                  padding: '8px',
+                  backgroundColor: '#27272a',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#a1a1aa',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveUserNote}
+                disabled={savingNote}
+                style={{
+                  flex: 1,
+                  padding: '8px',
+                  backgroundColor: '#f59e0b',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#09090b',
+                  fontSize: '12px',
+                  fontWeight: 'bold',
+                  cursor: savingNote ? 'wait' : 'pointer'
+                }}
+              >
+                {savingNote ? 'Saving...' : 'Save Comment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
