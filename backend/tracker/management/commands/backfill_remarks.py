@@ -1,5 +1,3 @@
-# tracker/management/commands/backfill_remarks.py
-
 from django.core.management.base import BaseCommand
 from django.db.models import Q
 from tracker.models import JournalEntry, StatementStagingLine
@@ -28,7 +26,7 @@ class Command(BaseCommand):
                 "FORCE MODE: Re-parsing all unclassified suspense entries..."
             )
         else:
-            # Target missing, empty, or dirty bank code payees
+            # Target missing, empty, dirty bank codes, OR leftover TRANSFER payees
             bank_tokens = [
                 "YESB",
                 "SBIN",
@@ -45,6 +43,8 @@ class Command(BaseCommand):
                 "SIBL",
                 "NULL",
                 "IMPS",
+                "TRANSFER:",
+                "TRANSFER",
             ]
             query = Q(remarks__isnull=True) | Q(remarks="") | Q(remarks={})
             for token in bank_tokens:
@@ -77,14 +77,22 @@ class Command(BaseCommand):
 
         for entry in target_entries.iterator():
             narration = staging_map.get(entry.row_identifier, "")
-            debit_val = float(entry.debit)
-            credit_val = float(entry.credit)
+            debit_val = float(entry.debit or 0.0)
+            credit_val = float(entry.credit or 0.0)
 
+            # Determine leg direction for double-entry balance assignment
             debit_rem, credit_rem = generate_initial_remarks(
                 narration, debit_val, credit_val
             )
 
-            entry.remarks = debit_rem if debit_val > 0 else credit_rem
+            # Assign appropriate leg payload based on entry side
+            if entry.account_id == 5:
+                # Bank account leg
+                entry.remarks = credit_rem if debit_val > 0 else debit_rem
+            else:
+                # Category / Counter leg
+                entry.remarks = debit_rem if debit_val > 0 else credit_rem
+
             entries_to_update.append(entry)
 
             if len(entries_to_update) >= batch_size:

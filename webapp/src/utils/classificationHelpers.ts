@@ -63,35 +63,67 @@ export const calculateSelectedMetrics = (
 };
 
 /**
- * High-speed field matcher for individual transaction items.
+ * Normalizes strings for space and punctuation-insensitive matching.
+ * Strips all spaces, underscores, hyphens, slashes, and special characters.
+ * e.g., 'PRAVEE N P' -> 'PRAVEENP'
+ *       'B_AIJU'     -> 'BAIJU'
  */
-const matchItemFields = (item: any, searchStr: string): boolean => {
-  // Fast raw string checks first before parsing JSON remarks
-  if (item.narration && item.narration.toLowerCase().includes(searchStr))
+export const normalizeStr = (str: string): string => {
+  if (!str) return '';
+  return String(str)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+};
+
+/**
+ * High-speed normalized field matcher for individual transaction items.
+ * Matches even when names contain random bank spaces or mangled tokens.
+ */
+const matchItemFields = (
+  item: any,
+  rawSearchStr: string,
+  normSearchStr: string
+): boolean => {
+  const rawLower = rawSearchStr.toLowerCase();
+
+  // 1. Raw exact substring checks (Fast pass for numbers, dates, exact words)
+  if (item.narration && item.narration.toLowerCase().includes(rawLower))
     return true;
-  if (item.debit && String(item.debit).includes(searchStr)) return true;
-  if (item.credit && String(item.credit).includes(searchStr)) return true;
-  if (item.amount && String(item.amount).includes(searchStr)) return true;
-  if (item.transaction_date && item.transaction_date.includes(searchStr))
+  if (item.debit && String(item.debit).includes(rawLower)) return true;
+  if (item.credit && String(item.credit).includes(rawLower)) return true;
+  if (item.amount && String(item.amount).includes(rawLower)) return true;
+  if (item.transaction_date && item.transaction_date.includes(rawLower))
     return true;
 
-  // Inspect structured remarks fields (payee, display text, UPI reference)
   const remarks = parseRemarks(item.remarks);
-  if (remarks.payee && remarks.payee.toLowerCase().includes(searchStr))
+  if (remarks.payee && remarks.payee.toLowerCase().includes(rawLower))
     return true;
   if (
     remarks.display_text &&
-    remarks.display_text.toLowerCase().includes(searchStr)
+    remarks.display_text.toLowerCase().includes(rawLower)
   )
     return true;
-  if (remarks.upi_ref && remarks.upi_ref.toLowerCase().includes(searchStr))
+  if (remarks.upi_ref && remarks.upi_ref.toLowerCase().includes(rawLower))
     return true;
+
+  // 2. Normalized fallback pass (Handles mangled names like "PRAVEE N P" vs "praveen")
+  if (normSearchStr.length >= 2) {
+    if (item.narration && normalizeStr(item.narration).includes(normSearchStr))
+      return true;
+    if (remarks.payee && normalizeStr(remarks.payee).includes(normSearchStr))
+      return true;
+    if (
+      remarks.display_text &&
+      normalizeStr(remarks.display_text).includes(normSearchStr)
+    )
+      return true;
+  }
 
   return false;
 };
 
 /**
- * Two-tiered smart search filter for workbench clusters and individual item rows.
+ * Two-tiered smart normalized search filter for workbench clusters and individual item rows.
  */
 export const filterClustersByQuery = (
   clusters: ExtendedCluster[],
@@ -100,6 +132,7 @@ export const filterClustersByQuery = (
   if (!searchQuery || !searchQuery.trim()) return clusters;
 
   const rawQuery = searchQuery.trim().toLowerCase();
+  const normQuery = normalizeStr(searchQuery);
 
   return clusters
     .map((cluster) => {
@@ -121,20 +154,24 @@ export const filterClustersByQuery = (
           textQuery = tagContent.slice(spaceIndex + 1).trim();
         }
 
+        const normPatternQuery = normalizeStr(patternQuery);
+
         const matchesTag =
-          (c.pattern && c.pattern.toLowerCase().includes(patternQuery)) ||
+          (c.pattern && normalizeStr(c.pattern).includes(normPatternQuery)) ||
           (c.resolved_category &&
-            c.resolved_category.toLowerCase().includes(patternQuery)) ||
-          (c.category && c.category.toLowerCase().includes(patternQuery)) ||
+            normalizeStr(c.resolved_category).includes(normPatternQuery)) ||
+          (c.category && normalizeStr(c.category).includes(normPatternQuery)) ||
           (c.resolved_subcategory &&
-            c.resolved_subcategory.toLowerCase().includes(patternQuery)) ||
-          (c.subcategory && c.subcategory.toLowerCase().includes(patternQuery));
+            normalizeStr(c.resolved_subcategory).includes(normPatternQuery)) ||
+          (c.subcategory &&
+            normalizeStr(c.subcategory).includes(normPatternQuery));
 
         if (!matchesTag) return null;
 
         if (textQuery && cluster.items) {
+          const normTextQuery = normalizeStr(textQuery);
           const matchingItems = cluster.items.filter((item) =>
-            matchItemFields(item, textQuery)
+            matchItemFields(item, textQuery, normTextQuery)
           );
           if (matchingItems.length === 0) return null;
           return { ...cluster, items: matchingItems };
@@ -144,27 +181,31 @@ export const filterClustersByQuery = (
       }
 
       // -------------------------------------------------------------
-      // Scenario 2: Direct Text Search across Tags, Items, & Sample Descriptions
+      // Scenario 2: Smart Normalized Text Search across Tags, Items, & Samples
       // -------------------------------------------------------------
+
+      // Check cluster tag / category matching (Normalized comparison)
       const matchesPatternTag =
-        (c.pattern && c.pattern.toLowerCase().includes(rawQuery)) ||
+        (c.pattern && normalizeStr(c.pattern).includes(normQuery)) ||
         (c.resolved_category &&
-          c.resolved_category.toLowerCase().includes(rawQuery)) ||
-        (c.category && c.category.toLowerCase().includes(rawQuery));
+          normalizeStr(c.resolved_category).includes(normQuery)) ||
+        (c.category && normalizeStr(c.category).includes(normQuery));
 
       if (matchesPatternTag) return cluster;
 
+      // Check line item fields (Narration, Amounts, Remarks, Payee)
       if (cluster.items && cluster.items.length > 0) {
         const matchingItems = cluster.items.filter((item) =>
-          matchItemFields(item, rawQuery)
+          matchItemFields(item, rawQuery, normQuery)
         );
         if (matchingItems.length > 0) {
           return { ...cluster, items: matchingItems };
         }
       }
 
+      // Check sample descriptions fallback
       const matchesSampleDesc = cluster.sample_descriptions?.some((desc) =>
-        desc.toLowerCase().includes(rawQuery)
+        normalizeStr(desc).includes(normQuery)
       );
       if (matchesSampleDesc) return cluster;
 

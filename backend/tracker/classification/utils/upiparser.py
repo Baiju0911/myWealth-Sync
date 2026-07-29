@@ -1,258 +1,164 @@
-# tracker/classification/utils/upiparser.py
-
 import re
 
-# Standard banking handles, system noise, and structural placeholders to strip out
-IGNORED_PAYEE_TOKENS = {
+IGNORE_TOKENS = {
+    "TRANSFER: NACH",
+    "TRANSFER:",
+    "TRANSFER",
+    "NACH",
+    "UPI",
+    "IMPS",
+    "NEFT",
+    "POS",
+    "MOB",
+    "POSTRN",
+    "POS TRN",
+    "ATMTRN",
+    "ATM TRN",
+    "ATMREV",
+    "ATM REV",
+    "IBNTR",
+    "CWD R",
+    "CWDR",
+    "PRCR",
+    "CMN",
+    "HO RTGS CELL",
+    "RTGS",
+    "DATACENTR",
+    "DATACENTRE",
+    "DATACENTR E",
+    "MUMBAI SERVICE BRANCH",
+    "SERVICE BRANCH",
+    "BRANCH",
+    "OWN ACCOUNT",
     "NULL",
-    "NONE",
-    "NA",
+    "UNKNOWN",
+    "SELF",
     "NO REMARKS",
     "NOREMARKS",
-    "UNKNOWN",
-    "PAYMENT FROM UPI",
-    "PAY TO MERCHANT",
-    "PAYMENT TO",
-    "TRANSFER",
-    "BALANCE",
-    "OW N ACCOUNT",
-    "OWN ACCOUNT",
-    "FDRL",
-    "YESB",
-    "ICIC",
-    "HDFC",
-    "SBIN",
-    "UTIB",
-    "PYTM",
-    "PAYTM",
-    "KKBK",
-    "BARB",
-    "CNRB",
-    "PUNB",
-    "IOBA",
-    "CBIN",
-    "MAHB",
-    "IDIB",
-    "SIBL",
-    "CSBK",
-    "UBIN",
-    "SBIP",
-    "IPPB",
-    "PAYU",
-    "AXIS",
-    "CITI",
-    "SCBL",
-    "KALLAMBALAM",  # Branch location token
+    "KALLAMBALAM",
     "TRIVANDRUM",
-    "NRI",
+    "THIRUVANANTHAPURAM",
+    "KOCHIN",
+    "MUMBAI",
+    "FORT BRANCH",
 }
 
+# Trailing location / branch noise to strip off the end of payee names
+BRANCH_SUFFIX_REGEX = r"\s+(?:MUMBAI|SERVICE BRANCH|BRANCH|FORT BRANCH|DATACENTRE|THIRUVANANTHAPURAM|TRIVANDRUM|KOCHIN|KALLAMBALAM)+$"
 
-def normalize_whitespace(text: str) -> str:
-    """Collapses multiple spaces, tabs, and newlines into a single space."""
-    return re.sub(r"\s+", " ", text).strip()
+
+# def clean_payee_name_older(raw_name: str) -> str:
+#     if not raw_name:
+#         return ""
+
+#     cleaned = re.sub(r"\s+", " ", str(raw_name)).strip()
+
+#     # 1. Strip parenthetical prefix noise like "ID NO. (" -> "("
+#     cleaned = re.sub(r"^ID\s+NO\.?\s*\(?", "", cleaned, flags=re.IGNORECASE).strip()
+#     cleaned = cleaned.rstrip(")").strip()
+
+#     # 2. Strip standard operation prefixes (including NACH DR, ACH DR, etc.)
+#     cleaned = re.sub(
+#         r"^(?:TRANSFER:?\s*NACH|NEFT\s+UTR:?|DEP\s+INT:?|INT\.?PD:?|TRANSFER:?\s*TO|NACH\s+DR:?|ACH\s+DR:?|DR:?|CR:?)\s*",
+#         "",
+#         cleaned,
+#         flags=re.IGNORECASE,
+#     ).strip()
+
+#     # 3. Strip IFSC bank codes
+#     cleaned = re.sub(r"\b[A-Z]{4}0+\d*\b", "", cleaned, flags=re.IGNORECASE).strip()
+
+#     # 4. Strip embedded date stamps & standalone reference numbers (6+ digits)
+#     cleaned = re.sub(r"\b\d{6,}\b", "", cleaned).strip()
+
+#     # 5. Strip trailing branch/location noise (e.g., "BD CANARA ROBECO MF MUMBAI SERVICE BRANCH" -> "BD CANARA ROBECO MF")
+#     cleaned = re.sub(BRANCH_SUFFIX_REGEX, "", cleaned, flags=re.IGNORECASE).strip()
+
+#     # 6. Fix space-mangled words (e.g., "ZAM ZA M" -> "ZAM ZAM")
+#     cleaned = re.sub(r"\b([A-Z]{1,3})\s+([A-Z]{1,3})\b", r"\1\2", cleaned)
+
+#     return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def clean_payee_name(raw_name: str) -> str:
-    """
-    Performs purely structural sanitization:
-    - Strips action/system prefixes (TRANSFER:, NEFT TO, POS TRN, etc.)
-    - Strips legal entity suffixes (PVT LTD, LIMITED, INC, LLP)
-    - Strips leading amounts or attached digits (e.g., "50.54DHANYA" -> "DHANYA")
-    - Strips trailing reference numbers or sequence IDs
-    - Normalizes space-mangled words (e.g., "GA TEWAY" -> "GATEWAY")
-    """
     if not raw_name:
         return ""
 
-    # 1. Strip verb and system prefixes
-    cleaned = re.sub(
-        r"^(TRANSFER:|NEFT\s+TO\s+|NEFT\s+|MOB/|IMPS/|POS\s+TRN/?|ID\s+NO\.?\s*|TO\s+|FM\s+|FROM\s+|BY\s+)",
-        "",
-        raw_name,
-        flags=re.IGNORECASE,
-    ).strip()
+    cleaned = re.sub(r"\s+", " ", str(raw_name)).strip()
 
-    # 2. Fix known space-mangled words
-    cleaned = re.sub(r"\bGA\s+TEWAY\b", "GATEWAY", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bTRANS\s+FER\b", "TRANSFER", cleaned, flags=re.IGNORECASE)
+    # 1. Strip parenthetical prefix noise like "ID NO. (" -> "("
+    cleaned = re.sub(r"^ID\s+NO\.?\s*\(?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = cleaned.rstrip(")").strip()
 
-    # 3. Strip trailing legal corporate suffixes
+    # 2. Strip standard operation prefixes (including TRANSFER:, NACH DR:, etc.)
     cleaned = re.sub(
-        r"\b(PVT\.?\s*LTD\.?|PRIVATE\s+LIMITED|LIMITED|LTD\.?|INC\.?|LLP)\b",
+        r"^(?:TRANSFER:?\s*NACH:?|TRANSFER:?|NEFT\s+UTR:?|DEP\s+INT:?|INT\.?PD:?|NACH\s+DR:?|ACH\s+DR:?|DR:?|CR:?)\s*",
         "",
         cleaned,
         flags=re.IGNORECASE,
     ).strip()
 
-    # 4. Strip leading numbers attached to names (e.g. "50.54DHANYA" -> "DHANYA")
-    cleaned = re.sub(r"^\d+[\.\d]*\s*", "", cleaned).strip()
+    # 3. Strip IFSC bank codes
+    cleaned = re.sub(r"\b[A-Z]{4}0+\d*\b", "", cleaned, flags=re.IGNORECASE).strip()
 
-    # 5. Strip trailing reference codes or numeric sequence IDs (5+ digits)
-    cleaned = re.sub(r"\b\d{5,}\b", "", cleaned).strip()
+    # 4. Strip standalone 6+ digit reference numbers/dates
+    cleaned = re.sub(r"\b\d{6,}\b", "", cleaned).strip()
 
-    return normalize_whitespace(cleaned)
+    # 5. Strip trailing branch/location noise
+    cleaned = re.sub(BRANCH_SUFFIX_REGEX, "", cleaned, flags=re.IGNORECASE).strip()
+
+    # 6. Fix space-mangled words (e.g., "ZAM ZA M" -> "ZAM ZAM")
+    cleaned = re.sub(r"\b([A-Z]{1,3})\s+([A-Z]{1,3})\b", r"\1\2", cleaned)
+
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def parse_upi_narration(narration: str) -> dict:
-    """
-    Extracts raw structural metadata (payee string & reference ID) from bank narrations.
-    Categorization and rule learning are delegated to the ClassificationRule engine.
-    """
-    if not narration:
+    if not narration or not str(narration).strip():
         return {"payee": None, "upi_ref": None}
 
-    cleaned = normalize_whitespace(narration)
+    cleaned = re.sub(r"\s+", " ", str(narration)).strip()
+    cleaned_upper = cleaned.upper()
 
-    # ------------------------------------------------------------------
-    # 1. Bank Interest & Service Charges / Tax (Standard Bank Transactions)
-    # ------------------------------------------------------------------
-    if re.search(r"\bINT\.?PD\b|\bINTEREST CREDIT\b", cleaned, re.IGNORECASE):
-        return {"payee": "Savings Bank Interest", "upi_ref": None}
+    # 🟢 RULE 1: Direct structural match for Bank Interest
+    if re.search(r"\bINT\.?PD\b|\bDEP\s*INT\b|\bINTEREST\s*CREDIT\b", cleaned_upper):
+        return {
+            "payee": "Bank Interest",
+            "upi_ref": None,
+        }
 
-    if re.search(
-        r"\bRETN CHRG\b|\bBANK CHARGES\b|\bS\.?\s*TAX\b|\bACCOUNT\s*TRANS\s*FER\s*CHARGES\b",
-        cleaned,
-        re.IGNORECASE,
-    ):
-        return {"payee": "Bank Service Charges", "upi_ref": None}
+    # Extract Ref Number (10-12 digits)
+    ref_match = re.search(r"\b(\d{10,12})\b", cleaned)
+    extracted_ref = ref_match.group(1) if ref_match else None
 
-    # ------------------------------------------------------------------
-    # 2. NACH / Direct Debits (Generic Segment Extraction)
-    # ------------------------------------------------------------------
-    if "NACH" in cleaned.upper() or "DATACENTR" in cleaned.upper():
-        nach_ref = next(
-            (
-                p.strip()
-                for p in cleaned.split("/")
-                if re.match(r"^\d{10,12}$", p.strip())
-            ),
-            None,
-        )
+    # 🟢 RULE 2: Extract Merchant inside Parentheses if available
+    paren_match = re.search(r"\(([^)]+)\)", cleaned)
+    if paren_match:
+        cand_inside_paren = clean_payee_name(paren_match.group(1))
+        if (
+            len(cand_inside_paren) > 2
+            and cand_inside_paren.upper() not in IGNORE_TOKENS
+        ):
+            return {
+                "payee": cand_inside_paren,
+                "upi_ref": extracted_ref,
+            }
 
-        parts = [p.strip() for p in cleaned.split("/") if p.strip()]
-        for p in parts:
-            p_clean = clean_payee_name(p)
-            if len(p_clean) > 3 and not re.match(
-                r"^(TRANSFER|NACH|SIBL\d+|DATACENTR|\d+)$", p_clean, re.IGNORECASE
-            ):
-                return {"payee": p_clean, "upi_ref": nach_ref}
-
-        return {"payee": "NACH Direct Debit", "upi_ref": nach_ref}
-
-    # ------------------------------------------------------------------
-    # 3. IMPS Transfers
-    # ------------------------------------------------------------------
-    imps_match = re.search(
-        r"IMPS/(?:IFSC/)?(\d{10,12})/([^/]+)", cleaned, re.IGNORECASE
-    )
-    if imps_match:
-        ref_no = imps_match.group(1)
-        payee = clean_payee_name(imps_match.group(2))
-        return {"payee": payee, "upi_ref": ref_no}
-
-    # ------------------------------------------------------------------
-    # 4. NEFT Transfers
-    # ------------------------------------------------------------------
-    if "NEFT" in cleaned.upper():
-        neft_match = re.search(
-            r"NEFT\s+(?:UTR:?\s*\w+\s*//)?(?:[^/]+/)*NEFT\s+TO\s+([^/]+)",
-            cleaned,
-            re.IGNORECASE,
-        )
-        if neft_match:
-            payee = clean_payee_name(neft_match.group(1))
-            return {"payee": payee, "upi_ref": None}
-
-    # ------------------------------------------------------------------
-    # 5. POS Card Terminal Debits
-    # ------------------------------------------------------------------
-    if cleaned.startswith("POS TRN"):
-        raw_pos = re.sub(
-            r"POS\s+TRN/?|ID\s+NO\.?\s*|\(?|\)?|PRCR/.*|CMN/.*|\d{10,}.*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        parts = [p.strip() for p in raw_pos.split("/") if p.strip()]
-        if parts:
-            vendor_name = clean_payee_name(parts[0])
-            return {"payee": vendor_name, "upi_ref": None}
-
-    # ------------------------------------------------------------------
-    # 6. MOB & TRANSFER Direct Bank Narrations
-    # ------------------------------------------------------------------
-    if cleaned.startswith("MOB/") or cleaned.startswith("TRANSFER:"):
-        raw_clean = re.sub(r"^TRANSFER:\s*", "", cleaned, flags=re.IGNORECASE)
-        parts = [normalize_whitespace(p) for p in raw_clean.split("/") if p.strip()]
-
-        mob_ref = next((p for p in parts if re.match(r"^\d{10,12}$", p)), None)
-
-        for p in parts:
-            p_cleaned_name = clean_payee_name(p)
-            p_upper = p_cleaned_name.upper()
-            p_compressed = re.sub(r"\s+", "", p_upper)
-
-            if (
-                len(p_cleaned_name) > 2
-                and p_upper not in IGNORED_PAYEE_TOKENS
-                and p_compressed not in IGNORED_PAYEE_TOKENS
-                and not re.match(r"^\d+$", p_cleaned_name)
-            ):
-                return {"payee": p_cleaned_name, "upi_ref": mob_ref}
-
-    # ------------------------------------------------------------------
-    # 7. Standard UPI Delimited Parsing
-    # ------------------------------------------------------------------
-    ref_match = re.search(r"\b(\d{12})\b", cleaned)
-    upi_ref = ref_match.group(1) if ref_match else None
-
-    # Sanitize known noise placeholders before splitting by slashes
-    cleaned_delimited = re.sub(
-        r"/(NULL|NONE|NA|NO REMARKS?|PAYMENT FROM UPI|PAY TO MERCHANT)\b",
-        "/",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    parts = [normalize_whitespace(p) for p in cleaned_delimited.split("/") if p.strip()]
-
-    fallback_payee = None
+    # 🟢 RULE 3: Split by / for standard segment scanning
+    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
 
     for p in parts:
-        p_clean = clean_payee_name(p)
-        p_upper = p_clean.upper()
-        p_compressed = re.sub(r"\s+", "", p_upper)
+        candidate = clean_payee_name(p)
+        cand_upper = candidate.upper().replace("_", " ")
 
         if (
-            len(p_clean) < 3
-            or (p_upper.startswith("UPI") and len(p_clean) < 6)
-            or "@" in p_clean
-            or p_clean == upi_ref
-            or p_upper in IGNORED_PAYEE_TOKENS
-            or p_compressed in IGNORED_PAYEE_TOKENS
-            or re.match(r"^[A-Z0-9]{15,}$", p_upper)
-            or re.match(r"^\d{12,}$", p_clean)
+            len(candidate) > 2
+            and cand_upper not in IGNORE_TOKENS
+            and not re.match(r"^\d+$", candidate)
         ):
-            continue
+            return {
+                "payee": candidate,
+                "upi_ref": extracted_ref,
+            }
 
-        if not fallback_payee:
-            fallback_payee = p_clean
-
-    final_payee = fallback_payee
-
-    if final_payee:
-        final_payee = re.sub(
-            r"\s+[B|UPI]$", "", final_payee, flags=re.IGNORECASE
-        ).strip()
-        final_payee = clean_payee_name(final_payee)
-
-        if (
-            final_payee.upper() in IGNORED_PAYEE_TOKENS
-            or re.sub(r"\s+", "", final_payee.upper()) in IGNORED_PAYEE_TOKENS
-        ):
-            final_payee = None
-
-    return {
-        "payee": final_payee,
-        "upi_ref": upi_ref,
-    }
+    return {"payee": None, "upi_ref": extracted_ref}

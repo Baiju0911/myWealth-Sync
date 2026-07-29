@@ -22,4 +22,5 @@ urlpatterns = [
     path("api/", include(router.urls)),
     # Fallback to internal tracker routes for manual views if needed
     path("api/", include("tracker.urls")),
+    path("api/classification/", include("tracker.classification.urls")),
 ]
