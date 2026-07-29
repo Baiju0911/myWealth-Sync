@@ -4,6 +4,9 @@ from rest_framework import status, views
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from urllib.parse import parse_qs, unquote
+from django.db.models import Q
+
 from tracker.models import JournalEntry, TaxonomyTree
 from tracker.classification.engine import get_suspense_clusters, reclassify_and_learn
 from tracker.classification.serializers import (
@@ -11,6 +14,7 @@ from tracker.classification.serializers import (
     ReclassifyRequestSerializer,
 )
 from rest_framework.pagination import PageNumberPagination
+from tracker.classification.utils.upiparser import clean_payee_name
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -129,13 +133,100 @@ class ReclassifyEntryView(views.APIView):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class CategoryVendorDrilldownView(views.APIView):
+    def get(self, request):
+        target_sub = request.GET.get("subcategory")
+        account_id_param = request.GET.get("account_id")
+
+        # 🟢 1. Decode raw query string safely for ampersands
+        raw_query = request.META.get("QUERY_STRING", "")
+        if raw_query and "subcategory=" in raw_query:
+            parsed_qs = parse_qs(raw_query)
+            if "subcategory" in parsed_qs:
+                target_sub = parsed_qs["subcategory"][0]
+
+        if not target_sub or not target_sub.strip():
+            return Response(
+                {"error": "subcategory query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target_sub = target_sub.strip()
+
+        # 🟢 2. Fetch matching row_identifiers
+        matching_row_ids = (
+            JournalEntry.objects.filter(
+                Q(evaluation_matrix_snapshot__resolved_subcategory__iexact=target_sub)
+                | Q(remarks__target_account_name__iexact=target_sub)
+            )
+            .values_list("row_identifier", flat=True)
+            .distinct()
+        )
+
+        entries_query = JournalEntry.objects.filter(row_identifier__in=matching_row_ids)
+
+        if account_id_param and account_id_param.isdigit():
+            entries_query = entries_query.filter(account_id=int(account_id_param))
+        else:
+            entries_query = entries_query.exclude(account_id=5)
+
+        entries = list(entries_query)
+
+        vendor_map = {}
+        for entry in entries:
+            remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+            raw_payee = remarks.get("payee") or ""
+
+            # 🟢 Clean payee on-the-fly to strip residual 'TRANSFER:' or 'NACH' tokens
+            payee = clean_payee_name(raw_payee) or "Unspecified Vendor"
+
+            debit_val = float(entry.debit or 0.0)
+            credit_val = float(entry.credit or 0.0)
+
+            if payee not in vendor_map:
+                vendor_map[payee] = {
+                    "payee": payee,
+                    "transaction_count": 0,
+                    "total_outflow": 0.0,
+                    "total_inflow": 0.0,
+                    "sample_upi_refs": [],
+                }
+
+            vendor_map[payee]["transaction_count"] += 1
+            vendor_map[payee]["total_outflow"] += debit_val
+            vendor_map[payee]["total_inflow"] += credit_val
+
+            upi_ref = remarks.get("upi_ref")
+            if upi_ref and upi_ref not in vendor_map[payee]["sample_upi_refs"]:
+                if len(vendor_map[payee]["sample_upi_refs"]) < 3:
+                    vendor_map[payee]["sample_upi_refs"].append(upi_ref)
+
+        vendor_list = sorted(
+            vendor_map.values(), key=lambda v: v["total_outflow"], reverse=True
+        )
+
+        return Response(
+            {
+                "status": "success",
+                "subcategory": target_sub,
+                "account_id": account_id_param or "COUNTER_LEGS",
+                "total_vendors": len(vendor_list),
+                "vendors": vendor_list,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 @api_view(["GET"])
 def get_suspense_workbench_data(request):
     """
-    Returns auto-clustered patterns for Workbench review with direction flags and inflows/outflows.
+    Returns auto-clustered patterns for Workbench review with direction flags, inflows/outflows,
+    and character/underscore-insensitive pattern search.
     """
     target_sub = request.GET.get("subcategory", "Suspense Account")
     account_id_param = request.GET.get("account_id")
+    search_query = request.GET.get("q") or request.GET.get("search")
+
     account_id = (
         int(account_id_param)
         if account_id_param and account_id_param.isdigit()
@@ -143,7 +234,9 @@ def get_suspense_workbench_data(request):
     )
 
     clusters = get_suspense_clusters(
-        target_subcategory=target_sub, account_id=account_id
+        target_subcategory=target_sub,
+        account_id=account_id,
+        search_query=search_query,
     )
 
     return Response(

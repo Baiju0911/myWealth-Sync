@@ -3,6 +3,7 @@ from tracker.classification.classificationViews import (
     ClassificationPendingListView,
     ReclassifyEntryView,
     UpdateJournalEntryNoteView,
+    CategoryVendorDrilldownView,
 )
 
 urlpatterns = [
@@ -17,4 +18,9 @@ urlpatterns = [
         "reclassify/", ReclassifyEntryView.as_view(), name="classification-reclassify"
     ),
     path("entry-note/", UpdateJournalEntryNoteView.as_view(), name="update-entry-note"),
+    path(
+        "vendor-drilldown/",
+        CategoryVendorDrilldownView.as_view(),
+        name="vendor-drilldown",
+    ),
 ]
