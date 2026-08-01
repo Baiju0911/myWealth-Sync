@@ -250,12 +250,55 @@ def get_suspense_workbench_data(request):
     )
 
 
+# @api_view(["POST"])
+# def apply_reclassification_and_learn_older(request):
+#     """
+#     Executes bulk reclassification via the classification engine and updates/creates learning rules.
+#     """
+#     transaction_ids = request.data.get("transaction_ids", [])
+#     target_category = request.data.get("target_category")
+#     target_subcategory = request.data.get("target_subcategory")
+
+#     # Accept list of patterns or single string fallback
+#     patterns = request.data.get("patterns", [])
+#     single_pattern = request.data.get("pattern")
+
+#     if not patterns and single_pattern:
+#         patterns = [single_pattern]
+
+#     save_rule = request.data.get("save_rule", True)
+
+#     if not transaction_ids or not target_category or not target_subcategory:
+#         return Response(
+#             {
+#                 "error": "transaction_ids, target_category, and target_subcategory are required."
+#             },
+#             status=status.HTTP_400_BAD_REQUEST,
+#         )
+
+#     result = reclassify_and_learn(
+#         transaction_ids=transaction_ids,
+#         target_category=target_category,
+#         target_subcategory=target_subcategory,
+#         patterns=patterns,
+#         save_rule=save_rule,
+#     )
+
+#     return Response(result, status=status.HTTP_200_OK)
+
+
 @api_view(["POST"])
 def apply_reclassification_and_learn(request):
     """
     Executes bulk reclassification via the classification engine and updates/creates learning rules.
     """
-    transaction_ids = request.data.get("transaction_ids", [])
+    # Accept both 'transaction_ids' and 'row_identifiers' / 'ids'
+    transaction_ids = (
+        request.data.get("transaction_ids")
+        or request.data.get("row_identifiers")
+        or request.data.get("ids")
+        or []
+    )
     target_category = request.data.get("target_category")
     target_subcategory = request.data.get("target_subcategory")
 
@@ -271,7 +314,7 @@ def apply_reclassification_and_learn(request):
     if not transaction_ids or not target_category or not target_subcategory:
         return Response(
             {
-                "error": "transaction_ids, target_category, and target_subcategory are required."
+                "error": "transaction_ids (or row_identifiers), target_category, and target_subcategory are required."
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
