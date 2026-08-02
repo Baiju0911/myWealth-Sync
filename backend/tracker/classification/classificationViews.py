@@ -103,20 +103,45 @@ class ClassificationPendingListView(views.APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+# class ReclassifyEntryView_older(views.APIView):
+#     """
+#     POST /api/classification/reclassify/
+#     Handles single-row reclassification requests from the frontend modal.
+#     """
+
+#     def post(self, request):
+#         input_serializer = ReclassifyRequestSerializer(data=request.data)
+#         input_serializer.is_valid(raise_exception=True)
+
+#         data = input_serializer.validated_data
+
+#         try:
+#             # Calls atomic reclassification on JournalEntry model
+#             updated_entry = JournalEntry.reclassify_statement_line(
+#                 row_identifier=data["row_identifier"],
+#                 new_category=data["new_category"],
+#                 new_subcategory=data["new_subcategory"],
+#                 rule_code=data.get("rule_code", "MANUAL"),
+#                 taxonomy_node_account_id=data.get("taxonomy_node_account_id", 99),
+#                 user_note=data.get("user_note"),
+#             )
+
+#             output_serializer = ClassificationJournalEntrySerializer(updated_entry)
+#             return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+#         except ValueError as exc:
+#             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 class ReclassifyEntryView(views.APIView):
-    """
-    POST /api/classification/reclassify/
-    Handles single-row reclassification requests from the frontend modal.
-    """
 
     def post(self, request):
         input_serializer = ReclassifyRequestSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
-
         data = input_serializer.validated_data
 
         try:
-            # Calls atomic reclassification on JournalEntry model
+            # Pass payee / narration into atomic model reclassify handler
             updated_entry = JournalEntry.reclassify_statement_line(
                 row_identifier=data["row_identifier"],
                 new_category=data["new_category"],
@@ -125,6 +150,16 @@ class ReclassifyEntryView(views.APIView):
                 taxonomy_node_account_id=data.get("taxonomy_node_account_id", 99),
                 user_note=data.get("user_note"),
             )
+
+            # 🟢 Ensure remarks JSON carries target account display metadata
+            current_remarks = updated_entry.remarks or {}
+            current_remarks["target_account_name"] = data["new_subcategory"]
+            current_remarks["display_text"] = (
+                f"Reclassified to {data['new_subcategory']} via Workbench"
+            )
+
+            updated_entry.remarks = current_remarks
+            updated_entry.save(update_fields=["remarks"])
 
             output_serializer = ClassificationJournalEntrySerializer(updated_entry)
             return Response(output_serializer.data, status=status.HTTP_200_OK)

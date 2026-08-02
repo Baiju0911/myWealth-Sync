@@ -1,6 +1,6 @@
 # S:\_BaijSoft\myWealth-Sync\backend\tracker\urls.py
 from django.urls import path, include
-from .views import (
+from .backendViewModel.views import (
     SystemConfigView,
     AccountListCreateView,
     AccountDetailView,
@@ -15,7 +15,7 @@ from .views import (
     AvailableTemplatesListView,
     StatementBulkIngestPipelineView,
 )
-from .ledgerCategorizationView import (
+from .backendViewModel.ledgerCategorizationView import (
     AutoCategorizeStagingQueueView,
     MasterFinancialCategoryViewSet,
     AccountingRuleViewSet,
