@@ -32,10 +32,10 @@ from rest_framework import status
 # from .parsers.raw_extractor import extract_raw_preview
 import os
 from django.core.files.storage import default_storage
-from .parsers.parsers_v1.utils.normalizer import format_to_two_digits
+from ..parsers.parsers_v1.utils.normalizer import format_to_two_digits
 
 
-from .models import (
+from ..models import (
     Account,
     Bank,
     BankCredential,
@@ -48,23 +48,25 @@ from .models import (
     StatementIngestRegistry,
     UserStatementTemplate,
 )
-from .serializers import AccountSerializer, BankCredentialSerializer
-from .parsers.SBI_format import process_SBI_pdf_statement
-from .parsers.SIB_format import process_SIB_pdf_statement
-from .parsers.FED_format import process_FED_pdf_statement
-from .parsers.unified_csv_format import process_unified_csv_statement
-from .parsers.raw_extractor import extract_spatial_preview, match_statement_template
-from .parsers.universal_format import (
+from ..serializers import AccountSerializer, BankCredentialSerializer
+from ..parsers.SBI_format import process_SBI_pdf_statement
+from ..parsers.SIB_format import process_SIB_pdf_statement
+from ..parsers.FED_format import process_FED_pdf_statement
+from ..parsers.unified_csv_format import process_unified_csv_statement
+from ..parsers.raw_extractor import extract_spatial_preview, match_statement_template
+from ..parsers.universal_format import (
     UniversalStatementParser,
 )
-from .parsers.utils import generate_row_fingerprint
+from ..parsers.utils import generate_row_fingerprint
 
 
-from .parsers.parsers_v1.utils import validator
-from .parsers.parsers_v1.utils.normalizer import parse_meta_decimal
-from .parsers.parsers_v1.utils.normalizer import sanitize_transaction_dates_via_template
-from .parsers.parsers_v1.utils.validator import process_and_filter_rows
-from .parsers.parsers_v1.orchestrator import process_bank_statement
+from ..parsers.parsers_v1.utils import validator
+from ..parsers.parsers_v1.utils.normalizer import parse_meta_decimal
+from ..parsers.parsers_v1.utils.normalizer import (
+    sanitize_transaction_dates_via_template,
+)
+from ..parsers.parsers_v1.utils.validator import process_and_filter_rows
+from ..parsers.parsers_v1.orchestrator import process_bank_statement
 
 # If you decide to pull in the resolver/profiler/registry/validator modules later:
 # from .parsers.parsers_v1.profiler import create_profile
@@ -1409,206 +1411,206 @@ class StatementIngestRouterDynamicView(APIView):
 ##################################
 
 
-class StatementBulkIngestPipelineView_older(APIView):
-    """
-    📡 PIPELINE INGESTION VIEW CONTROLLER (PRODUCTION ALIGNED):
-    Loads historical deduplication hashes up front, processes document layouts,
-    normalizes string variations, and triggers inline narration enrichment checks
-    before emitting the payload grid to the front-end dashboard preview.
-    """
+# class StatementBulkIngestPipelineView_older(APIView):
+#     """
+#     📡 PIPELINE INGESTION VIEW CONTROLLER (PRODUCTION ALIGNED):
+#     Loads historical deduplication hashes up front, processes document layouts,
+#     normalizes string variations, and triggers inline narration enrichment checks
+#     before emitting the payload grid to the front-end dashboard preview.
+#     """
 
-    permission_classes = [AllowAny]
+#     permission_classes = [AllowAny]
 
-    def post(self, request, *args, **kwargs):
-        uploaded_file = request.FILES.get("statement_file")
-        account_id = request.data.get("account_id")
+#     def post(self, request, *args, **kwargs):
+#         uploaded_file = request.FILES.get("statement_file")
+#         account_id = request.data.get("account_id")
 
-        if not uploaded_file or not account_id:
-            return Response(
-                {"status": "ERROR", "message": "Required parameters are missing."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+#         if not uploaded_file or not account_id:
+#             return Response(
+#                 {"status": "ERROR", "message": "Required parameters are missing."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
 
-        try:
-            account = Account.objects.get(id=account_id)
+#         try:
+#             account = Account.objects.get(id=account_id)
 
-            # ─── 🚀 STEP A: INTERCEPT EXTENSION FIRST ───
-            original_filename = getattr(uploaded_file, "name", "bank_statement.pdf")
-            file_extension = os.path.splitext(original_filename)[1].lower()
-            is_tabular = file_extension in [".csv", ".txt", ".xlsx", ".xls"]
+#             # ─── 🚀 STEP A: INTERCEPT EXTENSION FIRST ───
+#             original_filename = getattr(uploaded_file, "name", "bank_statement.pdf")
+#             file_extension = os.path.splitext(original_filename)[1].lower()
+#             is_tabular = file_extension in [".csv", ".txt", ".xlsx", ".xls"]
 
-            # ─── 🎯 STEP B: STRATEGY-AWARE DATABASE TEMPLATE RESOLUTION ───
-            if is_tabular:
-                template_obj = UserStatementTemplate.objects.filter(
-                    template_name="UNIVERSAL"
-                ).first()
-                if not template_obj:
-                    template_obj = UserStatementTemplate.objects.filter(
-                        account_id=account_id
-                    ).first()
-            else:
-                template_obj = (
-                    UserStatementTemplate.objects.filter(account_id=account_id)
-                    .exclude(parser_strategy_code="UNIVERSAL_CSV_FLOW")
-                    .first()
-                )
+#             # ─── 🎯 STEP B: STRATEGY-AWARE DATABASE TEMPLATE RESOLUTION ───
+#             if is_tabular:
+#                 template_obj = UserStatementTemplate.objects.filter(
+#                     template_name="UNIVERSAL"
+#                 ).first()
+#                 if not template_obj:
+#                     template_obj = UserStatementTemplate.objects.filter(
+#                         account_id=account_id
+#                     ).first()
+#             else:
+#                 template_obj = (
+#                     UserStatementTemplate.objects.filter(account_id=account_id)
+#                     .exclude(parser_strategy_code="UNIVERSAL_CSV_FLOW")
+#                     .first()
+#                 )
 
-            if not template_obj:
-                template_obj = UserStatementTemplate.objects.filter(
-                    account_id=account_id
-                ).first()
+#             if not template_obj:
+#                 template_obj = UserStatementTemplate.objects.filter(
+#                     account_id=account_id
+#                 ).first()
 
-            if not template_obj:
-                return Response(
-                    {
-                        "status": "ERROR",
-                        "message": "No parsing template linked to this account context profile.",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+#             if not template_obj:
+#                 return Response(
+#                     {
+#                         "status": "ERROR",
+#                         "message": "No parsing template linked to this account context profile.",
+#                     },
+#                     status=status.HTTP_400_BAD_REQUEST,
+#                 )
 
-            credential_record = BankCredential.objects.filter(
-                account_id=account_id
-            ).first()
-            password_vault_data = (
-                credential_record.password_vault if credential_record else "[]"
-            )
+#             credential_record = BankCredential.objects.filter(
+#                 account_id=account_id
+#             ).first()
+#             password_vault_data = (
+#                 credential_record.password_vault if credential_record else "[]"
+#             )
 
-            # Pull historical database verification metrics
-            db_records = StatementStagingLine.objects.filter(
-                account_id=account.id
-            ).values(
-                "row_identifier",
-                "narration",
-                "cheque_ref_number",
-                "raw_statement_date",
-                "amount",
-                "running_balance",
-                "credit",
-                "debit",
-            )
+#             # Pull historical database verification metrics
+#             db_records = StatementStagingLine.objects.filter(
+#                 account_id=account.id
+#             ).values(
+#                 "row_identifier",
+#                 "narration",
+#                 "cheque_ref_number",
+#                 "raw_statement_date",
+#                 "amount",
+#                 "running_balance",
+#                 "credit",
+#                 "debit",
+#             )
 
-            existing_hashes = set()
-            database_lookup_dict = {}
-            for r in db_records:
-                h_key = r["row_identifier"]
-                existing_hashes.add(h_key)
-                database_lookup_dict[h_key] = r
+#             existing_hashes = set()
+#             database_lookup_dict = {}
+#             for r in db_records:
+#                 h_key = r["row_identifier"]
+#                 existing_hashes.add(h_key)
+#                 database_lookup_dict[h_key] = r
 
-            # Process layout coordinates
-            processed_bundle, op_bal, system_noise = process_bank_statement(
-                uploaded_file=uploaded_file,
-                template_obj=template_obj,
-                account_id=account_id,
-                existing_database_hashes=existing_hashes,
-                password_vault=password_vault_data,
-            )
+#             # Process layout coordinates
+#             processed_bundle, op_bal, system_noise = process_bank_statement(
+#                 uploaded_file=uploaded_file,
+#                 template_obj=template_obj,
+#                 account_id=account_id,
+#                 existing_database_hashes=existing_hashes,
+#                 password_vault=password_vault_data,
+#             )
 
-            export_filename = f"{os.path.splitext(original_filename)[0]}.csv"
-            intermediate_txns = []
-            ocr_confidence_score = 100.0
-            active_strategy = getattr(
-                template_obj, "parser_strategy_code", "UNIVERSAL_CSV_FLOW"
-            )
+#             export_filename = f"{os.path.splitext(original_filename)[0]}.csv"
+#             intermediate_txns = []
+#             ocr_confidence_score = 100.0
+#             active_strategy = getattr(
+#                 template_obj, "parser_strategy_code", "UNIVERSAL_CSV_FLOW"
+#             )
 
-            if (
-                isinstance(processed_bundle, dict)
-                and "transactions_list" in processed_bundle
-            ):
-                intermediate_txns = processed_bundle.get("transactions_list", [])
-                ocr_confidence_score = processed_bundle.get("confidence_score", 0.0)
-                active_strategy = processed_bundle.get(
-                    "fallback_engine_executed", "PaddleOCR_v1"
-                )
-            elif isinstance(processed_bundle, str):
-                return Response(
-                    {
-                        "status": "SUCCESS",
-                        "export_filename": export_filename,
-                        "raw_csv_stream": processed_bundle,
-                        "preview_dataset": [],
-                        "opening_balance": op_bal,
-                        "closing_balance": op_bal,
-                        "count": 0,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-            else:
-                intermediate_txns = processed_bundle
+#             if (
+#                 isinstance(processed_bundle, dict)
+#                 and "transactions_list" in processed_bundle
+#             ):
+#                 intermediate_txns = processed_bundle.get("transactions_list", [])
+#                 ocr_confidence_score = processed_bundle.get("confidence_score", 0.0)
+#                 active_strategy = processed_bundle.get(
+#                     "fallback_engine_executed", "PaddleOCR_v1"
+#                 )
+#             elif isinstance(processed_bundle, str):
+#                 return Response(
+#                     {
+#                         "status": "SUCCESS",
+#                         "export_filename": export_filename,
+#                         "raw_csv_stream": processed_bundle,
+#                         "preview_dataset": [],
+#                         "opening_balance": op_bal,
+#                         "closing_balance": op_bal,
+#                         "count": 0,
+#                     },
+#                     status=status.HTTP_200_OK,
+#                 )
+#             else:
+#                 intermediate_txns = processed_bundle
 
-            if (
-                "sanitize_transaction_dates_via_template" in locals()
-                or "sanitize_transaction_dates_via_template" in globals()
-            ):
-                intermediate_txns = sanitize_transaction_dates_via_template(
-                    intermediate_txns, template_obj
-                )
+#             if (
+#                 "sanitize_transaction_dates_via_template" in locals()
+#                 or "sanitize_transaction_dates_via_template" in globals()
+#             ):
+#                 intermediate_txns = sanitize_transaction_dates_via_template(
+#                     intermediate_txns, template_obj
+#                 )
 
-            # Generate baseline payload matrix layout maps
-            payload = validator.run_final_math(
-                intermediate_txns,
-                op_bal,
-                template_obj=template_obj,
-                account_id=account_id,
-                export_filename=export_filename,
-            )
+#             # Generate baseline payload matrix layout maps
+#             payload = validator.run_final_math(
+#                 intermediate_txns,
+#                 op_bal,
+#                 template_obj=template_obj,
+#                 account_id=account_id,
+#                 export_filename=export_filename,
+#             )
 
-            preview_dataset = payload.get("preview_dataset", [])
+#             preview_dataset = payload.get("preview_dataset", [])
 
-            # ─── 🎯 RUN DUAL ENRICHMENT PROCESSING PASS ───
-            # This mutates the values inside preview_dataset array elements inline
-            _, _ = validator.process_and_filter_rows(
-                preview_dataset=preview_dataset,
-                account=account,
-                bank=account.bank if hasattr(account, "bank") else None,
-                existing_hashes=existing_hashes,
-                database_lookup_dict=database_lookup_dict,
-            )
+#             # ─── 🎯 RUN DUAL ENRICHMENT PROCESSING PASS ───
+#             # This mutates the values inside preview_dataset array elements inline
+#             _, _ = validator.process_and_filter_rows(
+#                 preview_dataset=preview_dataset,
+#                 account=account,
+#                 bank=account.bank if hasattr(account, "bank") else None,
+#                 existing_hashes=existing_hashes,
+#                 database_lookup_dict=database_lookup_dict,
+#             )
 
-            # Re-generate diagnostic CSV strings using the updated values
-            raw_csv_lines = [
-                f"#FILENAME:{export_filename}",
-                "Date ~ Narration ~ Debit ~ Credit ~ Running Bal ~ Record Status",
-            ]
-            for row in preview_dataset:
-                p_narr_escaped = (
-                    str(row["narration_description"]).replace('"', '""').strip()
-                )
-                raw_csv_lines.append(
-                    f'{row["post_date"]} ~ "{p_narr_escaped}" ~ {row["debit"]} ~ {row["credit"]} ~ {row["balance"]} ~ {row["status"]}'
-                )
+#             # Re-generate diagnostic CSV strings using the updated values
+#             raw_csv_lines = [
+#                 f"#FILENAME:{export_filename}",
+#                 "Date ~ Narration ~ Debit ~ Credit ~ Running Bal ~ Record Status",
+#             ]
+#             for row in preview_dataset:
+#                 p_narr_escaped = (
+#                     str(row["narration_description"]).replace('"', '""').strip()
+#                 )
+#                 raw_csv_lines.append(
+#                     f'{row["post_date"]} ~ "{p_narr_escaped}" ~ {row["debit"]} ~ {row["credit"]} ~ {row["balance"]} ~ {row["status"]}'
+#                 )
 
-            # Re-sync payload array structures
-            payload["preview_dataset"] = preview_dataset
-            payload["generated_raw_csv_stream"] = "\n".join(raw_csv_lines)
+#             # Re-sync payload array structures
+#             payload["preview_dataset"] = preview_dataset
+#             payload["generated_raw_csv_stream"] = "\n".join(raw_csv_lines)
 
-            return Response(
-                {
-                    "status": "SUCCESS",
-                    "strategy_processed": active_strategy,
-                    "engine_strategy_executed": active_strategy,
-                    "confidence_score": ocr_confidence_score,
-                    "system_noise_records_cleared": (
-                        len(system_noise) if system_noise else 0
-                    ),
-                    "export_filename": export_filename,
-                    "raw_csv_stream": payload.get("generated_raw_csv_stream", ""),
-                    **payload,  # Unpacks the correctly synchronized array references out to the React table grid
-                },
-                status=status.HTTP_200_OK,
-            )
+#             return Response(
+#                 {
+#                     "status": "SUCCESS",
+#                     "strategy_processed": active_strategy,
+#                     "engine_strategy_executed": active_strategy,
+#                     "confidence_score": ocr_confidence_score,
+#                     "system_noise_records_cleared": (
+#                         len(system_noise) if system_noise else 0
+#                     ),
+#                     "export_filename": export_filename,
+#                     "raw_csv_stream": payload.get("generated_raw_csv_stream", ""),
+#                     **payload,  # Unpacks the correctly synchronized array references out to the React table grid
+#                 },
+#                 status=status.HTTP_200_OK,
+#             )
 
-        except Account.DoesNotExist:
-            return Response(
-                {"status": "ERROR", "message": "Account context not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except Exception as e:
-            print(f"❌ PIPELINE INGEST PREVIEW CRASHED: {str(e)}")
-            return Response(
-                {"status": "ERROR", "message": f"Pipeline execution crash: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+#         except Account.DoesNotExist:
+#             return Response(
+#                 {"status": "ERROR", "message": "Account context not found."},
+#                 status=status.HTTP_404_NOT_FOUND,
+#             )
+#         except Exception as e:
+#             print(f"❌ PIPELINE INGEST PREVIEW CRASHED: {str(e)}")
+#             return Response(
+#                 {"status": "ERROR", "message": f"Pipeline execution crash: {str(e)}"},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
 
 
 class StatementBulkIngestPipelineView(APIView):

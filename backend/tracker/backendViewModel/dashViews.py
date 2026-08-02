@@ -1,7 +1,10 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from .selectors import DashboardSelectors
-from .serializers import DashboardSummaryResponseSerializer, CategoryBreakdownSerializer
+from ..dashboard.selectors import DashboardSelectors
+from ..dashboard.serializers import (
+    DashboardSummaryResponseSerializer,
+    CategoryBreakdownSerializer,
+)
 
 
 @api_view(["GET"])
