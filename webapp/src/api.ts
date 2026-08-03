@@ -398,6 +398,7 @@ export interface ReclassifyPayload {
   patterns?: string[];
   pattern?: string;
   save_rule?: boolean;
+  entry_type?: 'Debit' | 'Credit';
 }
 
 /**
@@ -550,5 +551,98 @@ export const updateEntryUserNote = async (
   } catch (err) {
     console.error('Failed to update entry user note:', err);
     return null;
+  }
+};
+
+export interface SuggestedRule {
+  rule_code: string;
+  suggested_category: string;
+  suggested_subcategory: string;
+  matched_pattern: string;
+}
+
+export const getSuggestedRule = async (
+  pattern: string,
+  entryType: 'Debit' | 'Credit' = 'Debit'
+): Promise<SuggestedRule | null> => {
+  if (!pattern || pattern.trim().length < 3) return null;
+
+  try {
+    const response = await fetch('/classification/suggest_rule_for_cluster/', {
+      // 👈 Added /api/classification
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pattern: pattern.trim(),
+        entry_type: entryType,
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+
+    if (data?.has_suggestion) {
+      return {
+        rule_code: data.rule_code,
+        suggested_category: data.suggested_category,
+        suggested_subcategory: data.suggested_subcategory,
+        matched_pattern: data.matched_pattern,
+      };
+    }
+  } catch (err) {
+    console.error('Failed to fetch rule suggestion:', err);
+  }
+  return null;
+};
+
+//// Sweep Call
+// ==========================================
+// SWEEP HUB & RULE SUGGESTION ENDPOINTS
+// ==========================================
+
+export interface SweepMatchGroup {
+  pattern: string;
+  matched_rows: number;
+  total_amount: number;
+  suggested_category: string;
+  suggested_subcategory: string;
+  rule_code: string;
+}
+
+export const getSweepPreview = async (
+  accountId?: string
+): Promise<SweepMatchGroup[]> => {
+  try {
+    const url =
+      accountId && accountId !== '99'
+        ? `/classification/staging/sweep-preview/?account_id=${accountId}`
+        : `/classification/staging/sweep-preview/`;
+
+    const response = await api.get(url);
+    return response.data?.status === 'success'
+      ? response.data.rule_matches || []
+      : [];
+  } catch (err) {
+    console.error('Failed to fetch sweep preview from backend:', err);
+    return [];
+  }
+};
+
+export const executeBulkSweep = async (
+  patterns: string[],
+  accountId?: string
+): Promise<boolean> => {
+  try {
+    const response = await api.post(
+      '/classification/staging/execute-bulk-sweep/',
+      {
+        patterns,
+        account_id: accountId,
+      }
+    );
+    return response.data?.status === 'success';
+  } catch (err) {
+    console.error('Failed to execute bulk sweep:', err);
+    return false;
   }
 };
