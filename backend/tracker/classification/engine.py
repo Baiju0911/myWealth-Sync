@@ -358,28 +358,40 @@ def get_suspense_clusters(
     return sorted_clusters
 
 
-def classify_via_rules(raw_narration: str) -> Optional[Dict[str, str]]:
-    """Evaluates raw narration text against active ClassificationRule patterns JSON lists."""
-    if not raw_narration:
+def classify_via_rules(
+    raw_narration: str, is_debit: bool = True
+) -> Optional[Dict[str, str]]:
+    """Evaluates raw narration text against active ClassificationRule patterns, strictly matching the cash flow direction vector (Debit vs Credit)."""
+    if not raw_narration or not str(raw_narration).strip():
         return None
 
-    narration_upper = raw_narration.upper()
-    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-        "-priority"
-    )
+    narration_upper = str(raw_narration).strip().upper()
+    target_rule_type = "Debit" if is_debit else "Credit"
+
+    # Filter rules matching both active status AND the exact cash flow vector
+    active_rules = ClassificationRule.objects.filter(
+        is_active=True, rule_type=target_rule_type
+    ).order_by("-priority")
 
     for rule in active_rules:
         patterns_list = rule.patterns if isinstance(rule.patterns, list) else []
+        if isinstance(patterns_list, str):
+            try:
+                patterns_list = json.loads(patterns_list)
+            except Exception:
+                patterns_list = [patterns_list]
 
         for pattern in patterns_list:
             if pattern and str(pattern).strip().upper() in narration_upper:
-                rule.match_count += 1
-                rule.save(update_fields=["match_count"])
+                rule.match_count = (rule.match_count or 0) + 1
+                rule.save(update_fields=["match_count", "updated_at"])
 
                 return {
                     "category": rule.target_category,
                     "subcategory": rule.target_subcategory,
                     "matched_pattern": pattern,
+                    "rule_code": rule.rule_code,
+                    "rule_type": rule.rule_type,
                 }
     return None
 
@@ -461,11 +473,7 @@ def add_or_update_classification_rule(
     new_pattern: str,
     entry_type: str = "Debit",
 ) -> bool:
-    """Appends a pattern into an existing ClassificationRule (read by Workbench / Tier 5)
-
-    or creates a new active rule, enforcing noise blacklists and resolving the
-    taxonomy foreign key.
-    """
+    """Appends a pattern into an existing ClassificationRule or creates a new active rule, enforcing noise blacklists, directional cash flow vector binding (DR/CR), and resolving the taxonomy foreign key."""
     if not new_pattern or not str(new_pattern).strip():
         return False
 
@@ -488,10 +496,11 @@ def add_or_update_classification_rule(
     ).first()
     resolved_taxonomy = taxonomy_node if taxonomy_node else None
 
-    # 🛡️ GUARD 2: Search existing active ClassificationRule matching target subcategory
+    # 🛡️ GUARD 2: Search existing active ClassificationRule matching target subcategory AND entry_type vector
     existing_rule = ClassificationRule.objects.filter(
         target_category=category,
         target_subcategory=subcategory,
+        rule_type=clean_entry_type,
         is_active=True,
     ).first()
 
@@ -520,16 +529,14 @@ def add_or_update_classification_rule(
         return False
 
     else:
-        # 🛡️ GUARD 3: Create new active ClassificationRule entry with taxonomy populated
-        short_code = (
-            hashlib.md5(f"{subcategory}_{clean_pattern}".encode())
-            .hexdigest()[:6]
-            .upper()
-        )
-        rule_code = f"CR_{short_code}"
+        # 🛡️ GUARD 3: Create new active ClassificationRule entry with direction vector encoded in Rule Code
+        vector_prefix = "DE" if clean_entry_type == "Debit" else "CR"
+        hash_input = f"{subcategory}_{clean_pattern}_{clean_entry_type}".upper()
+        short_code = hashlib.md5(hash_input.encode()).hexdigest()[:6].upper()
+        rule_code = f"CR_{vector_prefix}_{short_code}"
 
         ClassificationRule.objects.create(
-            name=f"Learned: {subcategory} ({clean_pattern})",
+            name=f"Learned ({clean_entry_type}): {subcategory} ({clean_pattern})",
             rule_code=rule_code,
             rule_type=clean_entry_type,
             target_category=category,
@@ -539,7 +546,7 @@ def add_or_update_classification_rule(
             is_active=True,
             created_from_manual_override=True,
             match_count=1,
-            taxonomy=resolved_taxonomy,  # Assigns the resolved TaxonomyTree instance
+            taxonomy=resolved_taxonomy,
         )
         return True
 

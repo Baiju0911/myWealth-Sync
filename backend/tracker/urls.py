@@ -183,4 +183,9 @@ urlpatterns += [
         name="add_taxonomy_node",
     ),
     path("classification/", include("tracker.classification.urls")),
+    path(
+        "suggest_rule_for_cluster/",
+        classificationViews.suggest_rule_for_cluster,
+        name="suggest_rule_for_cluster",
+    ),
 ]
