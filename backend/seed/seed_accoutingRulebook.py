@@ -365,7 +365,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Temple donation", "Charity to NGO"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Donations & Religious",
+            "subcategory": "Donations",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit expenses related to religious offerings, temple donations, and charity.",
@@ -426,7 +426,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Amazon Prime subscription", "PVR ticket payment"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Entertainment & Media",
+            "subcategory": "Entertainment",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit entertainment, cinema, and media streaming subscriptions.",
@@ -484,7 +484,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Fuel for vehicle", "IRCTC train ticket"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Fuel & Transport",
+            "subcategory": "General Operating Expenses",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit fuel, petrol, railway bookings, and vehicle transport charges.",
@@ -598,7 +598,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Pharmacy and clinic payments", "Parent monthly medicine"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Medical & Healthcare",
+            "subcategory": "Healthcare",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit pharmacy, clinical consultation, hospital, and recurring medical costs.",
@@ -823,7 +823,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Google One subscription", "Microsoft 365 payment"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Entertainment & Media",
+            "subcategory": "Entertainment",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit cloud storage, app store purchases, and media subscriptions.",
@@ -905,7 +905,7 @@ GOLDEN_RULES_DATA = [
         "examples": ["Roy auto transport fare"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Fuel & Transport",
+            "subcategory": "General Operating Expenses",
             "account_type": "None",
             "golden_rule_type": "Nominal",
             "golden_rule_summary": "Debit auto rickshaw and local short-distance travel fares.",
@@ -1280,15 +1280,15 @@ GOLDEN_RULES_DATA = [
     {
         "id": 901,
         "rule_code": "GR901",
-        "rule_title": "Normalize Entertainment & Media Subcategory",
+        "rule_title": "Normalize Entertainment Subcategory",
         "entry_type": "Debit",
         "rule_priority": 901,
         "description_tags": ["entertainment"],
         "examples": ["Entertainment subcategory override"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Entertainment & Media",
-            "golden_rule_summary": "Map legacy entertainment subcategory to Entertainment & Media",
+            "subcategory": "Entertainment",
+            "golden_rule_summary": "Map legacy entertainment subcategory to Entertainment",
         },
     },
     {
@@ -1354,15 +1354,15 @@ GOLDEN_RULES_DATA = [
     {
         "id": 906,
         "rule_code": "GR906",
-        "rule_title": "Normalize Fuel & Transport Subcategory",
+        "rule_title": "Normalize General Operating Expenses Subcategory",
         "entry_type": "Debit",
         "rule_priority": 906,
-        "description_tags": ["travel & transport", "travel and transport"],
+        "description_tags": ["General Operating Expenses", "travel and transport"],
         "examples": ["Travel subcategory override"],
         "rule_metadata": {
             "category": "Expense",
-            "subcategory": "Fuel & Transport",
-            "golden_rule_summary": "Map legacy travel & transport subcategory to Fuel & Transport",
+            "subcategory": "General Operating Expenses",
+            "golden_rule_summary": "Map legacy General Operating Expenses subcategory to General Operating Expenses",
         },
     },
 ]

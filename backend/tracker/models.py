@@ -888,120 +888,84 @@ class ClassificationStatus(models.TextChoices):
 # 3. CLASSIFICATION RULE
 # ============================================================================
 class ClassificationRule(models.Model):
-    objects = BulkAuditManager()
-    RULE_TYPES = (
-        ("CONTAINS", "Contains Pattern"),
-        ("EXACT", "Exact Match"),
-        ("REGEX", "Regex Pattern"),
+    name = models.CharField(max_length=255)
+    rule_code = models.CharField(max_length=50, unique=True)
+    rule_type = models.CharField(
+        max_length=10,
+        choices=[("Debit", "Debit"), ("Credit", "Credit")],
+        default="Debit",
     )
+    target_category = models.CharField(max_length=100)
+    target_subcategory = models.CharField(max_length=100)
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
-    # Rule Identification Code (e.g., 'RULE_102', 'GR66', 'MANUAL_SWIGGY')
-    rule_code = models.CharField(
-        max_length=50,
-        unique=True,
-        blank=True,
-        help_text="Unique shorthand code mapped to Node 99 metadata tracking.",
-    )
-
-    name = models.CharField(max_length=255, help_text="e.g. Swiggy Auto-Classify")
-
+    # 🎯 1. Use native JSONField for cleaner pattern array manipulation
     patterns = models.JSONField(
         default=list,
         blank=True,
-        help_text='List of search anchors, e.g. ["SWIGGY", "ZOMATO"]',
-    )
-    rule_type = models.CharField(max_length=20, choices=RULE_TYPES, default="CONTAINS")
-
-    # Direct Taxonomy Tree Reference (Clean Foreign Key)
-    taxonomy = models.ForeignKey(
-        TaxonomyTree,
-        on_delete=models.PROTECT,
-        related_name="classification_rules",
-        help_text="Target taxonomy node in TaxonomyTree",
-        null=True,
-        blank=True,
+        help_text="JSON list of clean multi-token pattern strings e.g. ['MOHANAN P', 'SWIGGY YESPAY']",
     )
 
-    # Denormalized strings for rapid lookup/filtering without extra joins
-    target_category = models.CharField(max_length=100, editable=False)
-    target_subcategory = models.CharField(max_length=100, editable=False)
-
-    priority = models.IntegerField(
-        default=10, help_text="Higher priority rules run first"
-    )
-    is_active = models.BooleanField(default=True, db_index=True)
-
+    priority = models.IntegerField(default=1)
+    is_active = models.BooleanField(default=True)
     created_from_manual_override = models.BooleanField(default=True)
-    match_count = models.IntegerField(
-        default=0, help_text="Total transactions classified by this rule"
+    match_count = models.IntegerField(default=0)
+    taxonomy = models.ForeignKey(
+        "TaxonomyTree", on_delete=models.SET_NULL, null=True, blank=True
     )
-    last_executed_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "ledger_classification_rule"
-        ordering = ["-priority", "-created_at"]
-        indexes = [
-            models.Index(fields=["is_active", "-priority"]),
-            models.Index(fields=["rule_code"]),
-        ]
-
-    def save(self, *args, **kwargs):
-        # 1. Auto-generate rule_code if missing
-        if not self.rule_code:
-            short_id = str(self.id).replace("-", "")[:6].upper()
-            self.rule_code = f"RULE_{short_id}"
-
-        # 2. Sync denormalized category & subcategory from FK
-        if self.taxonomy:
-            self.target_category = self.taxonomy.category
-            self.target_subcategory = self.taxonomy.subcategory
-
-        super().save(*args, **kwargs)
-
-    def clean(self):
-        super().clean()
-
-        # Enforce validation against TaxonomyTree node status
-        if self.taxonomy and not self.taxonomy.is_active:
-            raise ValidationError(
-                f"Selected Taxonomy Target '{self.taxonomy.category} ➔ {self.taxonomy.subcategory}' is inactive."
-            )
-
-        # Validate patterns array structure
-        if not isinstance(self.patterns, list):
-            raise ValidationError("Patterns must be a valid JSON array of strings.")
-
-        # Clean and uppercase patterns for CONTAINS / EXACT matching
-        if self.rule_type in ["CONTAINS", "EXACT"] and isinstance(self.patterns, list):
-            self.patterns = [
-                p.strip().upper()
-                for p in self.patterns
-                if isinstance(p, str) and p.strip()
-            ]
-
-        if self.is_active and not self.patterns:
-            raise ValidationError(
-                "An active classification rule must contain at least one valid search pattern."
-            )
-
-    def record_match(self, count: int = 1):
-        """Atomically increments match count when a rule classifies transactions."""
-        self.match_count = models.F("match_count") + count
-        self.last_executed_at = timezone.now()
-        self.save(update_fields=["match_count", "last_executed_at"])
 
     def __str__(self):
-        pattern_preview = (
-            ", ".join(self.patterns[:3])
-            if isinstance(self.patterns, list) and self.patterns
-            else "No Patterns"
-        )
-        return f"[{self.rule_code}] [{pattern_preview}] ➔ {self.target_category} > {self.target_subcategory}"
+        return f"{self.rule_code} -> {self.target_subcategory} ({len(self.patterns)} patterns)"
+
+    def get_patterns(self) -> list[str]:
+        """Returns a clean list of pattern strings from the JSON field."""
+        if not self.patterns:
+            return []
+        if isinstance(self.patterns, list):
+            return [str(p).strip() for p in self.patterns if p and str(p).strip()]
+        if isinstance(self.patterns, str):
+            try:
+                parsed = json.loads(self.patterns)
+                if isinstance(parsed, list):
+                    return [str(p).strip() for p in parsed if p and str(p).strip()]
+            except json.JSONDecodeError:
+                return [self.patterns.strip()]
+        return []
+
+    # 🎯 2. Add Helper Methods directly on the Model class
+    def add_pattern(self, new_pattern: str) -> bool:
+        """Appends a new pattern string to the JSON array if not already present."""
+        if not new_pattern or not str(new_pattern).strip():
+            return False
+
+        clean_p = str(new_pattern).strip().upper()
+
+        if not isinstance(self.patterns, list):
+            self.patterns = []
+
+        if clean_p not in self.patterns:
+            self.patterns.append(clean_p)
+            self.match_count = (self.match_count or 0) + 1
+            self.save(update_fields=["patterns", "match_count", "updated_at"])
+            return True
+
+        return False
+
+    def remove_pattern(self, pattern_to_remove: str) -> bool:
+        """Removes a pattern from the JSON array without destroying the rule."""
+        clean_p = str(pattern_to_remove).strip().upper()
+
+        if isinstance(self.patterns, list) and clean_p in self.patterns:
+            self.patterns.remove(clean_p)
+            self.save(update_fields=["patterns", "updated_at"])
+            return True
+
+        return False
 
 
 class JournalEntry(models.Model):
