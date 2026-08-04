@@ -10,7 +10,16 @@ from urllib.parse import parse_qs, unquote
 from django.db.models import Q, Count, Sum
 
 from tracker.models import JournalEntry, TaxonomyTree
-from tracker.classification.engine import get_suspense_clusters, reclassify_and_learn
+from tracker.classification.engine import (
+    get_suspense_clusters,
+    reclassify_and_learn,
+    extract_meaningful_tokens,
+    match_multi_tokens,
+    GENERIC_IGNORE_PATTERNS,
+    get_clean_patterns,
+    generate_strict_multitoken_pattern,
+)
+
 from tracker.classification.serializers import (
     ClassificationJournalEntrySerializer,
     ReclassifyRequestSerializer,
@@ -262,10 +271,19 @@ def get_suspense_workbench_data(request):
     """
     Returns auto-clustered patterns for Workbench review with direction flags, inflows/outflows,
     and character/underscore-insensitive pattern search.
+    Supports inspecting both pending and reclassified transactions.
     """
     target_sub = request.GET.get("subcategory", "Suspense Account")
     account_id_param = request.GET.get("account_id")
     search_query = request.GET.get("q") or request.GET.get("search")
+
+    # Extract include_cleared parameter (defaults to True if inspecting a specific subcategory)
+    include_cleared_param = request.GET.get("include_cleared")
+    if include_cleared_param is not None:
+        include_cleared = include_cleared_param.lower() in ["true", "1", "yes"]
+    else:
+        # Auto-enable include_cleared if a specific subcategory is selected (other than default Suspense Account)
+        include_cleared = target_sub != "Suspense Account"
 
     account_id = (
         int(account_id_param)
@@ -277,17 +295,52 @@ def get_suspense_workbench_data(request):
         target_subcategory=target_sub,
         account_id=account_id,
         search_query=search_query,
+        include_cleared=include_cleared,  # <--- Pass flag to engine
     )
 
     return Response(
         {
             "status": "success",
             "target_subcategory": target_sub,
+            "include_cleared": include_cleared,
             "total_clusters": len(clusters),
             "clusters": clusters,
         },
         status=status.HTTP_200_OK,
     )
+
+
+# @api_view(["GET"])
+# def get_suspense_workbench_data(request):
+#     """
+#     Returns auto-clustered patterns for Workbench review with direction flags, inflows/outflows,
+#     and character/underscore-insensitive pattern search.
+#     """
+#     target_sub = request.GET.get("subcategory", "Suspense Account")
+#     account_id_param = request.GET.get("account_id")
+#     search_query = request.GET.get("q") or request.GET.get("search")
+
+#     account_id = (
+#         int(account_id_param)
+#         if account_id_param and account_id_param.isdigit()
+#         else None
+#     )
+
+#     clusters = get_suspense_clusters(
+#         target_subcategory=target_sub,
+#         account_id=account_id,
+#         search_query=search_query,
+#     )
+
+#     return Response(
+#         {
+#             "status": "success",
+#             "target_subcategory": target_sub,
+#             "total_clusters": len(clusters),
+#             "clusters": clusters,
+#         },
+#         status=status.HTTP_200_OK,
+#     )
 
 
 # @api_view(["POST"])
@@ -522,69 +575,137 @@ def suggest_rule_for_cluster(request):
     return Response({"has_suggestion": False})
 
 
-GENERIC_IGNORE_PATTERNS = {"MOB", "IMPS", "UPI", "NEFT", "RTGS", "POS", "ATM"}
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """
+#     Scans Node 99 entries and groups them by active matching learned rules
+#     using strict Multi-Token validation from engine.
+#     """
+#     queryset = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+#     active_rules = ClassificationRule.objects.filter(is_active=True)
 
+#     rule_matches = []
+#     seen_patterns = set()
 
-def get_clean_patterns(rule):
-    """Parses JSON or string patterns from a ClassificationRule and ignores generic tokens."""
-    raw_patterns = rule.patterns or []
+#     # Pre-fetch for faster in-memory token evaluation
+#     entries_pool = list(queryset.values("id", "remarks", "debit", "credit"))
 
-    # Parse JSON string if stored as text
-    if isinstance(raw_patterns, str):
-        try:
-            raw_patterns = json.loads(raw_patterns)
-        except Exception:
-            raw_patterns = [raw_patterns]
+#     for rule in active_rules:
+#         # Assuming get_clean_patterns is available or rule.patterns is parsed
+#         raw_patterns = (
+#             rule.patterns if isinstance(rule.patterns, list) else [rule.patterns]
+#         )
 
-    valid_patterns = []
-    for p in raw_patterns:
-        clean_p = str(p).strip()
-        # Skip generic tokens like MOB, IMPS, UPI
-        if clean_p.upper() in GENERIC_IGNORE_PATTERNS:
-            continue
-        if len(clean_p) >= 3:
-            valid_patterns.append(clean_p)
+#         for pattern_str in raw_patterns:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 continue
 
-    return valid_patterns
+#             pattern_tokens = extract_meaningful_tokens(pattern_str)
+
+#             # 🛡️ GUARDRAIL: Require at least 2 distinct meaningful tokens in pattern
+#             if len(pattern_tokens) < 2:
+#                 continue
+
+#             matched_entry_ids = []
+#             total_amt = 0.0
+
+#             for entry in entries_pool:
+#                 remarks_str = str(entry.get("remarks", ""))
+
+#                 # Enforce multi-token match (at least 2 tokens)
+#                 if match_multi_tokens(remarks_str, pattern_str, min_required_tokens=2):
+#                     matched_entry_ids.append(entry["id"])
+#                     deb = float(entry["debit"] or 0.0)
+#                     cred = float(entry["credit"] or 0.0)
+#                     total_amt += deb + cred
+
+#             count = len(matched_entry_ids)
+
+#             if count > 0:
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "token_breakdown": pattern_tokens,
+#                         "matched_rows": count,
+#                         "total_amount": float(total_amt),
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                     }
+#                 )
+#                 seen_patterns.add(pattern_str)
+
+#     return Response({"status": "success", "rule_matches": rule_matches})
 
 
 @api_view(["GET"])
 def sweep_preview_summary(request):
-    """Scans Node 99 (Suspense) entries and groups them by active matching learned rules."""
-    # Filter unclassified suspense entries (Node 99)
+    """
+    Scans Node 99 entries and groups them by active matching learned rules
+    using strict Multi-Token validation and native JSON pattern retrieval.
+    """
     queryset = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-    # Fetch all active system & learned rules
-    active_rules = ClassificationRule.objects.filter(is_active=True)
+    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+        "-priority"
+    )
 
     rule_matches = []
     seen_patterns = set()
 
+    # Pre-fetch for fast in-memory evaluation
+    entries_pool = list(queryset.values("id", "remarks", "debit", "credit"))
+
     for rule in active_rules:
-        patterns = get_clean_patterns(rule)
+        # Cleanly retrieve array of pattern strings from JSONField
+        patterns_list = (
+            rule.get_patterns()
+            if hasattr(rule, "get_patterns")
+            else get_clean_patterns(rule)
+        )
 
-        for pattern_str in patterns:
-            if pattern_str in seen_patterns:
+        for pattern_str in patterns_list:
+            if not pattern_str or pattern_str in seen_patterns:
                 continue
 
-            # Search remarks using sanitised keyword
-            clean_p = re.sub(r"[^A-Za-z0-9]", " ", pattern_str).strip()
-            if not clean_p:
+            pattern_tokens = extract_meaningful_tokens(pattern_str)
+
+            # 🛡️ GUARDRAIL: Allow 1-token matches ONLY if token is long/significant (e.g. >= 6 chars like 'ZOMATO')
+            # Otherwise require at least 2 distinct tokens.
+            if len(pattern_tokens) < 1:
+                continue
+            if len(pattern_tokens) == 1 and len(pattern_tokens[0]) < 5:
                 continue
 
-            matched_entries = queryset.filter(remarks__icontains=clean_p)
-            count = matched_entries.count()
+            matched_entry_ids = []
+            total_amt = 0.0
+
+            for entry in entries_pool:
+                # Extract narration or display text safely from remarks dict/string
+                remarks_raw = entry.get("remarks")
+                if isinstance(remarks_raw, dict):
+                    remarks_str = (
+                        remarks_raw.get("narration")
+                        or remarks_raw.get("display_text")
+                        or str(remarks_raw)
+                    )
+                else:
+                    remarks_str = str(remarks_raw or "")
+
+                # Enforce multi-token match
+                if match_multi_tokens(remarks_str, pattern_str):
+                    matched_entry_ids.append(entry["id"])
+                    deb = float(entry["debit"] or 0.0)
+                    cred = float(entry["credit"] or 0.0)
+                    total_amt += deb + cred
+
+            count = len(matched_entry_ids)
 
             if count > 0:
-                total_amt = (
-                    matched_entries.aggregate(total=Sum("debit") + Sum("credit"))[
-                        "total"
-                    ]
-                    or 0.0
-                )
                 rule_matches.append(
                     {
                         "pattern": pattern_str,
+                        "display_tag": f"#{pattern_str}",  # UI pill header format
+                        "token_breakdown": pattern_tokens,
                         "matched_rows": count,
                         "total_amount": float(total_amt),
                         "suggested_category": rule.target_category,
@@ -599,7 +720,7 @@ def sweep_preview_summary(request):
 
 @api_view(["POST"])
 def execute_bulk_sweep(request):
-    """Executes bulk reclassification for selected patterns in Node 99."""
+    """Executes bulk reclassification using engine multi-token matching."""
     selected_patterns = request.data.get("patterns", [])
 
     if not selected_patterns:
@@ -608,43 +729,44 @@ def execute_bulk_sweep(request):
         )
 
     total_updated = 0
+    unclassified_entries = JournalEntry.objects.filter(
+        account_id=99, is_reclassified=False
+    )
 
     for pattern in selected_patterns:
-        clean_p = re.sub(r"[^A-Za-z0-9]", " ", str(pattern)).strip()
-        if not clean_p or clean_p.upper() in GENERIC_IGNORE_PATTERNS:
+        pattern_tokens = extract_meaningful_tokens(pattern)
+        if len(pattern_tokens) < 2 or pattern.upper() in GENERIC_IGNORE_PATTERNS:
             continue
 
-        # Find matching active rule
         rule = ClassificationRule.objects.filter(
             is_active=True, patterns__icontains=pattern
         ).first()
 
         if rule:
-            # Query matching unclassified entries in Node 99
-            qs = JournalEntry.objects.filter(
-                account_id=99, is_reclassified=False, remarks__icontains=clean_p
-            )
+            # Re-evaluate entries against multi-token engine
+            for entry in unclassified_entries:
+                remarks_str = str(entry.remarks or "")
 
-            # Update JSON evaluation matrix & status flags for each entry
-            for entry in qs:
-                snapshot = entry.evaluation_matrix_snapshot or {}
-                if isinstance(snapshot, str):
-                    try:
-                        snapshot = json.loads(snapshot)
-                    except json.JSONDecodeError:
-                        snapshot = {}
+                if match_multi_tokens(remarks_str, pattern, min_required_tokens=2):
+                    snapshot = entry.evaluation_matrix_snapshot or {}
+                    if isinstance(snapshot, str):
+                        import json
 
-                # 🟢 Update target routing inside the JSON payload
-                snapshot["resolved_category"] = rule.target_category
-                snapshot["resolved_subcategory"] = rule.target_subcategory
-                snapshot["applied_rule_code"] = rule.rule_code
+                        try:
+                            snapshot = json.loads(snapshot)
+                        except json.JSONDecodeError:
+                            snapshot = {}
 
-                entry.evaluation_matrix_snapshot = snapshot
-                entry.is_reclassified = True
-                entry.classification_status = "SWEEP_CLEARED"
-                entry.save()
+                    snapshot["resolved_category"] = rule.target_category
+                    snapshot["resolved_subcategory"] = rule.target_subcategory
+                    snapshot["applied_rule_code"] = rule.rule_code
 
-                total_updated += 1
+                    entry.evaluation_matrix_snapshot = snapshot
+                    entry.is_reclassified = True
+                    entry.classification_status = "SWEEP_CLEARED"
+                    entry.save()
+
+                    total_updated += 1
 
     return Response({"status": "success", "total_reclassified": total_updated})
 
