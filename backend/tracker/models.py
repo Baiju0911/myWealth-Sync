@@ -6,8 +6,11 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.utils import timezone
 import json
+import re
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from functools import cached_property
+from tracker.constants import NOISE_KEYWORD_BLACKLIST
 
 
 class BulkAuditQuerySet(models.QuerySet):
@@ -314,6 +317,117 @@ class TransactionHeader(models.Model):
 #         verbose_name_plural = "Journal Entries"
 
 
+class TaxonomyTree(models.Model):
+    objects = BulkAuditManager()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    category = models.CharField(max_length=100)
+    subcategory = models.CharField(max_length=100)
+    display_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_taxonomy_tree"
+        unique_together = ("category", "subcategory")
+        ordering = ["category", "display_order", "subcategory"]
+
+    def __str__(self):
+        return f"{self.category} ➔ {self.subcategory}"
+
+
+class AccountingRule(models.Model):
+    objects = BulkAuditManager()
+
+    id = models.BigAutoField(primary_key=True)
+    rule_code = models.CharField(
+        max_length=20,
+        unique=True,
+        help_text="Unique custom rule code indicator string token: GR01, GR07",
+    )
+    rule_title = models.CharField(max_length=255)
+    entry_type = models.CharField(
+        max_length=10,
+        choices=[("Debit", "Debit"), ("Credit", "Credit")],
+        help_text="Target verification accounting vector direction",
+    )
+    rule_priority = models.IntegerField(
+        default=1,
+        help_text="Sorting weight priority indicator to settle keyword competition logs",
+    )
+
+    # 🎯 SINGLE SOURCE OF TRUTH (SSOT) BINDING
+    taxonomy = models.ForeignKey(
+        TaxonomyTree,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="accounting_rules",
+        db_column="taxonomy_id",
+        help_text="Master taxonomy node authority governing this rule",
+    )
+
+    # 🔍 Rule Search Verification Constraints
+    description_tags = models.JSONField(
+        help_text="Array listing search trigger tracking tags keywords"
+    )
+    examples = models.JSONField(
+        help_text="Array containing mock raw ledger transactions data"
+    )
+
+    # 🧳 THE METADATA VAULT (Combines summary, categorization type, layout targets)
+    rule_metadata = models.JSONField(
+        default=dict,
+        help_text="Stores: golden_rule_type, account_type, golden_rule_summary, category, subcategory",
+    )
+
+    # 🛡️ Pipeline Controls
+    is_active = models.BooleanField(default=True)
+    apply_to_ai = models.BooleanField(default=False)
+    notes = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_accountingrule"
+        verbose_name = "Accounting Rule"
+        verbose_name_plural = "Accounting Rules"
+        ordering = ["rule_priority"]
+
+    def __str__(self):
+        return f"{self.rule_code}: {self.rule_title} ({self.entry_type})"
+
+    # 💡 HELPER PROPERTIES (Ensures zero-breakage for existing pipeline code)
+    @property
+    def resolved_category(self):
+        """Returns canonical category from TaxonomyTree if linked, else falls back to metadata."""
+        if self.taxonomy:
+            return self.taxonomy.category
+        return self.rule_metadata.get("category")
+
+    @property
+    def resolved_subcategory(self):
+        """Returns canonical subcategory from TaxonomyTree if linked, else falls back to metadata."""
+        if self.taxonomy:
+            return self.taxonomy.subcategory
+        return self.rule_metadata.get("subcategory")
+
+    def save(self, *args, **kwargs):
+        """
+        Auto-syncs rule_metadata JSON keys ('category' & 'subcategory')
+        with the linked TaxonomyTree node upon saving.
+        """
+        if self.taxonomy:
+            if not isinstance(self.rule_metadata, dict):
+                self.rule_metadata = {}
+            self.rule_metadata["category"] = self.taxonomy.category
+            self.rule_metadata["subcategory"] = self.taxonomy.subcategory
+
+        super().save(*args, **kwargs)
+
+
 ########
 
 
@@ -617,58 +731,6 @@ class MasterFinancialCategory(models.Model):
         return f"[{self.category_type}] {self.act_category} -> {self.categories_items}"
 
 
-class AccountingRule(models.Model):
-    objects = BulkAuditManager()
-
-    id = models.BigAutoField(primary_key=True)
-    rule_code = models.CharField(
-        max_length=20,
-        unique=True,
-        help_text="Unique custom rule code indicator string token: GR01, GR07",
-    )
-    rule_title = models.CharField(max_length=255)
-    entry_type = models.CharField(
-        max_length=10,
-        choices=[("Debit", "Debit"), ("Credit", "Credit")],
-        help_text="Target verification accounting vector direction",
-    )
-    rule_priority = models.IntegerField(
-        default=1,
-        help_text="Sorting weight priority indicator to settle keyword competition logs",
-    )
-
-    # 🔍 Rule Search Verification Constraints
-    description_tags = models.JSONField(
-        help_text="Array listing search trigger tracking tags keywords"
-    )
-    examples = models.JSONField(
-        help_text="Array containing mock raw ledger transactions data"
-    )
-
-    # 🧳 THE METADATA VAULT (Combines summary, categorization type, layout targets)
-    rule_metadata = models.JSONField(
-        default=dict,
-        help_text="Stores: golden_rule_type, account_type, golden_rule_summary, category, subcategory",
-    )
-
-    # 🛡️ Pipeline Controls
-    is_active = models.BooleanField(default=True)
-    apply_to_ai = models.BooleanField(default=False)
-    notes = models.TextField(blank=True, null=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "ledger_accountingrule"
-        verbose_name = "Accounting Rule"
-        verbose_name_plural = "Accounting Rules"
-        ordering = ["rule_priority"]
-
-    def __str__(self):
-        return f"{self.rule_code}: {self.rule_title} ({self.entry_type})"
-
-
 # ========================================================
 # 2. EXTENDED DOUBLE-ENTRY LEDGER LINE ALLOCATIONS
 # ========================================================
@@ -856,23 +918,75 @@ class DirectionalVectorOverride(models.Model):
 # ============================================================================
 # 1. TAXONOMY TREE
 # ============================================================================
-class TaxonomyTree(models.Model):
-    objects = BulkAuditManager()
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    category = models.CharField(max_length=100)
-    subcategory = models.CharField(max_length=100)
-    display_order = models.IntegerField(default=0)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+# class AccountingRule(models.Model):
+#     objects = BulkAuditManager()
 
-    class Meta:
-        db_table = "ledger_taxonomy_tree"
-        unique_together = ("category", "subcategory")
-        ordering = ["category", "display_order", "subcategory"]
+#     id = models.BigAutoField(primary_key=True)
+#     rule_code = models.CharField(
+#         max_length=20,
+#         unique=True,
+#         help_text="Unique custom rule code indicator string token: GR01, GR07",
+#     )
+#     rule_title = models.CharField(max_length=255)
+#     entry_type = models.CharField(
+#         max_length=10,
+#         choices=[("Debit", "Debit"), ("Credit", "Credit")],
+#         help_text="Target verification accounting vector direction",
+#     )
+#     rule_priority = models.IntegerField(
+#         default=1,
+#         help_text="Sorting weight priority indicator to settle keyword competition logs",
+#     )
 
-    def __str__(self):
-        return f"{self.category} ➔ {self.subcategory}"
+#     # 🔍 Rule Search Verification Constraints
+#     description_tags = models.JSONField(
+#         help_text="Array listing search trigger tracking tags keywords"
+#     )
+#     examples = models.JSONField(
+#         help_text="Array containing mock raw ledger transactions data"
+#     )
+
+#     # 🧳 THE METADATA VAULT (Combines summary, categorization type, layout targets)
+#     rule_metadata = models.JSONField(
+#         default=dict,
+#         help_text="Stores: golden_rule_type, account_type, golden_rule_summary, category, subcategory",
+#     )
+
+#     # 🛡️ Pipeline Controls
+#     is_active = models.BooleanField(default=True)
+#     apply_to_ai = models.BooleanField(default=False)
+#     notes = models.TextField(blank=True, null=True)
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_accountingrule"
+#         verbose_name = "Accounting Rule"
+#         verbose_name_plural = "Accounting Rules"
+#         ordering = ["rule_priority"]
+
+#     def __str__(self):
+#         return f"{self.rule_code}: {self.rule_title} ({self.entry_type})"
+
+
+# class TaxonomyTree(models.Model):
+#     objects = BulkAuditManager()
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+#     category = models.CharField(max_length=100)
+#     subcategory = models.CharField(max_length=100)
+#     display_order = models.IntegerField(default=0)
+#     is_active = models.BooleanField(default=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_taxonomy_tree"
+#         unique_together = ("category", "subcategory")
+#         ordering = ["category", "display_order", "subcategory"]
+
+#     def __str__(self):
+#         return f"{self.category} ➔ {self.subcategory}"
 
 
 # ============================================================================
@@ -887,6 +1001,202 @@ class ClassificationStatus(models.TextChoices):
 # ============================================================================
 # 3. CLASSIFICATION RULE
 # ============================================================================
+# class ClassificationRule(models.Model):
+#     name = models.CharField(max_length=255)
+#     rule_code = models.CharField(max_length=50, unique=True)
+#     rule_type = models.CharField(
+#         max_length=10,
+#         choices=[("Debit", "Debit"), ("Credit", "Credit")],
+#         default="Debit",
+#     )
+#     target_category = models.CharField(max_length=100)
+#     target_subcategory = models.CharField(max_length=100)
+
+#     # 🎯 1. Use native JSONField for cleaner pattern array manipulation
+#     patterns = models.JSONField(
+#         default=list,
+#         blank=True,
+#         help_text="JSON list of clean multi-token pattern strings e.g. ['MOHANAN P', 'SWIGGY YESPAY']",
+#     )
+
+#     priority = models.IntegerField(default=1)
+#     is_active = models.BooleanField(default=True)
+#     created_from_manual_override = models.BooleanField(default=True)
+#     match_count = models.IntegerField(default=0)
+#     taxonomy = models.ForeignKey(
+#         "TaxonomyTree", on_delete=models.SET_NULL, null=True, blank=True
+#     )
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_classification_rule"
+
+#     def __str__(self):
+#         return f"{self.rule_code} -> {self.target_subcategory} ({len(self.patterns)} patterns)"
+
+#     def get_patterns(self) -> list[str]:
+#         """Returns a clean list of pattern strings from the JSON field."""
+#         if not self.patterns:
+#             return []
+#         if isinstance(self.patterns, list):
+#             return [str(p).strip() for p in self.patterns if p and str(p).strip()]
+#         if isinstance(self.patterns, str):
+#             try:
+#                 parsed = json.loads(self.patterns)
+#                 if isinstance(parsed, list):
+#                     return [str(p).strip() for p in parsed if p and str(p).strip()]
+#             except json.JSONDecodeError:
+#                 return [self.patterns.strip()]
+#         return []
+
+#     # 🎯 2. Add Helper Methods directly on the Model class
+#     def add_pattern(self, new_pattern: str) -> bool:
+#         """Appends a new pattern string to the JSON array if not already present."""
+#         if not new_pattern or not str(new_pattern).strip():
+#             return False
+
+#         clean_p = str(new_pattern).strip().upper()
+
+#         if not isinstance(self.patterns, list):
+#             self.patterns = []
+
+#         if clean_p not in self.patterns:
+#             self.patterns.append(clean_p)
+#             self.match_count = (self.match_count or 0) + 1
+#             self.save(update_fields=["patterns", "match_count", "updated_at"])
+#             return True
+
+#         return False
+
+#     def remove_pattern(self, pattern_to_remove: str) -> bool:
+#         """Removes a pattern from the JSON array without destroying the rule."""
+#         clean_p = str(pattern_to_remove).strip().upper()
+
+#         if isinstance(self.patterns, list) and clean_p in self.patterns:
+#             self.patterns.remove(clean_p)
+#             self.save(update_fields=["patterns", "updated_at"])
+#             return True
+
+#         return False
+
+
+# class ClassificationRule(models.Model):
+#     name = models.CharField(max_length=255)
+#     rule_code = models.CharField(max_length=50, unique=True)
+#     rule_type = models.CharField(
+#         max_length=10,
+#         choices=[("Debit", "Debit"), ("Credit", "Credit")],
+#         default="Debit",
+#     )
+#     target_category = models.CharField(max_length=100)
+#     target_subcategory = models.CharField(max_length=100)
+
+#     # 🎯 1. Native JSONField
+#     patterns = models.JSONField(
+#         default=list,
+#         blank=True,
+#         help_text="JSON list of clean multi-token pattern strings e.g. ['MOHANAN P', 'SWIGGY YESPAY']",
+#     )
+
+#     priority = models.IntegerField(default=1)
+#     is_active = models.BooleanField(default=True)
+#     created_from_manual_override = models.BooleanField(default=True)
+#     match_count = models.IntegerField(default=0)
+#     taxonomy = models.ForeignKey(
+#         "TaxonomyTree", on_delete=models.SET_NULL, null=True, blank=True
+#     )
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_classification_rule"
+
+#     def __str__(self):
+#         return f"{self.rule_code} -> {self.target_subcategory} ({len(self.get_patterns())} patterns)"
+
+#     def save(self, *args, **kwargs):
+#         """Clears cached property when saving updated patterns."""
+#         if hasattr(self, "_cached_patterns"):
+#             del self.__dict__["_cached_patterns"]
+#         super().save(*args, **kwargs)
+
+#     def save(self, *args, **kwargs):
+#         """
+#         Dynamically extracts and appends high-value VPA/brand tokens
+#         from whatever narration string is added to self.patterns.
+#         Works generically for ANY category (Amazon, Blinkit, Swiggy, Uber, etc.).
+#         """
+#         if isinstance(self.patterns, list):
+#             expanded_patterns = set()
+
+#             for pat in self.patterns:
+#                 if not pat or not str(pat).strip():
+#                     continue
+
+#                 raw_str = str(pat).strip().upper()
+#                 expanded_patterns.add(raw_str)
+
+#                 # Extract pure alphanumeric segments (split by /, @, spaces, dots)
+#                 tokens = [t for t in re.split(r"[/@\s._\-]+", raw_str) if len(t) >= 4]
+
+#                 for t in tokens:
+#                     # Ignore pure numbers or transaction IDs
+#                     if not t.isdigit():
+#                         expanded_patterns.add(t)
+
+#             self.patterns = list(expanded_patterns)
+
+#         # Clear cached property if present
+#         if "_cached_patterns" in self.__dict__:
+#             del self.__dict__["_cached_patterns"]
+
+#         super().save(*args, **kwargs)
+
+#     @cached_property
+#     def _cached_patterns(self) -> list[str]:
+#         """Request-scoped cached list of patterns."""
+#         if not self.patterns or not isinstance(self.patterns, list):
+#             return []
+#         return [
+#             p.strip().upper() for p in self.patterns if isinstance(p, str) and p.strip()
+#         ]
+
+#     def get_patterns(self) -> list[str]:
+#         return self._cached_patterns
+
+#     def add_pattern(self, new_pattern: str) -> bool:
+#         """Appends a new pattern and updates DB efficiently."""
+#         if not new_pattern or not str(new_pattern).strip():
+#             return False
+
+#         clean_p = str(new_pattern).strip().upper()
+
+#         current_pats = list(self.patterns) if isinstance(self.patterns, list) else []
+
+#         if clean_p not in current_pats:
+#             current_pats.append(clean_p)
+#             self.patterns = current_pats
+#             self.match_count = (self.match_count or 0) + 1
+#             self.save(update_fields=["patterns", "match_count", "updated_at"])
+#             return True
+
+#         return False
+
+#     def remove_pattern(self, pattern_to_remove: str) -> bool:
+#         """Removes a pattern without destroying the rule."""
+#         clean_p = str(pattern_to_remove).strip().upper()
+
+#         if isinstance(self.patterns, list) and clean_p in self.patterns:
+#             self.patterns.remove(clean_p)
+#             self.save(update_fields=["patterns", "updated_at"])
+#             return True
+
+#         return False
+
+
 class ClassificationRule(models.Model):
     name = models.CharField(max_length=255)
     rule_code = models.CharField(max_length=50, unique=True)
@@ -898,7 +1208,7 @@ class ClassificationRule(models.Model):
     target_category = models.CharField(max_length=100)
     target_subcategory = models.CharField(max_length=100)
 
-    # 🎯 1. Use native JSONField for cleaner pattern array manipulation
+    # 🎯 Native JSONField
     patterns = models.JSONField(
         default=list,
         blank=True,
@@ -920,36 +1230,66 @@ class ClassificationRule(models.Model):
         db_table = "ledger_classification_rule"
 
     def __str__(self):
-        return f"{self.rule_code} -> {self.target_subcategory} ({len(self.patterns)} patterns)"
+        return f"{self.rule_code} -> {self.target_subcategory} ({len(self.get_patterns())} patterns)"
+
+    def save(self, *args, **kwargs):
+        """
+        Dynamically extracts VPA/brand tokens while filtering out
+        noise words (ACCOUNT, INTENT, MERCHANT, etc.).
+        Clears request-scoped cache upon saving.
+        """
+        if isinstance(self.patterns, list):
+            expanded_patterns = set()
+
+            for pat in self.patterns:
+                if not pat or not str(pat).strip():
+                    continue
+
+                raw_str = str(pat).strip().upper()
+
+                # Add multi-word string if it's not a generic noise word
+                if raw_str not in NOISE_KEYWORD_BLACKLIST:
+                    expanded_patterns.add(raw_str)
+
+                # Extract pure alphanumeric segments (split by /, @, spaces, dots)
+                tokens = [t for t in re.split(r"[/@\s._\-]+", raw_str) if len(t) >= 4]
+
+                for t in tokens:
+                    # Ignore pure numbers, transaction IDs, and noise keywords
+                    if not t.isdigit() and t not in NOISE_KEYWORD_BLACKLIST:
+                        expanded_patterns.add(t)
+
+            self.patterns = list(expanded_patterns)
+
+        # Clear cached property if present
+        if "_cached_patterns" in self.__dict__:
+            del self.__dict__["_cached_patterns"]
+
+        super().save(*args, **kwargs)
+
+    @cached_property
+    def _cached_patterns(self) -> list[str]:
+        """Request-scoped cached list of patterns."""
+        if not self.patterns or not isinstance(self.patterns, list):
+            return []
+        return [
+            p.strip().upper() for p in self.patterns if isinstance(p, str) and p.strip()
+        ]
 
     def get_patterns(self) -> list[str]:
-        """Returns a clean list of pattern strings from the JSON field."""
-        if not self.patterns:
-            return []
-        if isinstance(self.patterns, list):
-            return [str(p).strip() for p in self.patterns if p and str(p).strip()]
-        if isinstance(self.patterns, str):
-            try:
-                parsed = json.loads(self.patterns)
-                if isinstance(parsed, list):
-                    return [str(p).strip() for p in parsed if p and str(p).strip()]
-            except json.JSONDecodeError:
-                return [self.patterns.strip()]
-        return []
+        return self._cached_patterns
 
-    # 🎯 2. Add Helper Methods directly on the Model class
     def add_pattern(self, new_pattern: str) -> bool:
-        """Appends a new pattern string to the JSON array if not already present."""
+        """Appends a new pattern and updates DB efficiently."""
         if not new_pattern or not str(new_pattern).strip():
             return False
 
         clean_p = str(new_pattern).strip().upper()
+        current_pats = list(self.patterns) if isinstance(self.patterns, list) else []
 
-        if not isinstance(self.patterns, list):
-            self.patterns = []
-
-        if clean_p not in self.patterns:
-            self.patterns.append(clean_p)
+        if clean_p not in current_pats:
+            current_pats.append(clean_p)
+            self.patterns = current_pats
             self.match_count = (self.match_count or 0) + 1
             self.save(update_fields=["patterns", "match_count", "updated_at"])
             return True
@@ -957,11 +1297,41 @@ class ClassificationRule(models.Model):
         return False
 
     def remove_pattern(self, pattern_to_remove: str) -> bool:
-        """Removes a pattern from the JSON array without destroying the rule."""
-        clean_p = str(pattern_to_remove).strip().upper()
+        """
+        Safely purges a token or full pattern string from this rule's patterns array.
+        Handles exact string matches AND sub-token stripping from compound phrases.
+        """
+        if not self.patterns or not isinstance(self.patterns, list):
+            return False
 
-        if isinstance(self.patterns, list) and clean_p in self.patterns:
-            self.patterns.remove(clean_p)
+        target = str(pattern_to_remove).strip().lstrip("#").upper()
+        updated_patterns = []
+        removed = False
+
+        for pat in self.patterns:
+            pat_str = str(pat).strip().upper()
+
+            # 1. Exact pattern match removal
+            if pat_str == target:
+                removed = True
+                continue
+
+            # 2. Sub-token removal inside compound phrases (e.g. 'ACCOUNT' in 'OWN ACCOUNT BAIJU')
+            tokens = [t for t in pat_str.split() if t != target]
+
+            if len(tokens) < len(pat_str.split()):
+                removed = True
+                if tokens:  # Rebuild pattern with remaining valid tokens
+                    updated_patterns.append(" ".join(tokens))
+            else:
+                updated_patterns.append(pat_str)
+
+        if removed:
+            self.patterns = updated_patterns
+
+            if "_cached_patterns" in self.__dict__:
+                del self.__dict__["_cached_patterns"]
+
             self.save(update_fields=["patterns", "updated_at"])
             return True
 

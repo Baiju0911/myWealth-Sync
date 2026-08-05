@@ -646,3 +646,137 @@ export const executeBulkSweep = async (
     return false;
   }
 };
+
+// export const removePatternFromRule = async (
+//   ruleCode: string,
+//   pattern: string
+// ): Promise<boolean> => {
+//   console.log(`[API] 🚀 Initiating pattern purge:`, { ruleCode, pattern });
+
+//   try {
+//     const response = await fetch(
+//       '/classification/staging/remove_pattern_from_rule/',
+//       {
+//         method: 'POST',
+//         headers: {
+//           'Content-Type': 'application/json',
+//         },
+//         body: JSON.stringify({
+//           rule_code: ruleCode,
+//           pattern: pattern,
+//         }),
+//       }
+//     );
+
+//     console.log(
+//       `[API] 📡 Response status:`,
+//       response.status,
+//       response.statusText
+//     );
+
+//     if (!response.ok) {
+//       console.error(
+//         `[API] ❌ Request failed with HTTP status ${response.status}`
+//       );
+//       return false;
+//     }
+
+//     const data = await response.json();
+//     console.log(`[API] 📦 Response data:`, data);
+
+//     const isSuccess = data.status === 'success';
+//     if (isSuccess) {
+//       console.log(
+//         `[API] ✅ Pattern '${pattern}' successfully purged from rule ${ruleCode}`
+//       );
+//     } else {
+//       console.warn(
+//         `[API] ⚠️ Server returned non-success status:`,
+//         data.message
+//       );
+//     }
+
+//     return isSuccess;
+//   } catch (error) {
+//     console.error('Failed to purge pattern from rule:', error);
+//     return false;
+//   }
+// };
+
+export const bulkRemovePatternsFromRules = async (
+  items: { rule_code: string; pattern: string }[]
+): Promise<boolean> => {
+  console.log(
+    `[API] 🚀 Initiating bulk pattern purge for ${items.length} items:`,
+    items
+  );
+
+  try {
+    const response = await api.post(
+      '/classification/staging/bulk_remove_patterns_from_rules/',
+      { items }
+    );
+
+    console.log(`[API] 📡 Bulk purge response status:`, response.status);
+    console.log(`[API] 📦 Bulk purge response data:`, response.data);
+
+    const isSuccess =
+      response.data?.status === 'success' || response.data?.success === true;
+
+    if (isSuccess) {
+      console.log(`[API] ✅ Bulk pattern purge completed successfully.`);
+    } else {
+      console.warn(
+        `[API] ⚠️ Bulk purge returned non-success status:`,
+        response.data?.message
+      );
+    }
+
+    return isSuccess;
+  } catch (error) {
+    console.error('[API] ❌ Failed bulk pattern purge:', error);
+    return false;
+  }
+};
+
+export const removePatternFromRule = async (
+  ruleCode: string,
+  pattern: string
+): Promise<boolean> => {
+  console.log(`[API] 🚀 Initiating pattern purge:`, { ruleCode, pattern });
+
+  try {
+    const response = await api.post(
+      '/classification/staging/remove_pattern_from_rule/',
+      {
+        rule_code: ruleCode,
+        pattern: pattern,
+      }
+    );
+
+    console.log(
+      `[API] 📡 Response status:`,
+      response.status,
+      response.statusText
+    );
+    console.log(`[API] 📦 Response data:`, response.data);
+
+    const isSuccess = response.data?.status === 'success';
+
+    if (isSuccess) {
+      console.log(
+        `[API] ✅ Pattern '${pattern}' successfully purged from rule ${ruleCode}`
+      );
+    } else {
+      console.warn(
+        `[API] ⚠️ Server returned non-success status:`,
+        response.data?.message
+      );
+    }
+
+    return isSuccess;
+  } catch (error) {
+    console.error('[API] ❌ Failed to purge pattern from rule:', error);
+    return false;
+  }
+};

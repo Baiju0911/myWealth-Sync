@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Zap, CheckCircle, RefreshCw, Sparkles, X } from 'lucide-react';
-import { getSweepPreview, executeBulkSweep, type SweepMatchGroup } from '../api';
+import { Zap, CheckCircle, RefreshCw, Sparkles, X, Trash2 } from 'lucide-react';
+import { 
+  getSweepPreview, 
+  executeBulkSweep, 
+  removePatternFromRule, bulkRemovePatternsFromRules,
+  type SweepMatchGroup 
+} from '../api';
 
 interface BulkSweephubModalProps {
   isOpen: boolean;
@@ -10,7 +15,7 @@ interface BulkSweephubModalProps {
   onSweepComplete?: () => void;
 }
 
-export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
+export const BulkSweepHubModal: React.FC<BulkSweephubModalProps> = ({
   isOpen,
   onClose,
   accountId = '99',
@@ -18,34 +23,138 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
 }) => {
   const [loading, setLoading] = useState<boolean>(false);
   const [executing, setExecuting] = useState<boolean>(false);
+  const [purgingBulk, setPurgingBulk] = useState<boolean>(false);
+  const [deletingPattern, setDeletingPattern] = useState<string | null>(null);
   const [matches, setMatches] = useState<SweepMatchGroup[]>([]);
   const [selectedPatterns, setSelectedPatterns] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchSweepPreview();
-    }
-  }, [isOpen, accountId]);
-
-  const fetchSweepPreview = async () => {
-    setLoading(true);
+  const fetchPreviewData = async () => {
     try {
       const ruleMatches = await getSweepPreview(accountId);
-      setMatches(ruleMatches);
-      setSelectedPatterns(ruleMatches.map((m) => m.pattern));
+      const safeMatches = ruleMatches || [];
+      setMatches(safeMatches);
+      setSelectedPatterns(safeMatches.map((m) => m.pattern));
     } catch (err) {
       console.error('Failed to fetch sweep preview:', err);
       setMatches([]);
-    } finally {
-      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (isOpen) {
+      setLoading(true);
+      fetchPreviewData().finally(() => {
+        if (isMounted) setLoading(false);
+      });
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, accountId]);
 
   const handleTogglePattern = (pattern: string) => {
     setSelectedPatterns((prev) =>
       prev.includes(pattern) ? prev.filter((p) => p !== pattern) : [...prev, pattern]
     );
   };
+
+  const handleDeletePattern = async (e: React.MouseEvent, ruleCode: string, patternTag: string) => {
+    e.stopPropagation();
+
+    const token = patternTag.replace(/^#/, '').trim();
+
+    if (!window.confirm(`Are you sure you want to remove pattern '#${token}' from rule ${ruleCode}?`)) {
+      return;
+    }
+
+    setDeletingPattern(patternTag);
+
+    try {
+      const success = await removePatternFromRule(ruleCode, token);
+      if (success) {
+        await fetchPreviewData();
+      } else {
+        alert(`Failed to delete pattern '#${token}' from rule.`);
+      }
+    } catch (err) {
+      console.error('Error removing pattern:', err);
+    } finally {
+      setDeletingPattern(null);
+    }
+  };
+
+  // 🚀 NEW: Bulk Purge Handler for Checked Cards
+  // const handleBulkPurgeSelected = async () => {
+  //   if (selectedPatterns.length === 0) return;
+
+  //   const count = selectedPatterns.length;
+  //   if (!window.confirm(`Are you sure you want to PURGE ${count} selected noise patterns from their rules?`)) {
+  //     return;
+  //   }
+
+  //   setPurgingBulk(true);
+
+  //   try {
+  //     // 1. Find matching items from state
+  //     const itemsToPurge = matches.filter((m) => selectedPatterns.includes(m.pattern));
+
+  //     // 2. Execute sequentially to avoid MySQL row lock contention / race conditions
+  //     for (const item of itemsToPurge) {
+  //       const token = item.pattern.replace(/^#/, '').trim();
+  //       try {
+  //         await removePatternFromRule(item.rule_code, token);
+  //       } catch (singleErr) {
+  //         console.error(`Failed to purge pattern '${token}' from rule ${item.rule_code}:`, singleErr);
+  //       }
+  //     }
+
+  //     // 3. Re-fetch fresh preview state after ALL requests have completed sequentially
+  //     await fetchPreviewData();
+  //   } catch (err) {
+  //     console.error('Error executing bulk pattern purge:', err);
+  //   } finally {
+  //     setPurgingBulk(false);
+  //   }
+  // };
+
+  const handleBulkPurgeSelected = async () => {
+  if (selectedPatterns.length === 0) return;
+
+  const count = selectedPatterns.length;
+  if (!window.confirm(`Are you sure you want to PURGE ${count} selected noise patterns from their rules?`)) {
+    return;
+  }
+
+  setPurgingBulk(true);
+
+  try {
+    // Construct single payload for all checked items
+    const itemsToPurge = matches
+      .filter((m) => selectedPatterns.includes(m.pattern))
+      .map((m) => ({
+        rule_code: m.rule_code,
+        pattern: m.pattern.replace(/^#/, '').trim(),
+      }));
+
+    // 🚀 One API call to purge all items atomically
+    const success = await bulkRemovePatternsFromRules(itemsToPurge);
+
+    if (success) {
+      // Re-fetch fresh sweep preview instantly
+      await fetchPreviewData();
+    } else {
+      alert('Bulk pattern purge failed. Check backend logs.');
+    }
+  } catch (err) {
+    console.error('Error executing bulk pattern purge:', err);
+  } finally {
+    setPurgingBulk(false);
+  }
+};
+
 
   const handleExecuteBulkSweep = async () => {
     if (selectedPatterns.length === 0) return;
@@ -67,6 +176,8 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
   };
 
   if (!isOpen) return null;
+
+  const totalMatchedQueue = matches.reduce((acc, curr) => acc + curr.matched_rows, 0);
 
   const totalSelectedRows = matches
     .filter((m) => selectedPatterns.includes(m.pattern))
@@ -99,7 +210,7 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
           border: '1px solid #27272a',
           borderRadius: '1rem',
           width: '100%',
-          maxWidth: '48rem',
+          maxWidth: '52rem',
           maxHeight: '85vh',
           display: 'flex',
           flexDirection: 'column',
@@ -133,9 +244,27 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
               <Zap style={{ width: '1.25rem', height: '1.25rem', color: '#f59e0b' }} />
             </div>
             <div>
-              <h2 style={{ fontSize: '0.875rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#f4f4f5', margin: 0 }}>
-                Node 99 Smart Rule Clearance Hub
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <h2 style={{ fontSize: '0.875rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#f4f4f5', margin: 0 }}>
+                  Node 99 Smart Rule Clearance Hub
+                </h2>
+
+                {totalMatchedQueue > 0 && (
+                  <span
+                    style={{
+                      backgroundColor: '#27272a',
+                      color: '#f59e0b',
+                      fontSize: '0.625rem',
+                      padding: '0.125rem 0.5rem',
+                      borderRadius: '9999px',
+                      fontWeight: 800,
+                      border: '1px solid rgba(245, 158, 11, 0.3)',
+                    }}
+                  >
+                    {totalMatchedQueue} Rule Matches
+                  </span>
+                )}
+              </div>
               <p style={{ fontSize: '0.75rem', color: '#a1a1aa', margin: '0.25rem 0 0 0' }}>
                 Bulk clearance for unclassified transactions matching your learned rules.
               </p>
@@ -176,6 +305,8 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
           ) : (
             matches.map((group) => {
               const isChecked = selectedPatterns.includes(group.pattern);
+              const isDeletingThis = deletingPattern === group.pattern;
+
               return (
                 <div
                   key={group.pattern}
@@ -185,7 +316,7 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
                     borderRadius: '0.75rem',
                     border: isChecked ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid #27272a',
                     backgroundColor: isChecked ? '#18181b' : '#09090b',
-                    opacity: isChecked ? 1 : 0.6,
+                    opacity: isDeletingThis || purgingBulk ? 0.4 : isChecked ? 1 : 0.6,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -217,7 +348,34 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
                         >
                           {group.rule_code}
                         </span>
+
+                        {/* 🗑️ Single Delete Pattern Button */}
+                        <button
+                          type="button"
+                          title={`Purge #${group.pattern} from Rule ${group.rule_code}`}
+                          onClick={(e) => handleDeletePattern(e, group.rule_code, group.pattern)}
+                          disabled={isDeletingThis || purgingBulk}
+                          style={{
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            color: '#ef4444',
+                            borderRadius: '0.375rem',
+                            padding: '0.2rem 0.4rem',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.625rem',
+                            fontWeight: 700,
+                            marginLeft: '0.25rem',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          <Trash2 style={{ width: '0.75rem', height: '0.75rem' }} />
+                          <span>{isDeletingThis ? 'Deleting...' : 'Purge'}</span>
+                        </button>
                       </div>
+
                       <p style={{ fontSize: '0.75rem', color: '#a1a1aa', margin: '0.25rem 0 0 0' }}>
                         Auto-routes to:{' '}
                         <strong style={{ color: '#34d399', fontWeight: 700 }}>
@@ -253,31 +411,42 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
           }}
         >
           <div>
-            <span style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block' }}>Total Selected Sweep Volume:</span>
+            <span style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block' }}>Selected Active Queue:</span>
             <span style={{ fontSize: '0.875rem', fontWeight: 800, color: '#f59e0b' }}>
-              {totalSelectedRows} Rows (₹{totalSelectedAmount.toLocaleString('en-IN')})
+              {selectedPatterns.length} Patterns ({totalSelectedRows} Rows | ₹{totalSelectedAmount.toLocaleString('en-IN')})
             </span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {/* 🔴 Purge Selected Button */}
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleBulkPurgeSelected}
+              disabled={purgingBulk || executing || selectedPatterns.length === 0}
               style={{
-                padding: '0.5rem 1rem',
+                padding: '0.625rem 1rem',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                color: '#ef4444',
                 fontSize: '0.75rem',
-                color: '#a1a1aa',
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
+                fontWeight: 800,
+                borderRadius: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.375rem',
+                cursor: purgingBulk || executing || selectedPatterns.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: selectedPatterns.length === 0 ? 0.5 : 1,
               }}
             >
-              Cancel
+              <Trash2 style={{ width: '0.875rem', height: '0.875rem' }} />
+              <span>{purgingBulk ? 'Purging...' : `Purge Selected (${selectedPatterns.length})`}</span>
             </button>
+
+            {/* ⚡ Execute Bulk Sweep Button */}
             <button
               type="button"
               onClick={handleExecuteBulkSweep}
-              disabled={executing || totalSelectedRows === 0}
+              disabled={executing || purgingBulk || totalSelectedRows === 0}
               style={{
                 padding: '0.625rem 1.25rem',
                 backgroundColor: executing || totalSelectedRows === 0 ? '#71717a' : '#f59e0b',
@@ -304,4 +473,4 @@ export const BulkSweephubModal: React.FC<BulkSweephubModalProps> = ({
   );
 };
 
-export default BulkSweephubModal;
+export default BulkSweepHubModal;

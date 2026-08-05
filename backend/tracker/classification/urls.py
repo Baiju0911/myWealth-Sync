@@ -7,6 +7,9 @@ from tracker.classification.classificationViews import (
     execute_bulk_sweep,
     suggest_rule_for_cluster,
     sweep_preview_summary,
+    remove_pattern_from_rule,
+    bulk_remove_patterns_from_rules,
+    get_candidate_patterns_view,
 )
 
 urlpatterns = [
@@ -47,5 +50,20 @@ urlpatterns = [
         "suggest_rule_for_cluster/",
         suggest_rule_for_cluster,
         name="suggest_rule_for_cluster",
+    ),
+    path(
+        "staging/remove_pattern_from_rule/",
+        remove_pattern_from_rule,
+        name="remove_pattern_from_rule",
+    ),
+    path(
+        "staging/bulk_remove_patterns_from_rules/",
+        bulk_remove_patterns_from_rules,
+        name="bulk_remove_patterns",
+    ),
+    path(
+        "staging/get_candidate_patterns/",
+        get_candidate_patterns_view,
+        name="get_candidate_patterns",
     ),
 ]
