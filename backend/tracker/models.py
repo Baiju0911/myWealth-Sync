@@ -1197,6 +1197,147 @@ class ClassificationStatus(models.TextChoices):
 #         return False
 
 
+# class ClassificationRule(models.Model):
+#     name = models.CharField(max_length=255)
+#     rule_code = models.CharField(max_length=50, unique=True)
+#     rule_type = models.CharField(
+#         max_length=10,
+#         choices=[("Debit", "Debit"), ("Credit", "Credit")],
+#         default="Debit",
+#     )
+#     target_category = models.CharField(max_length=100)
+#     target_subcategory = models.CharField(max_length=100)
+
+#     # 🎯 Native JSONField
+#     patterns = models.JSONField(
+#         default=list,
+#         blank=True,
+#         help_text="JSON list of clean multi-token pattern strings e.g. ['MOHANAN P', 'SWIGGY YESPAY']",
+#     )
+
+#     priority = models.IntegerField(default=1)
+#     is_active = models.BooleanField(default=True)
+#     created_from_manual_override = models.BooleanField(default=True)
+#     match_count = models.IntegerField(default=0)
+#     taxonomy = models.ForeignKey(
+#         "TaxonomyTree", on_delete=models.SET_NULL, null=True, blank=True
+#     )
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_classification_rule"
+
+#     def __str__(self):
+#         return f"{self.rule_code} -> {self.target_subcategory} ({len(self.get_patterns())} patterns)"
+
+#     def save(self, *args, **kwargs):
+#         """
+#         Dynamically extracts VPA/brand tokens while filtering out
+#         noise words (ACCOUNT, INTENT, MERCHANT, etc.).
+#         Clears request-scoped cache upon saving.
+#         """
+#         if isinstance(self.patterns, list):
+#             expanded_patterns = set()
+
+#             for pat in self.patterns:
+#                 if not pat or not str(pat).strip():
+#                     continue
+
+#                 raw_str = str(pat).strip().upper()
+
+#                 # Add multi-word string if it's not a generic noise word
+#                 if raw_str not in NOISE_KEYWORD_BLACKLIST:
+#                     expanded_patterns.add(raw_str)
+
+#                 # Extract pure alphanumeric segments (split by /, @, spaces, dots)
+#                 tokens = [t for t in re.split(r"[/@\s._\-]+", raw_str) if len(t) >= 4]
+
+#                 for t in tokens:
+#                     # Ignore pure numbers, transaction IDs, and noise keywords
+#                     if not t.isdigit() and t not in NOISE_KEYWORD_BLACKLIST:
+#                         expanded_patterns.add(t)
+
+#             self.patterns = list(expanded_patterns)
+
+#         # Clear cached property if present
+#         if "_cached_patterns" in self.__dict__:
+#             del self.__dict__["_cached_patterns"]
+
+#         super().save(*args, **kwargs)
+
+#     @cached_property
+#     def _cached_patterns(self) -> list[str]:
+#         """Request-scoped cached list of patterns."""
+#         if not self.patterns or not isinstance(self.patterns, list):
+#             return []
+#         return [
+#             p.strip().upper() for p in self.patterns if isinstance(p, str) and p.strip()
+#         ]
+
+#     def get_patterns(self) -> list[str]:
+#         return self._cached_patterns
+
+#     def add_pattern(self, new_pattern: str) -> bool:
+#         """Appends a new pattern and updates DB efficiently."""
+#         if not new_pattern or not str(new_pattern).strip():
+#             return False
+
+#         clean_p = str(new_pattern).strip().upper()
+#         current_pats = list(self.patterns) if isinstance(self.patterns, list) else []
+
+#         if clean_p not in current_pats:
+#             current_pats.append(clean_p)
+#             self.patterns = current_pats
+#             self.match_count = (self.match_count or 0) + 1
+#             self.save(update_fields=["patterns", "match_count", "updated_at"])
+#             return True
+
+#         return False
+
+#     def remove_pattern(self, pattern_to_remove: str) -> bool:
+#         """
+#         Safely purges a token or full pattern string from this rule's patterns array.
+#         Handles exact string matches AND sub-token stripping from compound phrases.
+#         """
+#         if not self.patterns or not isinstance(self.patterns, list):
+#             return False
+
+#         target = str(pattern_to_remove).strip().lstrip("#").upper()
+#         updated_patterns = []
+#         removed = False
+
+#         for pat in self.patterns:
+#             pat_str = str(pat).strip().upper()
+
+#             # 1. Exact pattern match removal
+#             if pat_str == target:
+#                 removed = True
+#                 continue
+
+#             # 2. Sub-token removal inside compound phrases (e.g. 'ACCOUNT' in 'OWN ACCOUNT BAIJU')
+#             tokens = [t for t in pat_str.split() if t != target]
+
+#             if len(tokens) < len(pat_str.split()):
+#                 removed = True
+#                 if tokens:  # Rebuild pattern with remaining valid tokens
+#                     updated_patterns.append(" ".join(tokens))
+#             else:
+#                 updated_patterns.append(pat_str)
+
+#         if removed:
+#             self.patterns = updated_patterns
+
+#             if "_cached_patterns" in self.__dict__:
+#                 del self.__dict__["_cached_patterns"]
+
+#             self.save(update_fields=["patterns", "updated_at"])
+#             return True
+
+#         return False
+
+
 class ClassificationRule(models.Model):
     name = models.CharField(max_length=255)
     rule_code = models.CharField(max_length=50, unique=True)
@@ -1234,32 +1375,22 @@ class ClassificationRule(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        Dynamically extracts VPA/brand tokens while filtering out
-        noise words (ACCOUNT, INTENT, MERCHANT, etc.).
+        Deduplicates, sanitizes, and sorts pattern strings compound-first.
+        NO auto-splitting of compound phrases into single words!
         Clears request-scoped cache upon saving.
         """
         if isinstance(self.patterns, list):
-            expanded_patterns = set()
-
+            clean_pats = set()
             for pat in self.patterns:
                 if not pat or not str(pat).strip():
                     continue
+                clean_p = str(pat).strip().upper()
+                clean_pats.add(clean_p)
 
-                raw_str = str(pat).strip().upper()
-
-                # Add multi-word string if it's not a generic noise word
-                if raw_str not in NOISE_KEYWORD_BLACKLIST:
-                    expanded_patterns.add(raw_str)
-
-                # Extract pure alphanumeric segments (split by /, @, spaces, dots)
-                tokens = [t for t in re.split(r"[/@\s._\-]+", raw_str) if len(t) >= 4]
-
-                for t in tokens:
-                    # Ignore pure numbers, transaction IDs, and noise keywords
-                    if not t.isdigit() and t not in NOISE_KEYWORD_BLACKLIST:
-                        expanded_patterns.add(t)
-
-            self.patterns = list(expanded_patterns)
+            # Sort compound phrases first (multi-word -> single-word -> length)
+            self.patterns = sorted(
+                list(clean_pats), key=lambda x: (-len(x.split()), -len(x))
+            )
 
         # Clear cached property if present
         if "_cached_patterns" in self.__dict__:
@@ -1291,7 +1422,7 @@ class ClassificationRule(models.Model):
             current_pats.append(clean_p)
             self.patterns = current_pats
             self.match_count = (self.match_count or 0) + 1
-            self.save(update_fields=["patterns", "match_count", "updated_at"])
+            self.save()
             return True
 
         return False
@@ -1299,7 +1430,6 @@ class ClassificationRule(models.Model):
     def remove_pattern(self, pattern_to_remove: str) -> bool:
         """
         Safely purges a token or full pattern string from this rule's patterns array.
-        Handles exact string matches AND sub-token stripping from compound phrases.
         """
         if not self.patterns or not isinstance(self.patterns, list):
             return False
@@ -1311,28 +1441,24 @@ class ClassificationRule(models.Model):
         for pat in self.patterns:
             pat_str = str(pat).strip().upper()
 
-            # 1. Exact pattern match removal
             if pat_str == target:
                 removed = True
                 continue
 
-            # 2. Sub-token removal inside compound phrases (e.g. 'ACCOUNT' in 'OWN ACCOUNT BAIJU')
+            # Remove matching sub-tokens if necessary
             tokens = [t for t in pat_str.split() if t != target]
-
             if len(tokens) < len(pat_str.split()):
                 removed = True
-                if tokens:  # Rebuild pattern with remaining valid tokens
+                if tokens:
                     updated_patterns.append(" ".join(tokens))
             else:
                 updated_patterns.append(pat_str)
 
         if removed:
             self.patterns = updated_patterns
-
             if "_cached_patterns" in self.__dict__:
                 del self.__dict__["_cached_patterns"]
-
-            self.save(update_fields=["patterns", "updated_at"])
+            self.save()
             return True
 
         return False
