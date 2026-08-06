@@ -67,7 +67,9 @@ export const ClusterListPanel: React.FC<Props> = ({
       setSavingNote(false);
     }
   };
+  
 
+  
   return (
     <div style={{ width: '58%', borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column', backgroundColor: '#09090b' }}>
       

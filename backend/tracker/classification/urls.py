@@ -10,6 +10,7 @@ from tracker.classification.classificationViews import (
     remove_pattern_from_rule,
     bulk_remove_patterns_from_rules,
     get_candidate_patterns_view,
+    validate_pattern_anchor,
 )
 
 urlpatterns = [
@@ -65,5 +66,10 @@ urlpatterns = [
         "staging/get_candidate_patterns/",
         get_candidate_patterns_view,
         name="get_candidate_patterns",
+    ),
+    path(
+        "staging/validate_pattern/",
+        validate_pattern_anchor,
+        name="validate_pattern",
     ),
 ]

@@ -245,9 +245,45 @@ RULE_SAFETY_BLACKLIST = {
     # Personal Names & Non-Merchant Tokens
     "SUMEE",
     "BAIJU",
-    "DHANYA",
-    "GEETHA",
-    "GOPALAN",
+    # "DHANYA",
+    # "GEETHA",
+    # "GOPALAN",
     "SUSEELAN",
     "NAIR",
+    "YESB",
+    "YBL",
+    "UPI",
+    "SHOP",
+    "STORE",
+    "LIMITED",
+    "PVT",
+    "LTD",
+    "KERALA",
+    "INDIA",
+    "BRANCH",
+}
+
+
+ABSOLUTE_GREEDY_BLACKLIST = {
+    "UPI",
+    "TRANSFER",
+    "PAYMENT",
+    "BANK",
+    "PAID",
+    "RECEIVED",
+    "CARD",
+}
+CATASTROPHIC_KEYWORDS = {
+    "UPI",
+    "PAYMENT",
+    "TRANSFER",
+    "BANK",
+    "PAID",
+    "RECEIVED",
+    "CARD",
+    "CASH",
+    "DEBIT",
+    "CREDIT",
+    "REMARKS",
+    "INTENT",
 }

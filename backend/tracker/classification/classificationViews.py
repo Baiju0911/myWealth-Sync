@@ -1,4 +1,5 @@
 # tracker/classification/classficationViews.py
+import logging
 from django.db.models import Q, Sum, FloatField, Value, Count
 from django.db.models.functions import Coalesce
 from rest_framework import status, views
@@ -7,6 +8,7 @@ from rest_framework.response import Response
 import re
 import json
 from django.db import transaction
+from collections import Counter
 
 from urllib.parse import parse_qs, unquote
 from django.db.models import Q, Count, Sum
@@ -32,13 +34,20 @@ from tracker.classification.utils.upiparser import clean_payee_name
 
 from tracker.classification.engine import extract_clean_payee_pattern
 from tracker.models import ClassificationRule
-from tracker.constants import RULE_SAFETY_BLACKLIST, NOISE_KEYWORD_BLACKLIST
+from tracker.constants import (
+    RULE_SAFETY_BLACKLIST,
+    NOISE_KEYWORD_BLACKLIST,
+    CATASTROPHIC_KEYWORDS,
+)
 
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
     max_page_size = 200
+
+
+logger = logging.getLogger(__name__)
 
 
 class UpdateJournalEntryNoteView(views.APIView):
@@ -535,29 +544,59 @@ def sweep_preview_summary(request):
     """
     Fast & Safe SQL Preview Engine for Node 99 Rules.
     Scans unclassified Node 99 entries against active learned rules,
-    preventing double-counting using priority-ordered claim tracking.
+    preventing double-counting using priority-ordered claim tracking
+    and compound-first pattern evaluation.
     """
-    base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+    print(
+        "\n================================================================================"
+    )
+    print("🔍 [SWEEP PREVIEW ENGINE] STARTING NODE 99 RULE SCAN")
+    print(
+        "================================================================================"
+    )
 
-    if not base_qs.exists():
+    base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+    total_unclassified = base_qs.count()
+
+    print(
+        f"📊 [ENGINE DEBUG] Total Unclassified Node 99 Entries to Scan: {total_unclassified}"
+    )
+
+    if total_unclassified == 0:
+        print("ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99. Exiting.")
         return Response({"status": "success", "rule_matches": []})
 
     # Order rules by highest priority first
     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
         "-priority"
     )
+    print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
 
     rule_matches = []
     seen_patterns = set()
     claimed_entry_ids = set()
 
     for rule in active_rules:
-        patterns_list = (
+        raw_patterns = (
             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+        )
+
+        if not raw_patterns:
+            continue
+
+        # 💡 CRITICAL FIX: Compound-First Sorting
+        # Forces multi-word compounds ('MARGIN FREE', 'AMAZON INDIA') to evaluate FIRST
+        # before loose single-word tokens ('MARGIN', 'AMAZON')
+        patterns_list = sorted(
+            list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
         )
 
         for pattern_str in patterns_list:
             if not pattern_str or pattern_str in seen_patterns:
+                if pattern_str in seen_patterns:
+                    print(
+                        f"   ⏭️ Skipping '{pattern_str}': Already processed by higher priority rule/pattern."
+                    )
                 continue
 
             # Strip leading hashes or formatting artifacts
@@ -565,22 +604,32 @@ def sweep_preview_summary(request):
 
             # Guard against empty or ultra-short accidental 1-letter rules
             if len(clean_search_str) < 2:
+                print(f"   ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
                 continue
 
-            # Exclude entries already claimed by higher-priority rules
+            # Exclude entries already claimed by higher-priority rules/patterns
             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
 
-            # Multi-vector JSON & text search
+            # Filter by rule entry type (Debit vs Credit) if rule_type is defined
+            if hasattr(rule, "rule_type") and rule.rule_type:
+                if rule.rule_type.lower() == "debit":
+                    candidate_qs = candidate_qs.filter(debit__gt=0)
+                elif rule.rule_type.lower() == "credit":
+                    candidate_qs = candidate_qs.filter(credit__gt=0)
+
+            # ✅ MULTI-VECTOR TARGETED SEARCH: Search specific string fields only!
             matched_qs = candidate_qs.filter(
-                Q(remarks__icontains=clean_search_str)
-                | Q(remarks__payee__icontains=clean_search_str)
+                Q(remarks__payee__icontains=clean_search_str)
                 | Q(remarks__narration__icontains=clean_search_str)
+                | Q(remarks__display_text__icontains=clean_search_str)
             )
 
             stats = matched_qs.aggregate(
                 row_count=Count("id"),
                 total_amt=Coalesce(
-                    Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
+                    Sum("debit") + Sum("credit"),
+                    Value(0.0),
+                    output_field=FloatField(),
                 ),
             )
 
@@ -591,20 +640,267 @@ def sweep_preview_summary(request):
                 claimed_entry_ids.update(new_matched_ids)
                 seen_patterns.add(pattern_str)
 
+                total_amount = float(stats["total_amt"])
+
+                print(
+                    f"   ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {count} rows | Total: ₹{total_amount:,.2f}"
+                )
+
                 rule_matches.append(
                     {
                         "pattern": pattern_str,
                         "display_tag": f"#{pattern_str}",
                         "token_breakdown": [clean_search_str],
                         "matched_rows": count,
-                        "total_amount": float(stats["total_amt"]),
+                        "total_amount": total_amount,
                         "suggested_category": rule.target_category,
                         "suggested_subcategory": rule.target_subcategory,
                         "rule_code": rule.rule_code,
                     }
                 )
 
+    print(
+        "\n================================================================================"
+    )
+    print(
+        f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}"
+    )
+    print(
+        "================================================================================\n"
+    )
+
     return Response({"status": "success", "rule_matches": rule_matches})
+
+
+# Known noise/reference hash patterns
+REF_HASH_REGEX = re.compile(r"^[A-Z0-9]{9,}$")
+
+
+@api_view(["POST"])
+def validate_pattern_anchor(request):
+    raw_pattern = request.data.get("pattern", "").strip().upper()
+
+    if not raw_pattern:
+        return Response(
+            {
+                "status": "CATASTROPHIC",
+                "is_valid": False,
+                "clean_pattern": "",
+                "message": "Pattern anchor cannot be empty.",
+            }
+        )
+
+    # 1. Reject single characters or ultra-short strings
+    if len(raw_pattern) < 2:
+        return Response(
+            {
+                "status": "CATASTROPHIC",
+                "is_valid": False,
+                "clean_pattern": raw_pattern,
+                "message": "🛑 Pattern must be at least 2 characters long.",
+            }
+        )
+
+    # 2. Check for Catastrophic System Keywords
+    if raw_pattern in CATASTROPHIC_KEYWORDS:
+        return Response(
+            {
+                "status": "CATASTROPHIC",
+                "is_valid": False,
+                "clean_pattern": raw_pattern,
+                "message": f"🛑 '{raw_pattern}' is a generic system keyword. Using this will cause thousands of false matches across your ledger!",
+            }
+        )
+
+    # 3. Check for UPI Reference Hashes / RRNs
+    if REF_HASH_REGEX.match(raw_pattern) and any(
+        char.isdigit() for char in raw_pattern
+    ):
+        return Response(
+            {
+                "status": "BAD",
+                "is_valid": True,  # Allowed, but warned
+                "clean_pattern": raw_pattern,
+                "message": f"⚠️ '{raw_pattern}' looks like a temporary UPI/RRN reference hash. It will likely never match future transactions.",
+            }
+        )
+
+    # 4. Handle Normalization (e.g. 'INT.PD' -> 'INT PD')
+    clean_pattern = re.sub(r"[^A-Z0-9\s]", " ", raw_pattern)
+    clean_pattern = re.sub(r"\s+", " ", clean_pattern).strip()
+
+    if clean_pattern != raw_pattern:
+        return Response(
+            {
+                "status": "BAD",
+                "is_valid": True,
+                "clean_pattern": clean_pattern,
+                "message": f"💡 Special characters detected. Will be auto-normalized to '{clean_pattern}' for engine matching.",
+            }
+        )
+
+    # 5. Perfect Clean Anchor (Good)
+    return Response(
+        {
+            "status": "GOOD",
+            "is_valid": True,
+            "clean_pattern": clean_pattern,
+            "message": f"🟢 Excellent vendor anchor! Ready to auto-match future transactions.",
+        }
+    )
+
+
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """
+#     Fast & Safe SQL Preview Engine for Node 99 Rules.
+#     Scans unclassified Node 99 entries against active learned rules,
+#     preventing double-counting using priority-ordered claim tracking.
+#     """
+#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+
+#     if not base_qs.exists():
+#         return Response({"status": "success", "rule_matches": []})
+
+#     # Order rules by highest priority first
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+
+#     rule_matches = []
+#     seen_patterns = set()
+#     claimed_entry_ids = set()
+
+#     for rule in active_rules:
+#         patterns_list = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 continue
+
+#             # Strip leading hashes or formatting artifacts
+#             clean_search_str = pattern_str.lstrip("#").strip()
+
+#             # Guard against empty or ultra-short accidental 1-letter rules
+#             if len(clean_search_str) < 2:
+#                 continue
+
+#             # Exclude entries already claimed by higher-priority rules
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             # Multi-vector JSON & text search
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__icontains=clean_search_str)
+#                 | Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#             )
+
+#             stats = matched_qs.aggregate(
+#                 row_count=Count("id"),
+#                 total_amt=Coalesce(
+#                     Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
+#                 ),
+#             )
+
+#             count = stats["row_count"] or 0
+
+#             if count > 0:
+#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
+#                 claimed_entry_ids.update(new_matched_ids)
+#                 seen_patterns.add(pattern_str)
+
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "display_tag": f"#{pattern_str}",
+#                         "token_breakdown": [clean_search_str],
+#                         "matched_rows": count,
+#                         "total_amount": float(stats["total_amt"]),
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                     }
+#                 )
+
+#     return Response({"status": "success", "rule_matches": rule_matches})
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """
+#     Fast & Safe SQL Preview Engine for Node 99 Rules.
+#     Scans unclassified Node 99 entries against active learned rules,
+#     preventing double-counting using priority-ordered claim tracking.
+#     """
+#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+
+#     if not base_qs.exists():
+#         return Response({"status": "success", "rule_matches": []})
+
+#     # Order rules by highest priority first
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+
+#     rule_matches = []
+#     seen_patterns = set()
+#     claimed_entry_ids = set()
+
+#     for rule in active_rules:
+#         patterns_list = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 continue
+
+#             # Strip leading hashes or formatting artifacts
+#             clean_search_str = pattern_str.lstrip("#").strip()
+
+#             # Guard against empty or ultra-short accidental 1-letter rules
+#             if len(clean_search_str) < 2:
+#                 continue
+
+#             # Exclude entries already claimed by higher-priority rules
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             # ✅ MULTI-VECTOR TARGETED SEARCH: Search specific string fields only!
+#             # Avoid Q(remarks__icontains=...) which searches JSON keys/metadata structure!
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#                 | Q(remarks__display_text__icontains=clean_search_str)
+#             )
+
+#             stats = matched_qs.aggregate(
+#                 row_count=Count("id"),
+#                 total_amt=Coalesce(
+#                     Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
+#                 ),
+#             )
+
+#             count = stats["row_count"] or 0
+
+#             if count > 0:
+#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
+#                 claimed_entry_ids.update(new_matched_ids)
+#                 seen_patterns.add(pattern_str)
+
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "display_tag": f"#{pattern_str}",
+#                         "token_breakdown": [clean_search_str],
+#                         "matched_rows": count,
+#                         "total_amount": float(stats["total_amt"]),
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                     }
+#                 )
+
+#     return Response({"status": "success", "rule_matches": rule_matches})
 
 
 @api_view(["POST"])
@@ -802,6 +1098,50 @@ def bulk_remove_patterns_from_rules(request):
         return Response({"status": "error", "message": str(e)}, status=500)
 
 
+# def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[str, Any]:
+#     """
+#     Analyzes raw narration strings and extracts clean multi-token phrases
+#     for user multi-selection while flagging disabled noise tokens.
+#     """
+#     all_blacklisted_tokens = RULE_SAFETY_BLACKLIST.union(NOISE_KEYWORD_BLACKLIST)
+
+#     clean_candidates = set()
+#     disabled_tokens = set()
+
+#     for text in narrations:
+#         if not text:
+#             continue
+#         # Normalize and remove numbers/special chars
+#         clean_text = re.sub(r"[^A-Z\s]", " ", str(text).upper())
+#         words = [w for w in clean_text.split() if len(w) > 1]
+
+#         # 1. Classify individual words
+#         for w in words:
+#             if w in all_blacklisted_tokens or re.search(r"\d", w):
+#                 disabled_tokens.add(w)
+#             elif len(w) >= 3:
+#                 clean_candidates.add(w)
+
+#         # 2. Extract multi-word compound phrases (e.g. "PARKING BOOTH", "LULU HYPERMARKET")
+#         for i in range(len(words) - 1):
+#             w1, w2 = words[i], words[i + 1]
+#             # Valid compound if at least one word isn't blacklisted noise
+#             if w1 not in all_blacklisted_tokens or w2 not in all_blacklisted_tokens:
+#                 compound = f"{w1} {w2}".strip()
+#                 if len(compound) >= 5 and not re.search(r"\d", compound):
+#                     clean_candidates.add(compound)
+
+#     # Sort so multi-word compound phrases appear at top
+#     sorted_clean = sorted(list(clean_candidates), key=lambda x: (-len(x.split()), x))
+
+#     return {
+#         "selectable_patterns": sorted_clean[:8],  # Top 8 clean suggestions
+#         "disabled_patterns": sorted(list(disabled_tokens))[
+#             :6
+#         ],  # Noise tokens shown as disabled
+#     }
+
+
 def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[str, Any]:
     """
     Analyzes raw narration strings and extracts clean multi-token phrases
@@ -811,6 +1151,7 @@ def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[st
 
     clean_candidates = set()
     disabled_tokens = set()
+    used_in_compounds = set()
 
     for text in narrations:
         if not text:
@@ -819,23 +1160,45 @@ def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[st
         clean_text = re.sub(r"[^A-Z\s]", " ", str(text).upper())
         words = [w for w in clean_text.split() if len(w) > 1]
 
-        # 1. Classify individual words
+        # 1. Collect disabled/noise tokens
         for w in words:
             if w in all_blacklisted_tokens or re.search(r"\d", w):
                 disabled_tokens.add(w)
-            elif len(w) >= 3:
-                clean_candidates.add(w)
 
-        # 2. Extract multi-word compound phrases (e.g. "PARKING BOOTH", "LULU HYPERMARKET")
+        # 2. Extract multi-word compound phrases FIRST (2-grams & 3-grams)
+        # Check 3-grams first (e.g. "MARGIN FREE HYPERMAR")
+        for i in range(len(words) - 2):
+            w1, w2, w3 = words[i], words[i + 1], words[i + 2]
+            if not (
+                w1 in all_blacklisted_tokens
+                and w2 in all_blacklisted_tokens
+                and w3 in all_blacklisted_tokens
+            ):
+                triplet = f"{w1} {w2} {w3}".strip()
+                if len(triplet) >= 6 and not re.search(r"\d", triplet):
+                    clean_candidates.add(triplet)
+                    used_in_compounds.update([w1, w2, w3])
+
+        # Check 2-grams next (e.g. "APAN DAS", "MARGIN FREE")
         for i in range(len(words) - 1):
             w1, w2 = words[i], words[i + 1]
-            # Valid compound if at least one word isn't blacklisted noise
             if w1 not in all_blacklisted_tokens or w2 not in all_blacklisted_tokens:
                 compound = f"{w1} {w2}".strip()
                 if len(compound) >= 5 and not re.search(r"\d", compound):
                     clean_candidates.add(compound)
+                    used_in_compounds.update([w1, w2])
 
-    # Sort so multi-word compound phrases appear at top
+        # 3. Add single words ONLY if they are NOT part of an extracted compound phrase
+        for w in words:
+            if (
+                w not in all_blacklisted_tokens
+                and not re.search(r"\d", w)
+                and len(w) >= 3
+                and w not in used_in_compounds
+            ):
+                clean_candidates.add(w)
+
+    # Sort so multi-word compound phrases appear at the top
     sorted_clean = sorted(list(clean_candidates), key=lambda x: (-len(x.split()), x))
 
     return {
@@ -846,11 +1209,121 @@ def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[st
     }
 
 
+# @api_view(["POST"])
+# def get_candidate_patterns_view(request):
+#     """
+#     API View called when user opens the Reclassification Modal in the Workbench.
+#     Returns candidate pattern chips for multi-selection.
+#     """
+#     transaction_ids = request.data.get("transaction_ids", [])
+
+#     if not transaction_ids:
+#         return JsonResponse({"selectable_patterns": [], "disabled_patterns": []})
+
+#     # Fetch narrations from selected entries
+#     entries = JournalEntry.objects.filter(id__in=transaction_ids)
+#     if not entries.exists():
+#         entries = JournalEntry.objects.filter(row_identifier__in=transaction_ids)
+
+#     narrations = []
+#     for entry in entries:
+#         remarks_dict = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         narration = remarks_dict.get("narration") or str(entry.remarks or "")
+#         payee = remarks_dict.get("payee") or ""
+#         if payee:
+#             narrations.append(payee)
+#         if narration:
+#             narrations.append(narration)
+
+#     result = extract_candidate_patterns_from_narrations(narrations)
+#     return JsonResponse(result)
+
+
+def extract_candidate_patterns_from_narrations(
+    narrations: list[str], max_selectable: int = 15
+) -> dict:
+    """
+    Extracts high-precision candidate patterns from raw narrations/payees.
+    Generates multi-word n-grams (2-grams, 3-grams), full normalized phrases,
+    and distinct brand tokens so the user has optimal multi-selection options.
+    """
+    if not narrations:
+        return {"selectable_patterns": [], "disabled_patterns": []}
+
+    candidate_counter = Counter()
+    disabled_tokens = set()
+
+    for raw_text in narrations:
+        if not raw_text:
+            continue
+
+        raw_str = str(raw_text).upper().strip()
+
+        # 1. Clean non-alphanumerics but preserve spaces
+        clean_str = re.sub(r"[^A-Z0-9\s]", " ", raw_str)
+        clean_str = re.sub(r"\s+", " ", clean_str).strip()
+
+        if not clean_str:
+            continue
+
+        # Split into tokens
+        tokens = clean_str.split()
+
+        # Filter tokens into valid vs noise
+        valid_tokens = []
+        for token in tokens:
+            if token in NOISE_KEYWORD_BLACKLIST or token in RULE_SAFETY_BLACKLIST:
+                disabled_tokens.add(token)
+                continue
+
+            # Skip pure numbers or ultra-long ref hashes
+            if token.isdigit() or len(token) > 25:
+                continue
+
+            valid_tokens.append(token)
+
+        # A. Full Clean Compound Phrase (if 2 to 4 words)
+        if 2 <= len(valid_tokens) <= 4:
+            full_compound = " ".join(valid_tokens)
+            if len(full_compound) >= 4:
+                candidate_counter[full_compound] += 3  # Higher weight for exact phrase
+
+        # B. 3-Gram Compounds
+        for i in range(len(valid_tokens) - 2):
+            gram_3 = f"{valid_tokens[i]} {valid_tokens[i+1]} {valid_tokens[i+2]}"
+            candidate_counter[gram_3] += 2
+
+        # C. 2-Gram Compounds
+        for i in range(len(valid_tokens) - 1):
+            gram_2 = f"{valid_tokens[i]} {valid_tokens[i+1]}"
+            candidate_counter[gram_2] += 2
+
+        # D. Single Brand Tokens (>= 4 chars)
+        for token in valid_tokens:
+            if len(token) >= 4:
+                candidate_counter[token] += 1
+
+    # Sort candidates by frequency count DESC, then length DESC (longer compound phrases preferred)
+    sorted_candidates = sorted(
+        candidate_counter.keys(),
+        key=lambda p: (-candidate_counter[p], -len(p.split()), -len(p)),
+    )
+
+    # Return expanded top options (up to 15)
+    selectable = sorted_candidates[:max_selectable]
+    disabled = sorted(list(disabled_tokens))[:10]
+
+    return {
+        "selectable_patterns": selectable,
+        "disabled_patterns": disabled,
+    }
+
+
 @api_view(["POST"])
 def get_candidate_patterns_view(request):
     """
     API View called when user opens the Reclassification Modal in the Workbench.
-    Returns candidate pattern chips for multi-selection.
+    Returns up to 15 candidate pattern chips for multi-selection.
     """
     transaction_ids = request.data.get("transaction_ids", [])
 
@@ -867,562 +1340,15 @@ def get_candidate_patterns_view(request):
         remarks_dict = entry.remarks if isinstance(entry.remarks, dict) else {}
         narration = remarks_dict.get("narration") or str(entry.remarks or "")
         payee = remarks_dict.get("payee") or ""
+
         if payee:
             narrations.append(payee)
         if narration:
             narrations.append(narration)
 
-    result = extract_candidate_patterns_from_narrations(narrations)
+    # Expanded candidate options set to 15
+    result = extract_candidate_patterns_from_narrations(narrations, max_selectable=15)
     return JsonResponse(result)
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     """
-#     Scans Node 99 unclassified entries against active rules by searching
-#     both raw remarks strings and nested JSON payee/narration fields.
-#     """
-#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-#     if not base_qs.exists():
-#         return Response({"status": "success", "rule_matches": []})
-
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by("-priority")
-
-#     rule_matches = []
-#     seen_patterns = set()
-#     claimed_entry_ids = set()
-
-#     for rule in active_rules:
-#         patterns_list = (
-#             rule.get_patterns()
-#             if hasattr(rule, "get_patterns")
-#             else rule.patterns
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             # Strip '#' and whitespace
-#             clean_search_str = pattern_str.lstrip("#").strip()
-
-#             # Skip empty or overly broad 1-letter patterns
-#             if len(clean_search_str) < 2:
-#                 continue
-
-#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
-
-#             # 🟢 Multi-vector JSON search: checks raw string OR nested JSON keys
-#             matched_qs = candidate_qs.filter(
-#                 Q(remarks__icontains=clean_search_str) |
-#                 Q(remarks__payee__icontains=clean_search_str) |
-#                 Q(remarks__narration__icontains=clean_search_str)
-#             )
-
-#             stats = matched_qs.aggregate(
-#                 row_count=Count("id"),
-#                 total_amt=Coalesce(
-#                     Sum("debit") + Sum("credit"),
-#                     Value(0.0),
-#                     output_field=FloatField()
-#                 ),
-#             )
-
-#             count = stats["row_count"] or 0
-
-#             if count > 0:
-#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
-#                 claimed_entry_ids.update(new_matched_ids)
-#                 seen_patterns.add(pattern_str)
-
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",
-#                         "token_breakdown": [clean_search_str],
-#                         "matched_rows": count,
-#                         "total_amount": float(stats["total_amt"]),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     """
-#     Safe & Fast SQL Preview Engine for Node 99 Rules.
-#     Handles both plain-text and JSON remarks without breaking DB queries.
-#     """
-#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-#     if not base_qs.exists():
-#         return Response({"status": "success", "rule_matches": []})
-
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-#         "-priority"
-#     )
-
-#     rule_matches = []
-#     seen_patterns = set()
-#     claimed_entry_ids = set()
-
-#     for rule in active_rules:
-#         patterns_list = (
-#             rule.get_patterns()
-#             if hasattr(rule, "get_patterns")
-#             else get_clean_patterns(rule)
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             # Clean search string (strip leading '#' or quotes)
-#             clean_search_str = pattern_str.lstrip("#").strip()
-
-#             # Guard against empty or ultra-short accidental 1-letter rules
-#             if len(clean_search_str) < 2:
-#                 continue
-
-#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
-
-#             # 🟢 SAFE DB MATCHING:
-#             # Cast/Search raw remarks text directly. Works whether remarks is JSON or String!
-#             matched_qs = candidate_qs.filter(Q(remarks__icontains=clean_search_str))
-
-#             stats = matched_qs.aggregate(
-#                 row_count=Count("id"),
-#                 total_amt=Coalesce(
-#                     Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
-#                 ),
-#             )
-
-#             count = stats["row_count"] or 0
-
-#             if count > 0:
-#                 # Claim IDs so lower priority rules don't double-count them
-#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
-#                 claimed_entry_ids.update(new_matched_ids)
-#                 seen_patterns.add(pattern_str)
-
-#                 # Safely extract tokens for UI display only (doesn't block matching)
-#                 pattern_tokens = (
-#                     extract_meaningful_tokens(pattern_str)
-#                     if "extract_meaningful_tokens" in globals()
-#                     else [clean_search_str]
-#                 )
-
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",
-#                         "token_breakdown": pattern_tokens,
-#                         "matched_rows": count,
-#                         "total_amount": float(stats["total_amt"]),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     """
-#     Fast SQL-based preview engine with support for plain text and JSON remarks.
-#     """
-#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-#     if not base_qs.exists():
-#         return Response({"status": "success", "rule_matches": []})
-
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-#         "-priority"
-#     )
-
-#     rule_matches = []
-#     seen_patterns = set()
-#     claimed_entry_ids = set()
-
-#     for rule in active_rules:
-#         patterns_list = (
-#             rule.get_patterns()
-#             if hasattr(rule, "get_patterns")
-#             else get_clean_patterns(rule)
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             # Token validation
-#             pattern_tokens = extract_meaningful_tokens(pattern_str)
-#             if len(pattern_tokens) < 1:
-#                 continue
-#             if len(pattern_tokens) == 1 and len(pattern_tokens[0]) < 5:
-#                 continue
-
-#             # 🟢 Strip '#' so searching works against raw text and JSON strings
-#             clean_search_str = pattern_str.lstrip("#").strip()
-#             if not clean_search_str:
-#                 continue
-
-#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
-
-#             # 🟢 Multi-field DB query (searches raw text OR nested JSON narration keys)
-#             matched_qs = candidate_qs.filter(
-#                 Q(remarks__icontains=clean_search_str)
-#                 | Q(remarks__narration__icontains=clean_search_str)
-#                 | Q(remarks__display_text__icontains=clean_search_str)
-#             )
-
-#             stats = matched_qs.aggregate(
-#                 row_count=Count("id"),
-#                 total_amt=Coalesce(
-#                     Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
-#                 ),
-#             )
-
-#             count = stats["row_count"] or 0
-
-#             if count > 0:
-#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
-#                 claimed_entry_ids.update(new_matched_ids)
-#                 seen_patterns.add(pattern_str)
-
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",
-#                         "token_breakdown": pattern_tokens,
-#                         "matched_rows": count,
-#                         "total_amount": float(stats["total_amt"]),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     """
-#     Scans Node 99 entries and groups them by active matching learned rules
-#     using strict Multi-Token validation from engine.
-#     """
-#     queryset = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-#     active_rules = ClassificationRule.objects.filter(is_active=True)
-
-#     rule_matches = []
-#     seen_patterns = set()
-
-#     # Pre-fetch for faster in-memory token evaluation
-#     entries_pool = list(queryset.values("id", "remarks", "debit", "credit"))
-
-#     for rule in active_rules:
-#         # Assuming get_clean_patterns is available or rule.patterns is parsed
-#         raw_patterns = (
-#             rule.patterns if isinstance(rule.patterns, list) else [rule.patterns]
-#         )
-
-#         for pattern_str in raw_patterns:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             pattern_tokens = extract_meaningful_tokens(pattern_str)
-
-#             # 🛡️ GUARDRAIL: Require at least 2 distinct meaningful tokens in pattern
-#             if len(pattern_tokens) < 2:
-#                 continue
-
-#             matched_entry_ids = []
-#             total_amt = 0.0
-
-#             for entry in entries_pool:
-#                 remarks_str = str(entry.get("remarks", ""))
-
-#                 # Enforce multi-token match (at least 2 tokens)
-#                 if match_multi_tokens(remarks_str, pattern_str, min_required_tokens=2):
-#                     matched_entry_ids.append(entry["id"])
-#                     deb = float(entry["debit"] or 0.0)
-#                     cred = float(entry["credit"] or 0.0)
-#                     total_amt += deb + cred
-
-#             count = len(matched_entry_ids)
-
-#             if count > 0:
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "token_breakdown": pattern_tokens,
-#                         "matched_rows": count,
-#                         "total_amount": float(total_amt),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-#                 seen_patterns.add(pattern_str)
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary_older(request):
-#     """
-#     Scans Node 99 entries and groups them by active matching learned rules
-#     using strict Multi-Token validation and native JSON pattern retrieval.
-#     """
-#     queryset = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-#         "-priority"
-#     )
-
-#     rule_matches = []
-#     seen_patterns = set()
-
-#     # Pre-fetch for fast in-memory evaluation
-#     entries_pool = list(queryset.values("id", "remarks", "debit", "credit"))
-
-#     for rule in active_rules:
-#         # Cleanly retrieve array of pattern strings from JSONField
-#         patterns_list = (
-#             rule.get_patterns()
-#             if hasattr(rule, "get_patterns")
-#             else get_clean_patterns(rule)
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             pattern_tokens = extract_meaningful_tokens(pattern_str)
-
-#             # 🛡️ GUARDRAIL: Allow 1-token matches ONLY if token is long/significant (e.g. >= 6 chars like 'ZOMATO')
-#             # Otherwise require at least 2 distinct tokens.
-#             if len(pattern_tokens) < 1:
-#                 continue
-#             if len(pattern_tokens) == 1 and len(pattern_tokens[0]) < 5:
-#                 continue
-
-#             matched_entry_ids = []
-#             total_amt = 0.0
-
-#             for entry in entries_pool:
-#                 # Extract narration or display text safely from remarks dict/string
-#                 remarks_raw = entry.get("remarks")
-#                 if isinstance(remarks_raw, dict):
-#                     remarks_str = (
-#                         remarks_raw.get("narration")
-#                         or remarks_raw.get("display_text")
-#                         or str(remarks_raw)
-#                     )
-#                 else:
-#                     remarks_str = str(remarks_raw or "")
-
-#                 # Enforce multi-token match
-#                 if match_multi_tokens(remarks_str, pattern_str):
-#                     matched_entry_ids.append(entry["id"])
-#                     deb = float(entry["debit"] or 0.0)
-#                     cred = float(entry["credit"] or 0.0)
-#                     total_amt += deb + cred
-
-#             count = len(matched_entry_ids)
-
-#             if count > 0:
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",  # UI pill header format
-#                         "token_breakdown": pattern_tokens,
-#                         "matched_rows": count,
-#                         "total_amount": float(total_amt),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-#                 seen_patterns.add(pattern_str)
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     from django.db.models import Q, Sum, FloatField, Value, Count
-#     from django.db.models.functions import Coalesce
-
-#     """
-#     Optimized: Uses SQL-level pattern matching and aggregation to evaluate
-#     Node 99 entries in milliseconds instead of Python loops.
-#     """
-#     # 1. Base Queryset for unclassified entries in Node 99
-#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-#     if not base_qs.exists():
-#         return Response({"status": "success", "rule_matches": []})
-
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-#         "-priority"
-#     )
-
-#     rule_matches = []
-#     seen_patterns = set()
-#     claimed_entry_ids = set()
-
-#     for rule in active_rules:
-#         # Retrieve pattern list cleanly
-#         patterns_list = (
-#             rule.get_patterns()
-#             if hasattr(rule, "get_patterns")
-#             else get_clean_patterns(rule)
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             # 🛡️ Token Guardrail
-#             pattern_tokens = extract_meaningful_tokens(pattern_str)
-#             if len(pattern_tokens) < 1:
-#                 continue
-#             if len(pattern_tokens) == 1 and len(pattern_tokens[0]) < 5:
-#                 continue
-
-#             # Clean pattern string for SQL search (remove trailing/leading hashes if present)
-#             clean_search_str = pattern_str.lstrip("#").strip()
-#             if not clean_search_str:
-#                 continue
-
-#             # 2. Filter available entries directly in SQL (excluding already matched entries)
-#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
-
-#             # DB-level case-insensitive match on JSON string or text field
-#             matched_qs = candidate_qs.filter(Q(remarks__icontains=clean_search_str))
-
-#             # 3. Fast SQL Aggregation (Count & Total Amount)
-#             stats = matched_qs.aggregate(
-#                 row_count=Count("id"),
-#                 total_amt=Coalesce(
-#                     Sum("debit") + Sum("credit"), Value(0.0), output_field=FloatField()
-#                 ),
-#             )
-
-#             count = stats["row_count"] or 0
-
-#             if count > 0:
-#                 # Store matched IDs so lower-priority patterns don't claim them
-#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
-#                 claimed_entry_ids.update(new_matched_ids)
-#                 seen_patterns.add(pattern_str)
-
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",
-#                         "token_breakdown": pattern_tokens,
-#                         "matched_rows": count,
-#                         "total_amount": float(stats["total_amt"]),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                     }
-#                 )
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
-
-
-# @api_view(["POST"])
-# def execute_bulk_sweep(request):
-#     """Executes bulk reclassification using engine multi-token matching."""
-#     selected_patterns = request.data.get("patterns", [])
-
-#     if not selected_patterns:
-#         return Response(
-#             {"status": "error", "message": "No patterns selected"}, status=400
-#         )
-
-#     total_updated = 0
-#     unclassified_entries = JournalEntry.objects.filter(
-#         account_id=99, is_reclassified=False
-#     )
-
-#     for pattern in selected_patterns:
-#         pattern_tokens = extract_meaningful_tokens(pattern)
-#         if len(pattern_tokens) < 2 or pattern.upper() in GENERIC_IGNORE_PATTERNS:
-#             continue
-
-#         rule = ClassificationRule.objects.filter(
-#             is_active=True, patterns__icontains=pattern
-#         ).first()
-
-#         if rule:
-#             # Re-evaluate entries against multi-token engine
-#             for entry in unclassified_entries:
-#                 remarks_str = str(entry.remarks or "")
-
-#                 if match_multi_tokens(remarks_str, pattern, min_required_tokens=2):
-#                     snapshot = entry.evaluation_matrix_snapshot or {}
-#                     if isinstance(snapshot, str):
-#                         import json
-
-#                         try:
-#                             snapshot = json.loads(snapshot)
-#                         except json.JSONDecodeError:
-#                             snapshot = {}
-
-#                     snapshot["resolved_category"] = rule.target_category
-#                     snapshot["resolved_subcategory"] = rule.target_subcategory
-#                     snapshot["applied_rule_code"] = rule.rule_code
-
-#                     entry.evaluation_matrix_snapshot = snapshot
-#                     entry.is_reclassified = True
-#                     entry.classification_status = "SWEEP_CLEARED"
-#                     entry.save()
-
-#                     total_updated += 1
-
-#     return Response({"status": "success", "total_reclassified": total_updated})
-
-
-# @api_view(["POST"])
-# def suggest_rule_for_cluster(request):
-#     """
-#     Checks if an active ClassificationRule already exists for a cluster's clean payee pattern.
-#     """
-#     raw_pattern = request.data.get("pattern", "")
-#     entry_type = request.data.get("entry_type", "Debit")
-
-#     clean_p = extract_clean_payee_pattern(raw_pattern)
-#     if not clean_p or len(clean_p) < 3:
-#         return Response({"has_suggestion": False})
-
-#     # Search for active rules matching the pattern & direction vector
-#     existing_rule = ClassificationRule.objects.filter(
-#         is_active=True, rule_type__iexact=entry_type, patterns__icontains=clean_p
-#     ).first()
-
-#     if existing_rule:
-#         return Response(
-#             {
-#                 "has_suggestion": True,
-#                 "rule_code": existing_rule.rule_code,
-#                 "suggested_category": existing_rule.target_category,
-#                 "suggested_subcategory": existing_rule.target_subcategory,
-#                 "matched_pattern": clean_p,
-#             }
-#         )
-
-#     return Response({"has_suggestion": False})
 
 
 @api_view(["POST"])

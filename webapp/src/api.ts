@@ -780,3 +780,64 @@ export const removePatternFromRule = async (
     return false;
   }
 };
+
+export interface CandidatePatternsResponse {
+  selectable_patterns: string[];
+  disabled_patterns: string[];
+}
+
+export const fetchCandidatePatterns = async (
+  transactionIds: string[]
+): Promise<CandidatePatternsResponse> => {
+  console.log(
+    `[API] 🚀 Fetching candidate patterns for ${transactionIds.length} transactions...`
+  );
+
+  try {
+    const response = await api.post<CandidatePatternsResponse>(
+      '/classification/staging/get_candidate_patterns/', // <--- Aligned with staging path
+      { transaction_ids: transactionIds }
+    );
+
+    console.log(`[API] 📦 Candidate patterns response:`, response.data);
+    return response.data;
+  } catch (error) {
+    console.error('[API] ❌ Failed to fetch candidate patterns:', error);
+    return { selectable_patterns: [], disabled_patterns: [] };
+  }
+};
+
+export interface PatternValidationResponse {
+  status: 'GOOD' | 'BAD' | 'CATASTROPHIC';
+  is_valid: boolean;
+  clean_pattern: string;
+  message: string;
+}
+
+/**
+ * Validates a custom pattern anchor against backend rule safety engines.
+ */
+export const validatePatternAnchor = async (
+  pattern: string
+): Promise<PatternValidationResponse> => {
+  console.log(`[API] 🔍 Validating pattern anchor: "${pattern}"`);
+
+  try {
+    const response = await api.post<PatternValidationResponse>(
+      '/classification/staging/validate_pattern/', // 👈 Fixed path typo & aligned with staging endpoints
+      { pattern } // 👈 Pure payload expected by Axios
+    );
+
+    console.log(`[API] 📦 Pattern validation result:`, response.data);
+    return response.data;
+  } catch (error) {
+    console.error('[API] ❌ Failed to validate pattern anchor:', error);
+    // Safe fallback response if backend fails or network drops
+    return {
+      status: 'CATASTROPHIC',
+      is_valid: false,
+      clean_pattern: pattern,
+      message: '🛑 Backend validation endpoint unreachable.',
+    };
+  }
+};
