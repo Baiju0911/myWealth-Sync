@@ -213,3 +213,18 @@ export const filterClustersByQuery = (
     })
     .filter((c): c is ExtendedCluster => c !== null);
 };
+
+export const extractCleanPayee = (rawNarration: string): string => {
+  if (!rawNarration) return '';
+
+  // Handle standard UPI format: UPI/GATEWAY/RRN/PAYEE_NAME/...
+  const parts = rawNarration.split('/');
+  if (parts.length >= 4 && parts[0].toUpperCase() === 'UPI') {
+    let candidate = parts[3].trim();
+    // Remove "NO REMARKS" or "NO REM" if attached
+    candidate = candidate.replace(/NO REMARKS?/i, '').trim();
+    return candidate;
+  }
+
+  return rawNarration;
+};

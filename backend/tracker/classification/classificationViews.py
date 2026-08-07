@@ -558,8 +558,14 @@ def sweep_preview_summary(request):
     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
     total_unclassified = base_qs.count()
 
+    # Filter for exact Suspense Account items to match your Audited Matrix
+    suspense_count = base_qs.filter(
+        evaluation_matrix_snapshot__resolved_subcategory="Suspense Account"
+    ).count()
+
     print(
-        f"📊 [ENGINE DEBUG] Total Unclassified Node 99 Entries to Scan: {total_unclassified}"
+        f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
+        f"(Pending Suspense: {suspense_count})"
     )
 
     if total_unclassified == 0:

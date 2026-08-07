@@ -243,7 +243,7 @@ RULE_SAFETY_BLACKLIST = {
     "PAID",
     "RECEIVED",
     # Personal Names & Non-Merchant Tokens
-    "SUMEE",
+    # "SUMEE",
     "BAIJU",
     # "DHANYA",
     # "GEETHA",
