@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { 
   fetchCandidatePatterns, 
@@ -17,6 +16,23 @@ interface Props {
   onConfirm: (selectedPatterns: string[]) => void;
   isSubmitting?: boolean;
 }
+
+// Helper to clean VPA handles (@OK, @YBL) and trailing bank noise from pattern chips
+const cleanCandidatePattern = (rawPattern: string): string => {
+  if (!rawPattern) return '';
+  let cleaned = rawPattern.trim();
+
+  // Strip standard UPI prefixes/suffixes if present
+  cleaned = cleaned.replace(/^UPI\//i, '');
+  cleaned = cleaned.replace(/\/NO REMARKS?/i, '');
+  
+  // Strip trailing VPA handles (e.g., SAJULALSAJU@OK -> SAJULALSAJU)
+  if (cleaned.includes('@')) {
+    cleaned = cleaned.split('@')[0];
+  }
+
+  return cleaned.trim().toUpperCase();
+};
 
 export const PatternSelectionModal: React.FC<Props> = ({
   isOpen,
@@ -51,7 +67,7 @@ export const PatternSelectionModal: React.FC<Props> = ({
       return;
     }
 
-    // ⚡ Strategy 1: Auto-Consolidate as UPI Merchant (Apply Normalizer)
+    // Choice 2: Auto-Consolidate as UPI Merchant (Rail Sweep Mode)
     if (upiStrategy === 'auto_consolidate') {
       const genericChips = ['⚡ P2M_UPI_MERCHANT_SWEEP', 'GENERIC_QR_NORMALIZER'];
       setSelectablePatterns(genericChips);
@@ -61,33 +77,45 @@ export const PatternSelectionModal: React.FC<Props> = ({
       return;
     }
 
-    // 🏷️ Strategy 2: Anchor to Clean Vendor Name Only
+    // Choice 1: Anchor to Clean Vendor Name Only (Clean Entity Mode)
     let isMounted = true;
     setLoading(true);
 
     fetchCandidatePatterns(selectedTxnIds)
       .then((data) => {
         if (!isMounted) return;
-        let clean = data.selectable_patterns || [];
+
+        const rawClean = data.selectable_patterns || [];
         const disabled = data.disabled_patterns || [];
 
-        // Fallback to activeVendorName if backend returns an empty array
-        if (clean.length === 0 && activeVendorName.trim()) {
-          clean = [activeVendorName.trim()];
+        // Clean & Deduplicate candidate patterns
+        const cleanedCandidates = Array.from(
+          new Set(
+            rawClean
+              .map(cleanCandidatePattern)
+              .filter((pat) => pat.length > 1)
+          )
+        );
+
+        // Fallback to cleaned activeVendorName if array is empty
+        const cleanVendor = cleanCandidatePattern(activeVendorName);
+        if (cleanedCandidates.length === 0 && cleanVendor) {
+          cleanedCandidates.push(cleanVendor);
         }
 
-        setSelectablePatterns(clean);
+        setSelectablePatterns(cleanedCandidates);
         setDisabledPatterns(disabled);
 
-        if (clean.length > 0) {
-          setChosenPatterns([clean[0]]);
+        if (cleanedCandidates.length > 0) {
+          setChosenPatterns([cleanedCandidates[0]]);
         }
       })
       .catch((err) => {
         console.error('Error fetching pattern suggestions:', err);
-        if (isMounted && activeVendorName.trim()) {
-          setSelectablePatterns([activeVendorName.trim()]);
-          setChosenPatterns([activeVendorName.trim()]);
+        const cleanVendor = cleanCandidatePattern(activeVendorName);
+        if (isMounted && cleanVendor) {
+          setSelectablePatterns([cleanVendor]);
+          setChosenPatterns([cleanVendor]);
         }
       })
       .finally(() => {
@@ -137,7 +165,7 @@ export const PatternSelectionModal: React.FC<Props> = ({
   const handleAddCustomPattern = () => {
     if (!evaluation || !evaluation.is_valid || !evaluation.clean_pattern) return;
 
-    const targetPattern = evaluation.clean_pattern;
+    const targetPattern = cleanCandidatePattern(evaluation.clean_pattern);
 
     if (!selectablePatterns.includes(targetPattern)) {
       setSelectablePatterns((prev) => [...prev, targetPattern]);
@@ -209,7 +237,7 @@ export const PatternSelectionModal: React.FC<Props> = ({
         <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#38bdf8', textTransform: 'uppercase' }}>
-              💡 Select Rule Anchors for Future Auto-Matching ({upiStrategy === 'auto_consolidate' ? 'Rail Mode' : 'Entity Mode'})
+              💡 Select Rule Anchors ({upiStrategy === 'auto_consolidate' ? 'Rail Sweep Mode' : 'Clean Entity Mode'})
             </span>
           </div>
 
@@ -258,82 +286,84 @@ export const PatternSelectionModal: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Manual Custom Pattern Input Section */}
-              <div style={{ borderTop: '1px solid #1f1f23', paddingTop: '12px', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    value={customInput}
-                    onChange={(e) => handleInputChange(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type custom keyword anchor (e.g. INT.PD, SUMEE S)..."
-                    style={{
-                      flex: 1,
-                      backgroundColor: '#18181b',
-                      border: '1px solid #3f3f46',
-                      borderRadius: '6px',
-                      padding: '6px 12px',
-                      fontSize: '11px',
-                      color: '#f4f4f5',
-                      outline: 'none',
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddCustomPattern}
-                    disabled={isAddDisabled}
-                    style={{
-                      padding: '6px 14px',
-                      backgroundColor: !isAddDisabled ? '#6366f1' : '#27272a',
-                      border: 'none',
-                      borderRadius: '6px',
-                      color: !isAddDisabled ? '#ffffff' : '#71717a',
-                      fontSize: '11px',
-                      fontWeight: 'bold',
-                      cursor: !isAddDisabled ? 'pointer' : 'not-allowed',
-                      opacity: !isAddDisabled ? 1 : 0.6,
-                      transition: 'all 0.15s ease-in-out',
-                    }}
-                  >
-                    + Add Tag
-                  </button>
-                </div>
-
-                {/* Fixed Height Feedback Container */}
-                <div style={{ minHeight: '28px', marginTop: '6px' }}>
-                  {validating && (
-                    <div style={{ fontSize: '10px', color: '#71717a', padding: '4px 0' }}>
-                      ⏳ Checking engine rules...
-                    </div>
-                  )}
-
-                  {!validating && evaluation && (
-                    <div
+              {/* Custom Tag Input (Hidden during Rail Sweep / auto_consolidate) */}
+              {upiStrategy === 'vendor' && (
+                <div style={{ borderTop: '1px solid #1f1f23', paddingTop: '12px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      value={customInput}
+                      onChange={(e) => handleInputChange(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Type custom keyword anchor (e.g. SAJULAL, CHERUKARA)..."
                       style={{
-                        fontSize: '11px',
-                        padding: '6px 10px',
+                        flex: 1,
+                        backgroundColor: '#18181b',
+                        border: '1px solid #3f3f46',
                         borderRadius: '6px',
-                        fontWeight: '500',
-                        backgroundColor:
-                          evaluation.status === 'GOOD' ? '#064e3b' :
-                          evaluation.status === 'BAD' ? '#451a03' : '#4c0519',
-                        color:
-                          evaluation.status === 'GOOD' ? '#6ee7b7' :
-                          evaluation.status === 'BAD' ? '#fcd34d' : '#fda4af',
-                        border: `1px solid ${
-                          evaluation.status === 'GOOD' ? '#047857' :
-                          evaluation.status === 'BAD' ? '#b45309' : '#9f1239'
-                        }`,
+                        padding: '6px 12px',
+                        fontSize: '11px',
+                        color: '#f4f4f5',
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomPattern}
+                      disabled={isAddDisabled}
+                      style={{
+                        padding: '6px 14px',
+                        backgroundColor: !isAddDisabled ? '#6366f1' : '#27272a',
+                        border: 'none',
+                        borderRadius: '6px',
+                        color: !isAddDisabled ? '#ffffff' : '#71717a',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        cursor: !isAddDisabled ? 'pointer' : 'not-allowed',
+                        opacity: !isAddDisabled ? 1 : 0.6,
+                        transition: 'all 0.15s ease-in-out',
                       }}
                     >
-                      {evaluation.message}
-                    </div>
-                  )}
+                      + Add Tag
+                    </button>
+                  </div>
+
+                  {/* Engine Feedback Container */}
+                  <div style={{ minHeight: '28px', marginTop: '6px' }}>
+                    {validating && (
+                      <div style={{ fontSize: '10px', color: '#71717a', padding: '4px 0' }}>
+                        ⏳ Checking engine rules...
+                      </div>
+                    )}
+
+                    {!validating && evaluation && (
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          fontWeight: '500',
+                          backgroundColor:
+                            evaluation.status === 'GOOD' ? '#064e3b' :
+                            evaluation.status === 'BAD' ? '#451a03' : '#4c0519',
+                          color:
+                            evaluation.status === 'GOOD' ? '#6ee7b7' :
+                            evaluation.status === 'BAD' ? '#fcd34d' : '#fda4af',
+                          border: `1px solid ${
+                            evaluation.status === 'GOOD' ? '#047857' :
+                            evaluation.status === 'BAD' ? '#b45309' : '#9f1239'
+                          }`,
+                        }}
+                      >
+                        {evaluation.message}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Auto-Blocked Noise Tokens */}
-              {disabledPatterns.length > 0 && (
+              {upiStrategy === 'vendor' && disabledPatterns.length > 0 && (
                 <div style={{ borderTop: '1px solid #1f1f23', paddingTop: '10px' }}>
                   <span style={{ fontSize: '10px', color: '#71717a', display: 'block', marginBottom: '6px', fontWeight: 'bold', textTransform: 'uppercase' }}>
                     🛡️ Auto-Filtered System Noise (Blocked):
@@ -409,7 +439,6 @@ export const PatternSelectionModal: React.FC<Props> = ({
     </div>
   );
 };
-
 
 // import React, { useEffect, useState, useRef } from 'react';
 // import { 

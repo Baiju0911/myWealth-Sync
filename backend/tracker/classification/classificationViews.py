@@ -542,26 +542,42 @@ def preview_pattern_matches(request):
 @api_view(["GET"])
 def sweep_preview_summary(request):
     """
-    Fast & Safe SQL Preview Engine for Node 99 Rules.
-    Scans unclassified Node 99 entries against active learned rules,
-    preventing double-counting using priority-ordered claim tracking
-    and compound-first pattern evaluation.
+    Lightning-Fast In-Memory Vector Sweep Engine for Node 99 Rules.
+    Fetches Node 99 entries once and performs priority-ordered,
+    compound-first pattern matching entirely in Python memory.
     """
     print(
         "\n================================================================================"
     )
-    print("🔍 [SWEEP PREVIEW ENGINE] STARTING NODE 99 RULE SCAN")
+    print("⚡ [SWEEP PREVIEW ENGINE] STARTING LIGHTNING NODE 99 SCAN")
     print(
         "================================================================================"
     )
 
     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-    total_unclassified = base_qs.count()
 
-    # Filter for exact Suspense Account items to match your Audited Matrix
-    suspense_count = base_qs.filter(
-        evaluation_matrix_snapshot__resolved_subcategory="Suspense Account"
-    ).count()
+    # 1. Fetch unclassified entries in a SINGLE database hit
+    # Pulling only required fields speeds up query execution significantly
+    unclassified_entries = list(
+        base_qs.values(
+            "id",
+            "debit",
+            "credit",
+            "remarks__payee",
+            "remarks__narration",
+            "remarks__display_text",
+            "evaluation_matrix_snapshot__resolved_subcategory",
+        )
+    )
+
+    total_unclassified = len(unclassified_entries)
+
+    suspense_count = sum(
+        1
+        for e in unclassified_entries
+        if e.get("evaluation_matrix_snapshot__resolved_subcategory")
+        == "Suspense Account"
+    )
 
     print(
         f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
@@ -572,7 +588,31 @@ def sweep_preview_summary(request):
         print("ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99. Exiting.")
         return Response({"status": "success", "rule_matches": []})
 
-    # Order rules by highest priority first
+    # 2. Pre-process search targets for fast case-insensitive matching
+    # Concatenating target string fields once per row avoids repeated JSON string lookups
+    processed_pool = []
+    for entry in unclassified_entries:
+        debit_val = float(entry["debit"] or 0.0)
+        credit_val = float(entry["credit"] or 0.0)
+
+        payee = (entry.get("remarks__payee") or "").upper()
+        narration = (entry.get("remarks__narration") or "").upper()
+        display_text = (entry.get("remarks__display_text") or "").upper()
+
+        # Combine vector text target once
+        search_haystack = f"{payee} {narration} {display_text}"
+
+        processed_pool.append(
+            {
+                "id": entry["id"],
+                "debit": debit_val,
+                "credit": credit_val,
+                "total_amount": debit_val + credit_val,
+                "haystack": search_haystack,
+            }
+        )
+
+    # 3. Fetch active rules ordered by priority
     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
         "-priority"
     )
@@ -582,6 +622,7 @@ def sweep_preview_summary(request):
     seen_patterns = set()
     claimed_entry_ids = set()
 
+    # 4. In-Memory Vector Sweep Loop
     for rule in active_rules:
         raw_patterns = (
             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
@@ -590,66 +631,56 @@ def sweep_preview_summary(request):
         if not raw_patterns:
             continue
 
-        # 💡 CRITICAL FIX: Compound-First Sorting
-        # Forces multi-word compounds ('MARGIN FREE', 'AMAZON INDIA') to evaluate FIRST
-        # before loose single-word tokens ('MARGIN', 'AMAZON')
+        # Compound-first pattern sorting
         patterns_list = sorted(
             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+        )
+
+        rule_type = (
+            rule.rule_type.lower()
+            if hasattr(rule, "rule_type") and rule.rule_type
+            else None
         )
 
         for pattern_str in patterns_list:
             if not pattern_str or pattern_str in seen_patterns:
                 if pattern_str in seen_patterns:
-                    print(
-                        f"   ⏭️ Skipping '{pattern_str}': Already processed by higher priority rule/pattern."
-                    )
+                    print(f"    ⏭️ Skipping '{pattern_str}': Already processed.")
                 continue
 
-            # Strip leading hashes or formatting artifacts
-            clean_search_str = pattern_str.lstrip("#").strip()
+            clean_search_str = pattern_str.lstrip("#").strip().upper()
 
-            # Guard against empty or ultra-short accidental 1-letter rules
             if len(clean_search_str) < 2:
-                print(f"   ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
+                print(f"    ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
                 continue
 
-            # Exclude entries already claimed by higher-priority rules/patterns
-            candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+            matched_count = 0
+            matched_amount = 0.0
+            new_claimed_ids = []
 
-            # Filter by rule entry type (Debit vs Credit) if rule_type is defined
-            if hasattr(rule, "rule_type") and rule.rule_type:
-                if rule.rule_type.lower() == "debit":
-                    candidate_qs = candidate_qs.filter(debit__gt=0)
-                elif rule.rule_type.lower() == "credit":
-                    candidate_qs = candidate_qs.filter(credit__gt=0)
+            # Instant in-memory pattern evaluation across candidates
+            for row in processed_pool:
+                if row["id"] in claimed_entry_ids:
+                    continue
 
-            # ✅ MULTI-VECTOR TARGETED SEARCH: Search specific string fields only!
-            matched_qs = candidate_qs.filter(
-                Q(remarks__payee__icontains=clean_search_str)
-                | Q(remarks__narration__icontains=clean_search_str)
-                | Q(remarks__display_text__icontains=clean_search_str)
-            )
+                # Direction check (Debit vs Credit)
+                if rule_type == "debit" and row["debit"] <= 0:
+                    continue
+                if rule_type == "credit" and row["credit"] <= 0:
+                    continue
 
-            stats = matched_qs.aggregate(
-                row_count=Count("id"),
-                total_amt=Coalesce(
-                    Sum("debit") + Sum("credit"),
-                    Value(0.0),
-                    output_field=FloatField(),
-                ),
-            )
+                # Fast string lookup
+                if clean_search_str in row["haystack"]:
+                    matched_count += 1
+                    matched_amount += row["total_amount"]
+                    new_claimed_ids.append(row["id"])
 
-            count = stats["row_count"] or 0
-
-            if count > 0:
-                new_matched_ids = list(matched_qs.values_list("id", flat=True))
-                claimed_entry_ids.update(new_matched_ids)
+            if matched_count > 0:
+                claimed_entry_ids.update(new_claimed_ids)
                 seen_patterns.add(pattern_str)
 
-                total_amount = float(stats["total_amt"])
-
                 print(
-                    f"   ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {count} rows | Total: ₹{total_amount:,.2f}"
+                    f"    ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {matched_count} rows | Total: ₹{matched_amount:,.2f}"
                 )
 
                 rule_matches.append(
@@ -657,8 +688,8 @@ def sweep_preview_summary(request):
                         "pattern": pattern_str,
                         "display_tag": f"#{pattern_str}",
                         "token_breakdown": [clean_search_str],
-                        "matched_rows": count,
-                        "total_amount": total_amount,
+                        "matched_rows": matched_count,
+                        "total_amount": round(matched_amount, 2),
                         "suggested_category": rule.target_category,
                         "suggested_subcategory": rule.target_subcategory,
                         "rule_code": rule.rule_code,
@@ -676,6 +707,145 @@ def sweep_preview_summary(request):
     )
 
     return Response({"status": "success", "rule_matches": rule_matches})
+
+
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """
+#     Fast & Safe SQL Preview Engine for Node 99 Rules.
+#     Scans unclassified Node 99 entries against active learned rules,
+#     preventing double-counting using priority-ordered claim tracking
+#     and compound-first pattern evaluation.
+#     """
+#     print(
+#         "\n================================================================================"
+#     )
+#     print("🔍 [SWEEP PREVIEW ENGINE] STARTING NODE 99 RULE SCAN")
+#     print(
+#         "================================================================================"
+#     )
+
+#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+#     total_unclassified = base_qs.count()
+
+#     # Filter for exact Suspense Account items to match your Audited Matrix
+#     suspense_count = base_qs.filter(
+#         evaluation_matrix_snapshot__resolved_subcategory="Suspense Account"
+#     ).count()
+
+#     print(
+#         f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
+#         f"(Pending Suspense: {suspense_count})"
+#     )
+
+#     if total_unclassified == 0:
+#         print("ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99. Exiting.")
+#         return Response({"status": "success", "rule_matches": []})
+
+#     # Order rules by highest priority first
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+#     print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
+
+#     rule_matches = []
+#     seen_patterns = set()
+#     claimed_entry_ids = set()
+
+#     for rule in active_rules:
+#         raw_patterns = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
+
+#         if not raw_patterns:
+#             continue
+
+#         # 💡 CRITICAL FIX: Compound-First Sorting
+#         # Forces multi-word compounds ('MARGIN FREE', 'AMAZON INDIA') to evaluate FIRST
+#         # before loose single-word tokens ('MARGIN', 'AMAZON')
+#         patterns_list = sorted(
+#             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 if pattern_str in seen_patterns:
+#                     print(
+#                         f"   ⏭️ Skipping '{pattern_str}': Already processed by higher priority rule/pattern."
+#                     )
+#                 continue
+
+#             # Strip leading hashes or formatting artifacts
+#             clean_search_str = pattern_str.lstrip("#").strip()
+
+#             # Guard against empty or ultra-short accidental 1-letter rules
+#             if len(clean_search_str) < 2:
+#                 print(f"   ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
+#                 continue
+
+#             # Exclude entries already claimed by higher-priority rules/patterns
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             # Filter by rule entry type (Debit vs Credit) if rule_type is defined
+#             if hasattr(rule, "rule_type") and rule.rule_type:
+#                 if rule.rule_type.lower() == "debit":
+#                     candidate_qs = candidate_qs.filter(debit__gt=0)
+#                 elif rule.rule_type.lower() == "credit":
+#                     candidate_qs = candidate_qs.filter(credit__gt=0)
+
+#             # ✅ MULTI-VECTOR TARGETED SEARCH: Search specific string fields only!
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#                 | Q(remarks__display_text__icontains=clean_search_str)
+#             )
+
+#             stats = matched_qs.aggregate(
+#                 row_count=Count("id"),
+#                 total_amt=Coalesce(
+#                     Sum("debit") + Sum("credit"),
+#                     Value(0.0),
+#                     output_field=FloatField(),
+#                 ),
+#             )
+
+#             count = stats["row_count"] or 0
+
+#             if count > 0:
+#                 new_matched_ids = list(matched_qs.values_list("id", flat=True))
+#                 claimed_entry_ids.update(new_matched_ids)
+#                 seen_patterns.add(pattern_str)
+
+#                 total_amount = float(stats["total_amt"])
+
+#                 print(
+#                     f"   ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {count} rows | Total: ₹{total_amount:,.2f}"
+#                 )
+
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "display_tag": f"#{pattern_str}",
+#                         "token_breakdown": [clean_search_str],
+#                         "matched_rows": count,
+#                         "total_amount": total_amount,
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                     }
+#                 )
+
+#     print(
+#         "\n================================================================================"
+#     )
+#     print(
+#         f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}"
+#     )
+#     print(
+#         "================================================================================\n"
+#     )
+
+#     return Response({"status": "success", "rule_matches": rule_matches})
 
 
 # Known noise/reference hash patterns

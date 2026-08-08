@@ -214,17 +214,58 @@ export const filterClustersByQuery = (
     .filter((c): c is ExtendedCluster => c !== null);
 };
 
+// export const extractCleanPayee = (rawNarration: string): string => {
+//   if (!rawNarration) return '';
+
+//   // Handle standard UPI format: UPI/GATEWAY/RRN/PAYEE_NAME/...
+//   const parts = rawNarration.split('/');
+//   if (parts.length >= 4 && parts[0].toUpperCase() === 'UPI') {
+//     let candidate = parts[3].trim();
+//     // Remove "NO REMARKS" or "NO REM" if attached
+//     candidate = candidate.replace(/NO REMARKS?/i, '').trim();
+//     return candidate;
+//   }
+
+//   return rawNarration;
+// };
+// 💡 Utility function to extract clean payee name from raw UPI strings
 export const extractCleanPayee = (rawNarration: string): string => {
   if (!rawNarration) return '';
 
-  // Handle standard UPI format: UPI/GATEWAY/RRN/PAYEE_NAME/...
+  // Parse standard UPI format: UPI/GATEWAY/RRN/PAYEE_NAME/...
   const parts = rawNarration.split('/');
-  if (parts.length >= 4 && parts[0].toUpperCase() === 'UPI') {
+  if (parts.length >= 4 && parts[0].trim().toUpperCase() === 'UPI') {
     let candidate = parts[3].trim();
-    // Remove "NO REMARKS" or "NO REM" if attached
+    // Strip trailing or attached "NO REMARKS" noise
     candidate = candidate.replace(/NO REMARKS?/i, '').trim();
-    return candidate;
+    if (candidate) return candidate;
   }
 
   return rawNarration;
+};
+
+export const extractUpiRemark = (rawNarration: string): string | null => {
+  if (!rawNarration) return null;
+
+  const parts = rawNarration.split('/');
+  // Standard UPI format: UPI / GATEWAY / RRN / PAYEE / REMARK / ...
+  if (parts.length >= 5 && parts[0].trim().toUpperCase() === 'UPI') {
+    const rawRemark = parts[4].trim().toUpperCase();
+
+    // Ignore system noise/empty remarks
+    const noiseWords = [
+      'NO REMARK',
+      'NO REMARKS',
+      'NA',
+      'NONE',
+      'UPI',
+      'CIG',
+      'PAYMENT',
+    ];
+    if (rawRemark && !noiseWords.includes(rawRemark) && rawRemark.length > 1) {
+      return rawRemark;
+    }
+  }
+
+  return null;
 };
