@@ -24,6 +24,7 @@ from tracker.constants import (
     KNOWN_MERCHANTS,
     RULE_SAFETY_BLACKLIST,
     ABSOLUTE_GREEDY_BLACKLIST,
+    OK_WORD_LIST,
 )
 
 GENERIC_NOISE_TOKENS = NOISE_KEYWORD_BLACKLIST
@@ -525,6 +526,10 @@ def add_or_update_classification_rule(
             return False
 
         if len(clean_pattern) < 4:
+            if clean_pattern in OK_WORD_LIST:
+                print(f"✅ Approved short whitelist pattern: '{clean_pattern}'")
+                # Pass validation - allow execution to proceed
+        else:
             print(
                 f"⚠️ Rejected short single-token pattern (<4 chars): '{clean_pattern}'"
             )

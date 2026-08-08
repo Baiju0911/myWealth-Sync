@@ -1,23 +1,12 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { ExtendedCluster, Cluster } from '../../api';
 import { updateEntryUserNote } from '../../api';
-import { inrFormatter, parseRemarks } from '../../utils/classificationHelpers';
-
-// 💡 Utility function to extract clean payee name from raw UPI strings
-const extractCleanPayee = (rawNarration: string): string => {
-  if (!rawNarration) return '';
-
-  // Parse standard UPI format: UPI/GATEWAY/RRN/PAYEE_NAME/...
-  const parts = rawNarration.split('/');
-  if (parts.length >= 4 && parts[0].trim().toUpperCase() === 'UPI') {
-    let candidate = parts[3].trim();
-    // Strip trailing or attached "NO REMARKS" noise
-    candidate = candidate.replace(/NO REMARKS?/i, '').trim();
-    if (candidate) return candidate;
-  }
-
-  return rawNarration;
-};
+import { 
+  inrFormatter, 
+  parseRemarks, 
+  extractCleanPayee, 
+  extractUpiRemark 
+} from '../../utils/classificationHelpers';
 
 // 💡 Type definition for internal vendor sub-grouping
 interface VendorGroup {
@@ -132,7 +121,7 @@ export const ClusterListPanel: React.FC<Props> = ({
     }
   };
 
-  // 💡 Sub-group raw cluster items by clean vendor name
+  // 💡 Sub-group raw cluster items by clean vendor name AND direction (IN vs OUT), sorted Max to Min Count
   const groupItemsByVendor = (items: any[] = []): VendorGroup[] => {
     const groupsMap: Record<string, VendorGroup> = {};
 
@@ -140,21 +129,44 @@ export const ClusterListPanel: React.FC<Props> = ({
       const remarksObj = parseRemarks(item.remarks);
       const name = extractCleanPayee(item.narration) || remarksObj.payee || 'Unlabeled Vendor';
 
-      if (!groupsMap[name]) {
-        groupsMap[name] = {
-          vendorName: name,
+      // Determine item direction explicitly
+      const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
+      const isOut = dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR'
+        ? true
+        : dirStr === 'INFLOW' || dirStr === 'CREDIT' || dirStr === 'CR'
+        ? false
+        : item.debit != null && Number(item.debit) > 0
+        ? true
+        : item.credit != null && Number(item.credit) > 0
+        ? false
+        : (item.narration || '').toUpperCase().startsWith('DEP TFR NEFT')
+        ? false
+        : (item.amount ?? 0) < 0;
+
+      const directionTag = isOut ? 'OUT' : 'IN';
+      const groupKey = `${name}__${directionTag}`;
+
+      if (!groupsMap[groupKey]) {
+        groupsMap[groupKey] = {
+          vendorName: `${name} (${directionTag})`,
           items: [],
           txnIds: [],
           totalAmount: 0,
         };
       }
 
-      groupsMap[name].items.push(item);
-      if (item.id) groupsMap[name].txnIds.push(item.id);
-      groupsMap[name].totalAmount += item.amount || 0;
+      groupsMap[groupKey].items.push(item);
+      if (item.id) groupsMap[groupKey].txnIds.push(item.id);
+      groupsMap[groupKey].totalAmount += item.amount || item.debit || item.credit || 0;
     });
 
-    return Object.values(groupsMap);
+    // 💡 SORTING LOGIC: Max items to Min items (Fallback to Max totalAmount if item counts tie)
+    return Object.values(groupsMap).sort((a, b) => {
+      if (b.items.length !== a.items.length) {
+        return b.items.length - a.items.length;
+      }
+      return Math.abs(b.totalAmount) - Math.abs(a.totalAmount);
+    });
   };
 
   return (
@@ -313,7 +325,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* 💡 Collapsible Vendor Sub-Clusters Layer */}
+                {/* Collapsible Vendor Sub-Clusters Layer */}
                 {expanded && (
                   <div style={{ paddingLeft: '20px', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {vendorGroups.length > 0 ? (
@@ -323,6 +335,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                         const isVendorFullySelected = vGroup.txnIds.length > 0 && selectedInVendorCount === vGroup.txnIds.length;
                         const isVendorPartiallySelected = selectedInVendorCount > 0 && !isVendorFullySelected;
                         const isVendorOpen = isVendorExpanded(vendorKey);
+                        const isGroupOutflow = vGroup.vendorName.endsWith('(OUT)');
 
                         return (
                           <div
@@ -366,11 +379,11 @@ export const ClusterListPanel: React.FC<Props> = ({
                               </div>
 
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: '10px', color: '#a1a1aa', backgroundColor: '#27272a', padding: '1px 6px', borderRadius: '4px' }}>
+                                <span style={{ fontSize: '10px', color: '#a1a1aa', backgroundColor: '#27272a', padding: '1px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
                                   {vGroup.items.length} {vGroup.items.length === 1 ? 'item' : 'items'}
                                 </span>
-                                <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#fb7185', fontFamily: 'monospace' }}>
-                                  -₹{vGroup.totalAmount.toLocaleString('en-IN')}
+                                <span style={{ fontSize: '11px', fontWeight: 'bold', color: isGroupOutflow ? '#fb7185' : '#34d399', fontFamily: 'monospace' }}>
+                                  {isGroupOutflow ? '-' : '+'}₹{Math.abs(vGroup.totalAmount).toLocaleString('en-IN')}
                                 </span>
                               </div>
                             </div>
@@ -380,10 +393,28 @@ export const ClusterListPanel: React.FC<Props> = ({
                               <div style={{ paddingLeft: '22px', paddingTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                 {vGroup.items.map((item, itemIdx) => {
                                   const isItemChecked = selectedTxnIds.includes(item.id);
-                                  const isOutflow = item.direction ? item.direction === 'OUTFLOW' : (item.debit ?? 0) > 0 || item.amount > 0;
+
+                                  // 💡 BULLETPROOF DIRECTION DETECTION
+                                  const isOutflow = (() => {
+                                    const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
+                                    if (dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR') return true;
+                                    if (dirStr === 'INFLOW' || dirStr === 'CREDIT' || dirStr === 'CR') return false;
+
+                                    if (item.debit != null && Number(item.debit) > 0) return true;
+                                    if (item.credit != null && Number(item.credit) > 0) return false;
+
+                                    const narration = (item.narration || '').toUpperCase();
+                                    if (narration.startsWith('DEP TFR NEFT') || narration.includes('CREDIT') || narration.includes('INFLOW')) {
+                                      return false;
+                                    }
+
+                                    return (item.amount ?? 0) < 0;
+                                  })();
+
                                   const flagColor = isOutflow ? '#fb7185' : '#34d399';
                                   const itemKey = item.id ? `item-${item.id}` : `item-idx-${clusterIdx}-${vIdx}-${itemIdx}`;
                                   const remarksObj = parseRemarks(item.remarks);
+                                  const userRemark = extractUpiRemark(item.narration);
 
                                   return (
                                     <div
@@ -441,7 +472,9 @@ export const ClusterListPanel: React.FC<Props> = ({
                                         </span>
 
                                         <span style={{ fontSize: '10px', fontWeight: 'bold', color: flagColor, fontFamily: 'monospace' }}>
-                                          {isOutflow ? `-₹${(item.amount || 0).toLocaleString('en-IN')}` : `+₹${(item.amount || 0).toLocaleString('en-IN')}`}
+                                          {isOutflow 
+                                            ? `-₹${Math.abs(item.amount || item.debit || 0).toLocaleString('en-IN')}` 
+                                            : `+₹${Math.abs(item.amount || item.credit || 0).toLocaleString('en-IN')}`}
                                         </span>
                                       </div>
 
@@ -450,6 +483,24 @@ export const ClusterListPanel: React.FC<Props> = ({
                                         {remarksObj.upi_ref && (
                                           <span style={{ backgroundColor: '#18181b', color: '#a1a1aa', padding: '1px 4px', borderRadius: '3px', border: '1px solid #27272a', fontFamily: 'monospace' }}>
                                             Ref: {remarksObj.upi_ref}
+                                          </span>
+                                        )}
+
+                                        {userRemark && (
+                                          <span
+                                            style={{
+                                              backgroundColor: '#064e3b',
+                                              color: '#34d399',
+                                              padding: '1px 6px',
+                                              borderRadius: '3px',
+                                              border: '1px solid #047857',
+                                              fontWeight: 'bold',
+                                              fontSize: '8px',
+                                              textTransform: 'uppercase',
+                                            }}
+                                            title={`Detected user remark: ${userRemark}`}
+                                          >
+                                            🏷️ {userRemark}
                                           </span>
                                         )}
 
