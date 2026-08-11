@@ -500,10 +500,11 @@ def add_or_update_classification_rule(
     new_pattern: str,
     entry_type: str = "Debit",
 ) -> bool:
-    """
-    Appends an explicit pattern into an existing ClassificationRule or creates a new active rule.
-    Protects multi-word phrases from token-splitting, prunes loose single sub-tokens when
-    compounds are learned, and keeps patterns sorted compound-first.
+    """Appends an explicit pattern into an existing ClassificationRule or creates a new active rule.
+
+    Protects multi-word phrases from token-splitting, prunes loose single
+    sub-tokens when compounds are learned, and keeps patterns sorted
+    compound-first.
     """
     if not new_pattern or not str(new_pattern).strip():
         return False
@@ -528,12 +529,11 @@ def add_or_update_classification_rule(
         if len(clean_pattern) < 4:
             if clean_pattern in OK_WORD_LIST:
                 print(f"✅ Approved short whitelist pattern: '{clean_pattern}'")
-                # Pass validation - allow execution to proceed
-        else:
-            print(
-                f"⚠️ Rejected short single-token pattern (<4 chars): '{clean_pattern}'"
-            )
-            return False
+            else:
+                print(
+                    f"⚠️ Rejected short single-token pattern (<4 chars): '{clean_pattern}'"
+                )
+                return False
 
     clean_entry_type = (
         "Credit" if str(entry_type).strip().lower() == "credit" else "Debit"
@@ -619,6 +619,133 @@ def add_or_update_classification_rule(
             f"✅ Created new distinct rule {rule_code} with clean pattern '{clean_pattern}'"
         )
         return True
+
+
+# def add_or_update_classification_rule(
+#     category: str,
+#     subcategory: str,
+#     new_pattern: str,
+#     entry_type: str = "Debit",
+# ) -> bool:
+#     """
+#     Appends an explicit pattern into an existing ClassificationRule or creates a new active rule.
+#     Protects multi-word phrases from token-splitting, prunes loose single sub-tokens when
+#     compounds are learned, and keeps patterns sorted compound-first.
+#     """
+#     if not new_pattern or not str(new_pattern).strip():
+#         return False
+
+#     # 1. Clean explicit user selection as an ATOMIC unit (NO word splitting)
+#     clean_pattern = sanitize_user_pattern(new_pattern)
+#     if not clean_pattern:
+#         return False
+
+#     # 2. Single token safety validation (only applies if pattern is a single word)
+#     if " " not in clean_pattern:
+#         if (
+#             clean_pattern in NOISE_KEYWORD_BLACKLIST
+#             or clean_pattern in RULE_SAFETY_BLACKLIST
+#             or is_ref_hash_or_noise(clean_pattern)
+#         ):
+#             print(
+#                 f"⚠️ Rejected unsafe single-token pattern from blacklist: '{clean_pattern}'"
+#             )
+#             return False
+
+#         if len(clean_pattern) < 4:
+#             if clean_pattern in OK_WORD_LIST:
+#                 print(f"✅ Approved short whitelist pattern: '{clean_pattern}'")
+#                 # Pass validation - allow execution to proceed
+#         else:
+#             print(
+#                 f"⚠️ Rejected short single-token pattern (<4 chars): '{clean_pattern}'"
+#             )
+#             return False
+
+#     clean_entry_type = (
+#         "Credit" if str(entry_type).strip().lower() == "credit" else "Debit"
+#     )
+
+#     taxonomy_node = TaxonomyTree.objects.filter(
+#         category__iexact=category, subcategory__iexact=subcategory
+#     ).first()
+#     resolved_taxonomy = taxonomy_node if taxonomy_node else None
+
+#     existing_rule = ClassificationRule.objects.filter(
+#         target_category=category,
+#         target_subcategory=subcategory,
+#         rule_type=clean_entry_type,
+#         is_active=True,
+#     ).first()
+
+#     if existing_rule:
+#         patterns = set(get_clean_patterns(existing_rule))
+#         updated_fields = ["patterns", "match_count", "updated_at"]
+
+#         if clean_pattern not in patterns:
+#             # 💡 FULL REVERSE PRUNING:
+#             # Gather all component words from all multi-word compounds (including clean_pattern)
+#             all_compound_words = set()
+#             for p in patterns:
+#                 if " " in p:
+#                     all_compound_words.update(p.split())
+#             if " " in clean_pattern:
+#                 all_compound_words.update(clean_pattern.split())
+
+#             # Automatically prune any single-word token that belongs to a multi-word compound
+#             pruned_tokens = {
+#                 p for p in patterns if " " not in p and p in all_compound_words
+#             }
+#             if pruned_tokens:
+#                 patterns = patterns - pruned_tokens
+#                 print(
+#                     f"🧹 Pruned loose sub-tokens {pruned_tokens} from rule {existing_rule.rule_code} in favor of compound phrases"
+#                 )
+
+#             patterns.add(clean_pattern)
+
+#             # Sort array so multi-word compound phrases ALWAYS appear first
+#             sorted_patterns = sorted(
+#                 list(patterns), key=lambda x: (-len(x.split()), -len(x))
+#             )
+
+#             existing_rule.patterns = sorted_patterns
+#             existing_rule.match_count = (existing_rule.match_count or 0) + 1
+
+#             if not existing_rule.taxonomy and resolved_taxonomy:
+#                 existing_rule.taxonomy = resolved_taxonomy
+#                 updated_fields.append("taxonomy")
+
+#             existing_rule.save(update_fields=updated_fields)
+#             print(
+#                 f"✅ Appended clean pattern '{clean_pattern}' to existing rule {existing_rule.rule_code}"
+#             )
+#             return True
+#         return False
+
+#     else:
+#         vector_prefix = "DE" if clean_entry_type == "Debit" else "CR"
+#         hash_input = f"{subcategory}_{clean_pattern}_{clean_entry_type}".upper()
+#         short_code = hashlib.md5(hash_input.encode()).hexdigest()[:6].upper()
+#         rule_code = f"CR_{vector_prefix}_{short_code}"
+
+#         ClassificationRule.objects.create(
+#             name=f"Learned ({clean_entry_type}): {subcategory} ({clean_pattern})",
+#             rule_code=rule_code,
+#             rule_type=clean_entry_type,
+#             target_category=category,
+#             target_subcategory=subcategory,
+#             patterns=[clean_pattern],
+#             priority=1,
+#             is_active=True,
+#             created_from_manual_override=True,
+#             match_count=1,
+#             taxonomy=resolved_taxonomy,
+#         )
+#         print(
+#             f"✅ Created new distinct rule {rule_code} with clean pattern '{clean_pattern}'"
+#         )
+#         return True
 
 
 def reclassify_and_learn(

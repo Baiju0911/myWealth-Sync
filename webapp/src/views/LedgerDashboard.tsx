@@ -8,7 +8,8 @@ import {
   Layers,
   ArrowUpRight,
   ArrowDownRight,
-  Zap
+  Zap,
+  Download
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -53,6 +54,31 @@ export const LedgerDashboard: React.FC = () => {
 
   // State for Smart Sweep Hub Modal
   const [isSweepHubOpen, setIsSweepHubOpen] = useState<boolean>(false);
+
+  // 🟢 CSV Export Utility
+  const exportToCSV = (exportData: any[], filenamePrefix: string) => {
+    if (!exportData || !exportData.length) return;
+
+    // Extract headers
+    const headers = Object.keys(exportData[0]).join(',');
+
+    // Format rows safely with quotes and line returns
+    const rows = exportData.map((row) =>
+      Object.values(row)
+        .map((val) => `"${String(val ?? '').replace(/"/g, '""')}"`)
+        .join(',')
+    );
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers, ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `${filenamePrefix}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // 1. Initial Accounts List Fetch
   useEffect(() => {
@@ -358,36 +384,36 @@ export const LedgerDashboard: React.FC = () => {
     <div className="p-4 w-full max-w-none space-y-4 bg-zinc-950 min-h-screen text-zinc-100 font-sans">
       
       {/* 1. Header & Context Switcher */}
-<div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full">
-  {/* Left Title Info */}
-  <div className="space-y-0.5">
-    <div className="flex items-center space-x-2">
-      <Layers className="w-4 h-4 text-cyan-400" />
-      <h1 className="text-xs font-mono uppercase tracking-wider text-zinc-100 font-bold">
-        Project Sync-Shield
-      </h1>
-    </div>
-    <p className="text-[11px] text-zinc-400 font-mono">
-      Target Ledger Node: <span className="text-cyan-400 font-semibold">{activeAccountName}</span>
-    </p>
-  </div>
+      <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full">
+        {/* Left Title Info */}
+        <div className="space-y-0.5">
+          <div className="flex items-center space-x-2">
+            <Layers className="w-4 h-4 text-cyan-400" />
+            <h1 className="text-xs font-mono uppercase tracking-wider text-zinc-100 font-bold">
+              Project Sync-Shield
+            </h1>
+          </div>
+          <p className="text-[11px] text-zinc-400 font-mono">
+            Target Ledger Node: <span className="text-cyan-400 font-semibold">{activeAccountName}</span>
+          </p>
+        </div>
 
-  {/* Select Dropdown (Shifted Left with ml-0 md:ml-6) */}
-  <div className="w-full md:w-72 font-mono text-xs ml-0 md:ml-6">
-    <select
-      value={selectedAccountId}
-      onChange={(e) => setSelectedAccountId(e.target.value)}
-      className="w-full bg-zinc-950 border border-zinc-800 p-2 rounded-lg text-zinc-100 font-bold focus:outline-none focus:border-cyan-500/50 cursor-pointer shadow-inner"
-    >
-      <option value="">-- Select Target Ledger Account --</option>
-      {accounts.map((acc) => (
-        <option key={acc.id} value={acc.id}>
-          {acc.name} ({acc.account_number ? acc.account_number.slice(-4) : acc.id})
-        </option>
-      ))}
-    </select>
-  </div>
-</div>
+        {/* Select Dropdown */}
+        <div className="w-full md:w-72 font-mono text-xs ml-0 md:ml-6">
+          <select
+            value={selectedAccountId}
+            onChange={(e) => setSelectedAccountId(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 p-2 rounded-lg text-zinc-100 font-bold focus:outline-none focus:border-cyan-500/50 cursor-pointer shadow-inner"
+          >
+            <option value="">-- Select Target Ledger Account --</option>
+            {accounts.map((acc) => (
+              <option key={acc.id} value={acc.id}>
+                {acc.name} ({acc.account_number ? acc.account_number.slice(-4) : acc.id})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {/* 2. Date Filter Control Bar */}
       {data && (
@@ -484,8 +510,18 @@ export const LedgerDashboard: React.FC = () => {
                 </p>
               </div>
 
-              {/* ⚡ SMART CLEARANCE HUB ACTION BUTTON */}
+              {/* ⚡ SMART CLEARANCE HUB & KPI CSV EXPORT */}
               <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => exportToCSV(kpiTableData, `KPI_Summary_Node_${selectedAccountId}`)}
+                  className="flex items-center gap-1.5 bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                  title="Export KPI Summary Matrix to CSV"
+                >
+                  <Download className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>Export KPIs</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setIsSweepHubOpen(true)}
@@ -654,9 +690,23 @@ export const LedgerDashboard: React.FC = () => {
                 <h2 className="text-xs font-mono uppercase tracking-wider text-zinc-100 font-bold">Taxonomy Breakdown Matrix</h2>
                 <p className="text-[11px] text-zinc-500 font-mono">Audited double-entry class breakdown across primary groups and subcategories.</p>
               </div>
-              <span className="text-xs font-mono bg-zinc-950 border border-zinc-800 px-2.5 py-0.5 rounded-lg text-zinc-400">
-                {data.category_breakdown.length} line items
-              </span>
+
+              {/* 🟢 CSV Export Button for Taxonomy Matrix */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => exportToCSV(data.category_breakdown, `Taxonomy_Breakdown_Node_${selectedAccountId}`)}
+                  className="flex items-center gap-1.5 bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-3 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                  title="Export Taxonomy Breakdown Matrix to CSV"
+                >
+                  <Download className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>Export CSV</span>
+                </button>
+
+                <span className="text-xs font-mono bg-zinc-950 border border-zinc-800 px-2.5 py-1 rounded-lg text-zinc-400">
+                  {data.category_breakdown.length} line items
+                </span>
+              </div>
             </div>
 
             <TableEngine 

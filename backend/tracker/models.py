@@ -996,6 +996,10 @@ class ClassificationStatus(models.TextChoices):
     INITIAL = "INITIAL", "Initial Auto-Classification"
     RECLASSIFIED = "RECLASSIFIED", "Manually Reclassified"
     SUSPENSE = "SUSPENSE", "Pending Suspense"
+    AUTO_SWEPT = "AUTO_SWEPT", "Auto-Swept by Rule Engine"
+    CONFIRMED = "CONFIRMED", "Audited & Confirmed"
+    SPLIT = "SPLIT", "Split Transaction"
+    SYSTEM_INTERNAL = "SYSTEM_INTERNAL", "System Contra / Inter-Account Transfer"
 
 
 # ============================================================================
