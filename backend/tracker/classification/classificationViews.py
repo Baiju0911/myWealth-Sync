@@ -13,7 +13,7 @@ from collections import Counter
 from urllib.parse import parse_qs, unquote
 from django.db.models import Q, Count, Sum
 from django.http import JsonResponse
-from tracker.models import JournalEntry, TaxonomyTree
+from tracker.models import JournalEntry, TaxonomyTree, ClassificationStatus
 from tracker.classification.engine import (
     get_suspense_clusters,
     reclassify_and_learn,
@@ -539,176 +539,6 @@ def preview_pattern_matches(request):
     )
 
 
-@api_view(["GET"])
-def sweep_preview_summary(request):
-    """
-    Lightning-Fast In-Memory Vector Sweep Engine for Node 99 Rules.
-    Fetches Node 99 entries once and performs priority-ordered,
-    compound-first pattern matching entirely in Python memory.
-    """
-    print(
-        "\n================================================================================"
-    )
-    print("⚡ [SWEEP PREVIEW ENGINE] STARTING LIGHTNING NODE 99 SCAN")
-    print(
-        "================================================================================"
-    )
-
-    base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-    # 1. Fetch unclassified entries in a SINGLE database hit
-    # Pulling only required fields speeds up query execution significantly
-    unclassified_entries = list(
-        base_qs.values(
-            "id",
-            "debit",
-            "credit",
-            "remarks__payee",
-            "remarks__narration",
-            "remarks__display_text",
-            "evaluation_matrix_snapshot__resolved_subcategory",
-        )
-    )
-
-    total_unclassified = len(unclassified_entries)
-
-    suspense_count = sum(
-        1
-        for e in unclassified_entries
-        if e.get("evaluation_matrix_snapshot__resolved_subcategory")
-        == "Suspense Account"
-    )
-
-    print(
-        f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
-        f"(Pending Suspense: {suspense_count})"
-    )
-
-    if total_unclassified == 0:
-        print("ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99. Exiting.")
-        return Response({"status": "success", "rule_matches": []})
-
-    # 2. Pre-process search targets for fast case-insensitive matching
-    # Concatenating target string fields once per row avoids repeated JSON string lookups
-    processed_pool = []
-    for entry in unclassified_entries:
-        debit_val = float(entry["debit"] or 0.0)
-        credit_val = float(entry["credit"] or 0.0)
-
-        payee = (entry.get("remarks__payee") or "").upper()
-        narration = (entry.get("remarks__narration") or "").upper()
-        display_text = (entry.get("remarks__display_text") or "").upper()
-
-        # Combine vector text target once
-        search_haystack = f"{payee} {narration} {display_text}"
-
-        processed_pool.append(
-            {
-                "id": entry["id"],
-                "debit": debit_val,
-                "credit": credit_val,
-                "total_amount": debit_val + credit_val,
-                "haystack": search_haystack,
-            }
-        )
-
-    # 3. Fetch active rules ordered by priority
-    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-        "-priority"
-    )
-    print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
-
-    rule_matches = []
-    seen_patterns = set()
-    claimed_entry_ids = set()
-
-    # 4. In-Memory Vector Sweep Loop
-    for rule in active_rules:
-        raw_patterns = (
-            rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
-        )
-
-        if not raw_patterns:
-            continue
-
-        # Compound-first pattern sorting
-        patterns_list = sorted(
-            list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
-        )
-
-        rule_type = (
-            rule.rule_type.lower()
-            if hasattr(rule, "rule_type") and rule.rule_type
-            else None
-        )
-
-        for pattern_str in patterns_list:
-            if not pattern_str or pattern_str in seen_patterns:
-                if pattern_str in seen_patterns:
-                    print(f"    ⏭️ Skipping '{pattern_str}': Already processed.")
-                continue
-
-            clean_search_str = pattern_str.lstrip("#").strip().upper()
-
-            if len(clean_search_str) < 2:
-                print(f"    ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
-                continue
-
-            matched_count = 0
-            matched_amount = 0.0
-            new_claimed_ids = []
-
-            # Instant in-memory pattern evaluation across candidates
-            for row in processed_pool:
-                if row["id"] in claimed_entry_ids:
-                    continue
-
-                # Direction check (Debit vs Credit)
-                if rule_type == "debit" and row["debit"] <= 0:
-                    continue
-                if rule_type == "credit" and row["credit"] <= 0:
-                    continue
-
-                # Fast string lookup
-                if clean_search_str in row["haystack"]:
-                    matched_count += 1
-                    matched_amount += row["total_amount"]
-                    new_claimed_ids.append(row["id"])
-
-            if matched_count > 0:
-                claimed_entry_ids.update(new_claimed_ids)
-                seen_patterns.add(pattern_str)
-
-                print(
-                    f"    ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {matched_count} rows | Total: ₹{matched_amount:,.2f}"
-                )
-
-                rule_matches.append(
-                    {
-                        "pattern": pattern_str,
-                        "display_tag": f"#{pattern_str}",
-                        "token_breakdown": [clean_search_str],
-                        "matched_rows": matched_count,
-                        "total_amount": round(matched_amount, 2),
-                        "suggested_category": rule.target_category,
-                        "suggested_subcategory": rule.target_subcategory,
-                        "rule_code": rule.rule_code,
-                    }
-                )
-
-    print(
-        "\n================================================================================"
-    )
-    print(
-        f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}"
-    )
-    print(
-        "================================================================================\n"
-    )
-
-    return Response({"status": "success", "rule_matches": rule_matches})
-
-
 # @api_view(["GET"])
 # def sweep_preview_summary(request):
 #     """
@@ -1079,199 +909,736 @@ def validate_pattern_anchor(request):
 #     return Response({"status": "success", "rule_matches": rule_matches})
 
 
-@api_view(["POST"])
-def execute_bulk_sweep(request):
-    """
-    Executes bulk reclassification matching Node 99 active rules.
-    Updates evaluation_matrix_snapshot and classification_status cleanly.
-    """
-    selected_patterns = request.data.get("patterns", [])
-    account_id = request.data.get("account_id", 99)
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """
+#     Lightning-Fast In-Memory Vector Sweep Engine for Node 99 Rules.
+#     Fetches Node 99 entries once and performs priority-ordered,
+#     compound-first pattern matching entirely in Python memory.
+#     """
+#     print(
+#         "\n================================================================================"
+#     )
+#     print("⚡ [SWEEP PREVIEW ENGINE] STARTING LIGHTNING NODE 99 SCAN")
+#     print(
+#         "================================================================================"
+#     )
 
-    base_qs = JournalEntry.objects.filter(account_id=account_id, is_reclassified=False)
+#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+#     # base_qs = JournalEntry.objects.filter(classification_status="PENDING")
 
-    if not base_qs.exists():
-        return Response({"status": "success", "total_reclassified": 0})
+#     # 1. Fetch unclassified entries in a SINGLE database hit
+#     # Pulling only required fields speeds up query execution significantly
+#     unclassified_entries = list(
+#         base_qs.values(
+#             "id",
+#             "debit",
+#             "credit",
+#             "remarks__payee",
+#             "remarks__narration",
+#             "remarks__display_text",
+#             "evaluation_matrix_snapshot__resolved_subcategory",
+#         )
+#     )
 
-    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-        "-priority"
-    )
+#     total_unclassified = len(unclassified_entries)
 
-    total_updated = 0
-    claimed_entry_ids = set()
+#     suspense_count = sum(
+#         1
+#         for e in unclassified_entries
+#         if e.get("evaluation_matrix_snapshot__resolved_subcategory")
+#         == "Suspense Account"
+#     )
 
-    for rule in active_rules:
-        patterns_list = (
-            rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
-        )
+#     print(
+#         f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
+#         f"(Pending Suspense: {suspense_count})"
+#     )
 
-        for pattern_str in patterns_list:
-            if not pattern_str:
-                continue
+#     if total_unclassified == 0:
+#         print("ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99. Exiting.")
+#         return Response({"status": "success", "rule_matches": []})
 
-            clean_search_str = pattern_str.lstrip("#").strip()
-            if len(clean_search_str) < 2:
-                continue
+#     # 2. Pre-process search targets for fast case-insensitive matching
+#     # Concatenating target string fields once per row avoids repeated JSON string lookups
+#     processed_pool = []
+#     for entry in unclassified_entries:
+#         debit_val = float(entry["debit"] or 0.0)
+#         credit_val = float(entry["credit"] or 0.0)
 
-            # If user sent specific patterns in request payload, respect the filter
-            if (
-                selected_patterns
-                and pattern_str not in selected_patterns
-                and clean_search_str not in selected_patterns
-            ):
-                continue
+#         payee = (entry.get("remarks__payee") or "").upper()
+#         narration = (entry.get("remarks__narration") or "").upper()
+#         display_text = (entry.get("remarks__display_text") or "").upper()
 
-            candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+#         # Combine vector text target once
+#         search_haystack = f"{payee} {narration} {display_text}"
 
-            # Direct SQL query matching preview engine
-            matched_qs = candidate_qs.filter(
-                Q(remarks__icontains=clean_search_str)
-                | Q(remarks__payee__icontains=clean_search_str)
-                | Q(remarks__narration__icontains=clean_search_str)
-            )
+#         processed_pool.append(
+#             {
+#                 "id": entry["id"],
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "total_amount": debit_val + credit_val,
+#                 "haystack": search_haystack,
+#             }
+#         )
 
-            entries_to_update = list(matched_qs)
+#     # 3. Fetch active rules ordered by priority
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+#     print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
 
-            if entries_to_update:
-                for entry in entries_to_update:
-                    # Maintain evaluation matrix snapshot structure
-                    snapshot = entry.evaluation_matrix_snapshot or {}
-                    if isinstance(snapshot, str):
-                        try:
-                            snapshot = json.loads(snapshot)
-                        except json.JSONDecodeError:
-                            snapshot = {}
+#     rule_matches = []
+#     seen_patterns = set()
+#     claimed_entry_ids = set()
 
-                    snapshot["resolved_category"] = rule.target_category
-                    snapshot["resolved_subcategory"] = rule.target_subcategory
-                    snapshot["applied_rule_code"] = rule.rule_code
+#     # 4. In-Memory Vector Sweep Loop
+#     for rule in active_rules:
+#         raw_patterns = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
 
-                    entry.evaluation_matrix_snapshot = snapshot
-                    entry.is_reclassified = True
-                    entry.classification_status = "SWEEP_CLEARED"
+#         if not raw_patterns:
+#             continue
 
-                # Bulk update in Python/DB memory
-                JournalEntry.objects.bulk_update(
-                    entries_to_update,
-                    [
-                        "evaluation_matrix_snapshot",
-                        "is_reclassified",
-                        "classification_status",
-                    ],
-                    batch_size=500,
-                )
+#         # Compound-first pattern sorting
+#         patterns_list = sorted(
+#             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+#         )
 
-                matched_ids = [e.id for e in entries_to_update]
-                claimed_entry_ids.update(matched_ids)
-                total_updated += len(entries_to_update)
+#         rule_type = (
+#             rule.rule_type.lower()
+#             if hasattr(rule, "rule_type") and rule.rule_type
+#             else None
+#         )
 
-    return Response({"status": "success", "total_reclassified": total_updated})
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 if pattern_str in seen_patterns:
+#                     print(f"    ⏭️ Skipping '{pattern_str}': Already processed.")
+#                 continue
+
+#             clean_search_str = pattern_str.lstrip("#").strip().upper()
+
+#             if len(clean_search_str) < 2:
+#                 print(f"    ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
+#                 continue
+
+#             matched_count = 0
+#             matched_amount = 0.0
+#             new_claimed_ids = []
+
+#             # Instant in-memory pattern evaluation across candidates
+#             for row in processed_pool:
+#                 if row["id"] in claimed_entry_ids:
+#                     continue
+
+#                 # Direction check (Debit vs Credit)
+#                 if rule_type == "debit" and row["debit"] <= 0:
+#                     continue
+#                 if rule_type == "credit" and row["credit"] <= 0:
+#                     continue
+
+#                 # Fast string lookup
+#                 if clean_search_str in row["haystack"]:
+#                     matched_count += 1
+#                     matched_amount += row["total_amount"]
+#                     new_claimed_ids.append(row["id"])
+
+#             if matched_count > 0:
+#                 claimed_entry_ids.update(new_claimed_ids)
+#                 seen_patterns.add(pattern_str)
+
+#                 print(
+#                     f"    ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {matched_count} rows | Total: ₹{matched_amount:,.2f}"
+#                 )
+
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "display_tag": f"#{pattern_str}",
+#                         "token_breakdown": [clean_search_str],
+#                         "matched_rows": matched_count,
+#                         "total_amount": round(matched_amount, 2),
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                     }
+#                 )
+
+#     print(
+#         "\n================================================================================"
+#     )
+#     print(
+#         f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}"
+#     )
+#     print(
+#         "================================================================================\n"
+#     )
+
+#     return Response({"status": "success", "rule_matches": rule_matches})
 
 
-@api_view(["POST"])
-def remove_pattern_from_rule(request):
-    """
-    Deletes a specific token/pattern from a Classification Rule directly
-    from the Node 99 Clearance Hub modal.
-    """
-    rule_code = request.data.get("rule_code")
-    pattern_to_remove = request.data.get("pattern")
+# @api_view(["POST"])
+# def execute_bulk_sweep(request):
+#     """
+#     Executes bulk reclassification matching Node 99 active rules.
+#     Updates evaluation_matrix_snapshot and classification_status cleanly.
+#     """
+#     selected_patterns = request.data.get("patterns", [])
+#     account_id = request.data.get("account_id", 99)
 
-    if not rule_code or not pattern_to_remove:
-        return Response(
-            {"error": "Missing rule_code or pattern"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+#     base_qs = JournalEntry.objects.filter(account_id=account_id, is_reclassified=False)
 
-    clean_token = str(pattern_to_remove).strip().lstrip("#").upper()
+#     if not base_qs.exists():
+#         return Response({"status": "success", "total_reclassified": 0})
 
-    try:
-        rule = ClassificationRule.objects.get(rule_code=rule_code)
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
 
-        # Call model method (handles both exact string matches AND sub-token stripping)
-        removed = rule.remove_pattern(clean_token)
+#     total_updated = 0
+#     claimed_entry_ids = set()
 
-        if removed:
-            return Response(
-                {
-                    "status": "success",
-                    "message": f"Pattern '{clean_token}' purged from {rule_code}",
-                    "remaining_patterns": rule.get_patterns(),
-                },
-                status=status.HTTP_200_OK,
-            )
+#     # Pre-clean selected patterns if passed
+#     clean_selected = (
+#         [p.lstrip("#").strip().upper() for p in selected_patterns]
+#         if selected_patterns
+#         else []
+#     )
 
-        return Response(
-            {
-                "status": "info",
-                "message": f"Pattern '{clean_token}' not found in {rule_code}",
-            },
-            status=status.HTTP_200_OK,
-        )
+#     for rule in active_rules:
+#         patterns_list = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
 
-    except ClassificationRule.DoesNotExist:
-        return Response(
-            {"error": f"Rule {rule_code} not found"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+#         if not patterns_list:
+#             continue
+
+#         rule_type = (
+#             rule.rule_type.lower()
+#             if hasattr(rule, "rule_type") and rule.rule_type
+#             else None
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str:
+#                 continue
+
+#             clean_search_str = pattern_str.lstrip("#").strip()
+#             if len(clean_search_str) < 2:
+#                 continue
+
+#             # Respect payload filter if user passed specific patterns
+#             if clean_selected and clean_search_str.upper() not in clean_selected:
+#                 continue
+
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             # Apply direction filter matching the preview engine
+#             if rule_type == "debit":
+#                 candidate_qs = candidate_qs.filter(debit__gt=0)
+#             elif rule_type == "credit":
+#                 candidate_qs = candidate_qs.filter(credit__gt=0)
+
+#             # SQL Match across remarks JSON keys
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#                 | Q(remarks__display_text__icontains=clean_search_str)
+#             )
+
+#             entries_to_update = list(matched_qs)
+
+#             if entries_to_update:
+#                 for entry in entries_to_update:
+#                     snapshot = entry.evaluation_matrix_snapshot or {}
+#                     if isinstance(snapshot, str):
+#                         try:
+#                             snapshot = json.loads(snapshot)
+#                         except json.JSONDecodeError:
+#                             snapshot = {}
+
+#                     snapshot["resolved_category"] = rule.target_category
+#                     snapshot["resolved_subcategory"] = rule.target_subcategory
+#                     snapshot["applied_rule_code"] = rule.rule_code
+
+#                     entry.evaluation_matrix_snapshot = snapshot
+#                     entry.is_reclassified = True
+#                     entry.classification_status = ClassificationStatus.AUTO_SWEPT
+
+#                 # Bulk update database records
+#                 JournalEntry.objects.bulk_update(
+#                     entries_to_update,
+#                     [
+#                         "evaluation_matrix_snapshot",
+#                         "is_reclassified",
+#                         "classification_status",
+#                     ],
+#                     batch_size=500,
+#                 )
+
+#                 matched_ids = [e.id for e in entries_to_update]
+#                 claimed_entry_ids.update(matched_ids)
+#                 total_updated += len(entries_to_update)
+
+#     return Response({"status": "success", "total_reclassified": total_updated})
 
 
-@api_view(["POST"])
-def bulk_remove_patterns_from_rules(request):
-    items = request.data.get("items", [])
-    if not items or not isinstance(items, list):
-        return Response(
-            {"status": "error", "message": "No items provided."}, status=400
-        )
+# @api_view(["POST"])
+# def execute_bulk_sweep(request):
+#     """
+#     Executes bulk reclassification matching Node 99 active rules.
+#     Updates evaluation_matrix_snapshot and classification_status cleanly.
+#     """
+#     selected_patterns = request.data.get("patterns", [])
+#     account_id = request.data.get("account_id", 99)
 
-    try:
-        with transaction.atomic():
-            rule_map = {}
-            for item in items:
-                rule_code = item.get("rule_code")
-                pattern = str(item.get("pattern", "")).replace("#", "").strip().upper()
-                if rule_code and pattern:
-                    rule_map.setdefault(rule_code, set()).add(pattern)
+#     base_qs = JournalEntry.objects.filter(account_id=account_id, is_reclassified=False)
 
-            updated_rules = 0
-            for rule_code, purge_tokens in rule_map.items():
-                rule = ClassificationRule.objects.filter(rule_code=rule_code).first()
-                if rule:
-                    existing = rule.get_patterns()
-                    new_patterns = []
+#     if not base_qs.exists():
+#         return Response({"status": "success", "total_reclassified": 0})
 
-                    for pat in existing:
-                        pat_str = pat.strip().upper()
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
 
-                        # 1. Skip if exact match to a purge token
-                        if pat_str in purge_tokens:
-                            continue
+#     total_updated = 0
+#     claimed_entry_ids = set()
 
-                        # 2. Check if pat contains any of the purge tokens as a sub-word
-                        words = pat_str.split()
-                        filtered_words = [w for w in words if w not in purge_tokens]
+#     for rule in active_rules:
+#         patterns_list = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
 
-                        # Only keep if meaningful non-purged tokens remain
-                        if filtered_words:
-                            cleaned_phrase = " ".join(filtered_words)
-                            if len(cleaned_phrase) >= 3:
-                                new_patterns.append(cleaned_phrase)
+#         for pattern_str in patterns_list:
+#             if not pattern_str:
+#                 continue
 
-                    if len(new_patterns) != len(existing):
-                        rule.patterns = new_patterns
-                        rule.save()
-                        updated_rules += 1
+#             clean_search_str = pattern_str.lstrip("#").strip()
+#             if len(clean_search_str) < 2:
+#                 continue
 
-        return Response(
-            {
-                "status": "success",
-                "message": f"Purged patterns across {updated_rules} rules.",
-                "updated_rules_count": updated_rules,
-            }
-        )
+#             # If user sent specific patterns in request payload, respect the filter
+#             if (
+#                 selected_patterns
+#                 and pattern_str not in selected_patterns
+#                 and clean_search_str not in selected_patterns
+#             ):
+#                 continue
 
-    except Exception as e:
-        return Response({"status": "error", "message": str(e)}, status=500)
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             # Direct SQL query matching preview engine
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__icontains=clean_search_str)
+#                 | Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#             )
+
+#             entries_to_update = list(matched_qs)
+
+#             if entries_to_update:
+#                 for entry in entries_to_update:
+#                     # Maintain evaluation matrix snapshot structure
+#                     snapshot = entry.evaluation_matrix_snapshot or {}
+#                     if isinstance(snapshot, str):
+#                         try:
+#                             snapshot = json.loads(snapshot)
+#                         except json.JSONDecodeError:
+#                             snapshot = {}
+
+#                     snapshot["resolved_category"] = rule.target_category
+#                     snapshot["resolved_subcategory"] = rule.target_subcategory
+#                     snapshot["applied_rule_code"] = rule.rule_code
+
+#                     entry.evaluation_matrix_snapshot = snapshot
+#                     entry.is_reclassified = True
+#                     entry.classification_status = "SWEEP_CLEARED"
+
+#                 # Bulk update in Python/DB memory
+#                 JournalEntry.objects.bulk_update(
+#                     entries_to_update,
+#                     [
+#                         "evaluation_matrix_snapshot",
+#                         "is_reclassified",
+#                         "classification_status",
+#                     ],
+#                     batch_size=500,
+#                 )
+
+#                 matched_ids = [e.id for e in entries_to_update]
+#                 claimed_entry_ids.update(matched_ids)
+#                 total_updated += len(entries_to_update)
+
+#     return Response({"status": "success", "total_reclassified": total_updated})
+
+
+# @api_view(["GET"])
+# def sweep_preview_summary(request):
+#     """Lightning-Fast In-Memory Vector Sweep Engine for Node 99 Rules."""
+#     print(
+#         "\n================================================================================"
+#     )
+#     print("⚡ [SWEEP PREVIEW ENGINE] STARTING LIGHTNING NODE 99 SCAN")
+#     print(
+#         "================================================================================"
+#     )
+
+#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+
+#     unclassified_entries = list(
+#         base_qs.values(
+#             "id",
+#             "debit",
+#             "credit",
+#             "remarks__payee",
+#             "remarks__narration",
+#             "remarks__display_text",
+#             "evaluation_matrix_snapshot__resolved_subcategory",
+#         )
+#     )
+
+#     total_unclassified = len(unclassified_entries)
+#     suspense_count = sum(
+#         1
+#         for e in unclassified_entries
+#         if e.get("evaluation_matrix_snapshot__resolved_subcategory")
+#         == "Suspense Account"
+#     )
+
+#     print(
+#         f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
+#         f"(Pending Suspense: {suspense_count})"
+#     )
+
+#     if total_unclassified == 0:
+#         print(
+#             "ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99." " Exiting."
+#         )
+#         return Response({"status": "success", "rule_matches": []})
+
+#     processed_pool = []
+#     for entry in unclassified_entries:
+#         debit_val = float(entry["debit"] or 0.0)
+#         credit_val = float(entry["credit"] or 0.0)
+
+#         payee = (entry.get("remarks__payee") or "").upper()
+#         narration = (entry.get("remarks__narration") or "").upper()
+#         display_text = (entry.get("remarks__display_text") or "").upper()
+
+#         search_haystack = f"{payee} {narration} {display_text}"
+
+#         processed_pool.append(
+#             {
+#                 "id": entry["id"],
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "total_amount": debit_val + credit_val,
+#                 "haystack": search_haystack,
+#             }
+#         )
+
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+#     print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
+
+#     rule_matches = []
+#     seen_patterns = set()
+#     claimed_entry_ids = set()
+
+#     for rule in active_rules:
+#         raw_patterns = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
+
+#         if not raw_patterns:
+#             continue
+
+#         patterns_list = sorted(
+#             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+#         )
+#         rule_type = (
+#             rule.rule_type.lower()
+#             if hasattr(rule, "rule_type") and rule.rule_type
+#             else None
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 continue
+
+#             clean_search_str = pattern_str.lstrip("#").strip().upper()
+#             if len(clean_search_str) < 2:
+#                 continue
+
+#             matched_count = 0
+#             matched_amount = 0.0
+#             new_claimed_ids = []
+
+#             for row in processed_pool:
+#                 if row["id"] in claimed_entry_ids:
+#                     continue
+
+#                 if rule_type == "debit" and row["debit"] <= 0:
+#                     continue
+#                 if rule_type == "credit" and row["credit"] <= 0:
+#                     continue
+
+#                 if clean_search_str in row["haystack"]:
+#                     matched_count += 1
+#                     matched_amount += row["total_amount"]
+#                     new_claimed_ids.append(row["id"])
+
+#             if matched_count > 0:
+#                 claimed_entry_ids.update(new_claimed_ids)
+#                 seen_patterns.add(pattern_str)
+
+#                 rule_matches.append(
+#                     {
+#                         "pattern": pattern_str,
+#                         "display_tag": f"#{pattern_str}",
+#                         "token_breakdown": [clean_search_str],
+#                         "matched_rows": matched_count,
+#                         "total_amount": round(matched_amount, 2),
+#                         "suggested_category": rule.target_category,
+#                         "suggested_subcategory": rule.target_subcategory,
+#                         "rule_code": rule.rule_code,
+#                         "matched_entry_ids": new_claimed_ids,
+#                     }
+#                 )
+
+#     print(
+#         f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}\n"
+#     )
+#     return Response({"status": "success", "rule_matches": rule_matches})
+
+
+# @api_view(["POST"])
+# @transaction.atomic
+# def execute_bulk_sweep(request):
+#     """Executes bulk reclassification matching Node 99 active rules cleanly."""
+#     selected_patterns = request.data.get("patterns", [])
+#     account_id = request.data.get("account_id", 99)
+
+#     base_qs = JournalEntry.objects.filter(account_id=account_id, is_reclassified=False)
+
+#     if not base_qs.exists():
+#         return Response({"status": "success", "total_reclassified": 0})
+
+#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+#         "-priority"
+#     )
+
+#     total_updated = 0
+#     claimed_entry_ids = set()
+#     seen_patterns = set()
+
+#     clean_selected = (
+#         [p.lstrip("#").strip().upper() for p in selected_patterns]
+#         if selected_patterns
+#         else []
+#     )
+
+#     for rule in active_rules:
+#         raw_patterns = (
+#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+#         )
+
+#         if not raw_patterns:
+#             continue
+
+#         patterns_list = sorted(
+#             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+#         )
+#         rule_type = (
+#             rule.rule_type.lower()
+#             if hasattr(rule, "rule_type") and rule.rule_type
+#             else None
+#         )
+
+#         for pattern_str in patterns_list:
+#             if not pattern_str or pattern_str in seen_patterns:
+#                 continue
+
+#             clean_search_str = pattern_str.lstrip("#").strip()
+#             if len(clean_search_str) < 2:
+#                 continue
+
+#             if clean_selected and clean_search_str.upper() not in clean_selected:
+#                 continue
+
+#             candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+#             if rule_type == "debit":
+#                 candidate_qs = candidate_qs.filter(debit__gt=0)
+#             elif rule_type == "credit":
+#                 candidate_qs = candidate_qs.filter(credit__gt=0)
+
+#             matched_qs = candidate_qs.filter(
+#                 Q(remarks__payee__icontains=clean_search_str)
+#                 | Q(remarks__narration__icontains=clean_search_str)
+#                 | Q(remarks__display_text__icontains=clean_search_str)
+#             )
+
+#             entries_to_update = list(matched_qs)
+
+#             if entries_to_update:
+#                 seen_patterns.add(pattern_str)
+#                 row_identifiers_to_sync = []
+
+#                 for entry in entries_to_update:
+#                     snapshot = entry.evaluation_matrix_snapshot or {}
+#                     if isinstance(snapshot, str):
+#                         try:
+#                             snapshot = json.loads(snapshot)
+#                         except json.JSONDecodeError:
+#                             snapshot = {}
+
+#                     snapshot["resolved_category"] = rule.target_category
+#                     snapshot["resolved_subcategory"] = rule.target_subcategory
+#                     snapshot["applied_rule_code"] = rule.rule_code
+
+#                     entry.evaluation_matrix_snapshot = snapshot
+#                     entry.is_reclassified = True
+#                     entry.classification_status = ClassificationStatus.AUTO_SWEPT
+
+#                     if entry.row_identifier:
+#                         row_identifiers_to_sync.append(entry.row_identifier)
+
+#                 # 1. Update Node 99 legs
+#                 JournalEntry.objects.bulk_update(
+#                     entries_to_update,
+#                     [
+#                         "evaluation_matrix_snapshot",
+#                         "is_reclassified",
+#                         "classification_status",
+#                     ],
+#                     batch_size=500,
+#                 )
+
+#                 # 2. Sync corresponding Bank Legs across row_identifiers
+#                 if row_identifiers_to_sync:
+#                     JournalEntry.objects.filter(
+#                         row_identifier__in=row_identifiers_to_sync
+#                     ).exclude(account_id=account_id).update(
+#                         is_reclassified=True,
+#                         classification_status=ClassificationStatus.AUTO_SWEPT,
+#                     )
+
+#                 matched_ids = [e.id for e in entries_to_update]
+#                 claimed_entry_ids.update(matched_ids)
+#                 total_updated += len(entries_to_update)
+
+#     return Response({"status": "success", "total_reclassified": total_updated})
+
+
+# @api_view(["POST"])
+# def remove_pattern_from_rule(request):
+#     """
+#     Deletes a specific token/pattern from a Classification Rule directly
+#     from the Node 99 Clearance Hub modal.
+#     """
+#     rule_code = request.data.get("rule_code")
+#     pattern_to_remove = request.data.get("pattern")
+
+#     if not rule_code or not pattern_to_remove:
+#         return Response(
+#             {"error": "Missing rule_code or pattern"},
+#             status=status.HTTP_400_BAD_REQUEST,
+#         )
+
+#     clean_token = str(pattern_to_remove).strip().lstrip("#").upper()
+
+#     try:
+#         rule = ClassificationRule.objects.get(rule_code=rule_code)
+
+#         # Call model method (handles both exact string matches AND sub-token stripping)
+#         removed = rule.remove_pattern(clean_token)
+
+#         if removed:
+#             return Response(
+#                 {
+#                     "status": "success",
+#                     "message": f"Pattern '{clean_token}' purged from {rule_code}",
+#                     "remaining_patterns": rule.get_patterns(),
+#                 },
+#                 status=status.HTTP_200_OK,
+#             )
+
+#         return Response(
+#             {
+#                 "status": "info",
+#                 "message": f"Pattern '{clean_token}' not found in {rule_code}",
+#             },
+#             status=status.HTTP_200_OK,
+#         )
+
+#     except ClassificationRule.DoesNotExist:
+#         return Response(
+#             {"error": f"Rule {rule_code} not found"},
+#             status=status.HTTP_404_NOT_FOUND,
+#         )
+
+
+# @api_view(["POST"])
+# def bulk_remove_patterns_from_rules(request):
+#     items = request.data.get("items", [])
+#     if not items or not isinstance(items, list):
+#         return Response(
+#             {"status": "error", "message": "No items provided."}, status=400
+#         )
+
+#     try:
+#         with transaction.atomic():
+#             rule_map = {}
+#             for item in items:
+#                 rule_code = item.get("rule_code")
+#                 pattern = str(item.get("pattern", "")).replace("#", "").strip().upper()
+#                 if rule_code and pattern:
+#                     rule_map.setdefault(rule_code, set()).add(pattern)
+
+#             updated_rules = 0
+#             for rule_code, purge_tokens in rule_map.items():
+#                 rule = ClassificationRule.objects.filter(rule_code=rule_code).first()
+#                 if rule:
+#                     existing = rule.get_patterns()
+#                     new_patterns = []
+
+#                     for pat in existing:
+#                         pat_str = pat.strip().upper()
+
+#                         # 1. Skip if exact match to a purge token
+#                         if pat_str in purge_tokens:
+#                             continue
+
+#                         # 2. Check if pat contains any of the purge tokens as a sub-word
+#                         words = pat_str.split()
+#                         filtered_words = [w for w in words if w not in purge_tokens]
+
+#                         # Only keep if meaningful non-purged tokens remain
+#                         if filtered_words:
+#                             cleaned_phrase = " ".join(filtered_words)
+#                             if len(cleaned_phrase) >= 3:
+#                                 new_patterns.append(cleaned_phrase)
+
+#                     if len(new_patterns) != len(existing):
+#                         rule.patterns = new_patterns
+#                         rule.save()
+#                         updated_rules += 1
+
+#         return Response(
+#             {
+#                 "status": "success",
+#                 "message": f"Purged patterns across {updated_rules} rules.",
+#                 "updated_rules_count": updated_rules,
+#             }
+#         )
+
+#     except Exception as e:
+#         return Response({"status": "error", "message": str(e)}, status=500)
 
 
 # def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[str, Any]:
@@ -1316,6 +1683,523 @@ def bulk_remove_patterns_from_rules(request):
 #             :6
 #         ],  # Noise tokens shown as disabled
 #     }
+
+
+@api_view(["POST"])
+def remove_pattern_from_rule(request):
+    """Deletes a specific token/pattern from a Classification Rule directly from the Node 99 Clearance Hub modal."""
+    rule_code = request.data.get("rule_code")
+    pattern_to_remove = request.data.get("pattern")
+
+    print(
+        "\n================================================================================"
+    )
+    print("🧹 [RULE PATTERN PURGE] SINGLE PATTERN REMOVAL REQUESTED")
+    print(
+        "================================================================================"
+    )
+    print(f"🎯 [TARGET] Rule Code: '{rule_code}' | Raw Pattern: '{pattern_to_remove}'")
+
+    if not rule_code or not pattern_to_remove:
+        print("❌ [REJECTED] Missing rule_code or pattern in payload.")
+        print(
+            "================================================================================\n"
+        )
+        return Response(
+            {"error": "Missing rule_code or pattern"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    clean_token = str(pattern_to_remove).strip().lstrip("#").upper()
+    print(f"⚙️ [CLEAN TOKEN] Prepared token for purge: '{clean_token}'")
+
+    try:
+        rule = ClassificationRule.objects.get(rule_code=rule_code)
+        before_patterns = rule.get_patterns()
+
+        # Call model method (handles both exact string matches AND sub-token stripping)
+        removed = rule.remove_pattern(clean_token)
+
+        if removed:
+            after_patterns = rule.get_patterns()
+            print(
+                f"✅ [PURGED] Successfully stripped '{clean_token}' from rule {rule_code}"
+            )
+            print(f"📊 [BEFORE] Patterns: {before_patterns}")
+            print(f"📊 [AFTER]  Patterns: {after_patterns}")
+            print(
+                "================================================================================\n"
+            )
+
+            return Response(
+                {
+                    "status": "success",
+                    "message": f"Pattern '{clean_token}' purged from {rule_code}",
+                    "remaining_patterns": after_patterns,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        print(
+            f"ℹ️ [NOT FOUND] Pattern '{clean_token}' was not present in rule {rule_code}"
+        )
+        print(f"📊 [CURRENT PATTERNS] {before_patterns}")
+        print(
+            "================================================================================\n"
+        )
+
+        return Response(
+            {
+                "status": "info",
+                "message": f"Pattern '{clean_token}' not found in {rule_code}",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except ClassificationRule.DoesNotExist:
+        print(f"❌ [NOT FOUND] ClassificationRule {rule_code} does not exist!")
+        print(
+            "================================================================================\n"
+        )
+        return Response(
+            {"error": f"Rule {rule_code} not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+@api_view(["POST"])
+def bulk_remove_patterns_from_rules(request):
+    """Bulk purges patterns or sub-tokens across multiple rules in a single transaction."""
+    items = request.data.get("items", [])
+
+    print(
+        "\n================================================================================"
+    )
+    print("🧹 [BULK PATTERN PURGE] BULK PATTERN REMOVAL ENGINE STARTED")
+    print(
+        "================================================================================"
+    )
+    print(f"📦 [PAYLOAD] Total incoming items to evaluate: {len(items)}")
+
+    if not items or not isinstance(items, list):
+        print("❌ [REJECTED] Payload empty or not a valid list.")
+        print(
+            "================================================================================\n"
+        )
+        return Response(
+            {"status": "error", "message": "No items provided."}, status=400
+        )
+
+    try:
+        with transaction.atomic():
+            rule_map = {}
+            for item in items:
+                rule_code = item.get("rule_code")
+                pattern = str(item.get("pattern", "")).replace("#", "").strip().upper()
+                if rule_code and pattern:
+                    rule_map.setdefault(rule_code, set()).add(pattern)
+
+            print(
+                f"⚙️ [ENGINE MAPPED] Distinct target rules to update: {len(rule_map)}"
+            )
+
+            updated_rules = 0
+            for rule_code, purge_tokens in rule_map.items():
+                print(
+                    f"\n🔍 [PROCESSING RULE] Code: {rule_code} | Purge Set: {purge_tokens}"
+                )
+                rule = ClassificationRule.objects.filter(rule_code=rule_code).first()
+
+                if rule:
+                    existing = rule.get_patterns()
+                    new_patterns = []
+
+                    print(f"   ├─ Existing Patterns: {existing}")
+
+                    for pat in existing:
+                        pat_str = pat.strip().upper()
+
+                        # 1. Skip if exact match to a purge token
+                        if pat_str in purge_tokens:
+                            print(f"   ├─ 🗑️ Purging exact match pattern: '{pat_str}'")
+                            continue
+
+                        # 2. Check if pat contains any of the purge tokens as a sub-word
+                        words = pat_str.split()
+                        filtered_words = [w for w in words if w not in purge_tokens]
+
+                        # Only keep if meaningful non-purged tokens remain
+                        if filtered_words:
+                            cleaned_phrase = " ".join(filtered_words)
+                            if len(cleaned_phrase) >= 3:
+                                new_patterns.append(cleaned_phrase)
+                                if cleaned_phrase != pat_str:
+                                    print(
+                                        f"   ├─ ✂️ Sub-token trimmed: '{pat_str}' ➔ '{cleaned_phrase}'"
+                                    )
+                            else:
+                                print(
+                                    f"   ├─ ⚠️ Dropped phrase '{cleaned_phrase}' (<3 chars after trimming)"
+                                )
+                        else:
+                            print(
+                                f"   ├─ 🗑️ Compound phrase '{pat_str}' completely emptied by sub-tokens"
+                            )
+
+                    if len(new_patterns) != len(existing):
+                        rule.patterns = new_patterns
+                        rule.save()
+                        updated_rules += 1
+                        print(
+                            f"   └─ ✅ Saved rule {rule_code}. New Patterns: {new_patterns}"
+                        )
+                    else:
+                        print(f"   └─ ℹ️ No changes required for rule {rule_code}")
+                else:
+                    print(f"   └─ ⚠️ Rule '{rule_code}' not found in database!")
+
+            print(
+                "\n================================================================================"
+            )
+            print(
+                f"🚀 [BULK PURGE COMPLETE] Successfully updated {updated_rules} rules."
+            )
+            print(
+                "================================================================================\n"
+            )
+
+            return Response(
+                {
+                    "status": "success",
+                    "message": f"Purged patterns across {updated_rules} rules.",
+                    "updated_rules_count": updated_rules,
+                }
+            )
+
+    except Exception as e:
+        print(f"❌ [BULK PURGE EXCEPTION] Engine crashed: {str(e)}")
+        print(
+            "================================================================================\n"
+        )
+        return Response({"status": "error", "message": str(e)}, status=500)
+
+
+@api_view(["GET"])
+def sweep_preview_summary(request):
+    """Lightning-Fast In-Memory Vector Sweep Engine for Node 99 Rules."""
+    print(
+        "\n================================================================================"
+    )
+    print("⚡ [SWEEP PREVIEW ENGINE] STARTING LIGHTNING NODE 99 SCAN")
+    print(
+        "================================================================================"
+    )
+
+    base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+
+    unclassified_entries = list(
+        base_qs.values(
+            "id",
+            "debit",
+            "credit",
+            "remarks__payee",
+            "remarks__narration",
+            "remarks__display_text",
+            "evaluation_matrix_snapshot__resolved_subcategory",
+        )
+    )
+
+    total_unclassified = len(unclassified_entries)
+    suspense_count = sum(
+        1
+        for e in unclassified_entries
+        if e.get("evaluation_matrix_snapshot__resolved_subcategory")
+        == "Suspense Account"
+    )
+
+    print(
+        f"📊 [ENGINE DEBUG] Total Staging Queue: {total_unclassified} "
+        f"(Pending Suspense: {suspense_count})"
+    )
+
+    if total_unclassified == 0:
+        print(
+            "ℹ️ [ENGINE DEBUG] No unclassified entries found for Node 99." " Exiting."
+        )
+        print(
+            "================================================================================\n"
+        )
+        return Response({"status": "success", "rule_matches": []})
+
+    processed_pool = []
+    for entry in unclassified_entries:
+        debit_val = float(entry["debit"] or 0.0)
+        credit_val = float(entry["credit"] or 0.0)
+
+        payee = (entry.get("remarks__payee") or "").upper()
+        narration = (entry.get("remarks__narration") or "").upper()
+        display_text = (entry.get("remarks__display_text") or "").upper()
+
+        search_haystack = f"{payee} {narration} {display_text}"
+
+        processed_pool.append(
+            {
+                "id": entry["id"],
+                "debit": debit_val,
+                "credit": credit_val,
+                "total_amount": debit_val + credit_val,
+                "haystack": search_haystack,
+            }
+        )
+
+    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+        "-priority"
+    )
+    print(f"⚙️ [ENGINE DEBUG] Total Active Rules Loaded: {active_rules.count()}")
+
+    rule_matches = []
+    seen_patterns = set()
+    claimed_entry_ids = set()
+
+    for rule in active_rules:
+        raw_patterns = (
+            rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+        )
+
+        if not raw_patterns:
+            continue
+
+        patterns_list = sorted(
+            list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+        )
+        rule_type = (
+            rule.rule_type.lower()
+            if hasattr(rule, "rule_type") and rule.rule_type
+            else None
+        )
+
+        for pattern_str in patterns_list:
+            if not pattern_str or pattern_str in seen_patterns:
+                if pattern_str in seen_patterns:
+                    print(f"    ⏭️ Skipping '{pattern_str}': Already processed.")
+                continue
+
+            clean_search_str = pattern_str.lstrip("#").strip().upper()
+            if len(clean_search_str) < 2:
+                print(f"    ⚠️ Skipping '{pattern_str}': Too short (< 2 characters).")
+                continue
+
+            matched_count = 0
+            matched_amount = 0.0
+            new_claimed_ids = []
+
+            for row in processed_pool:
+                if row["id"] in claimed_entry_ids:
+                    continue
+
+                if rule_type == "debit" and row["debit"] <= 0:
+                    continue
+                if rule_type == "credit" and row["credit"] <= 0:
+                    continue
+
+                if clean_search_str in row["haystack"]:
+                    matched_count += 1
+                    matched_amount += row["total_amount"]
+                    new_claimed_ids.append(row["id"])
+
+            if matched_count > 0:
+                claimed_entry_ids.update(new_claimed_ids)
+                seen_patterns.add(pattern_str)
+
+                print(
+                    f"    ✅ MATCH FOUND | Pattern: '{clean_search_str}' -> {matched_count} rows | Total: ₹{matched_amount:,.2f}"
+                )
+
+                rule_matches.append(
+                    {
+                        "pattern": pattern_str,
+                        "display_tag": f"#{pattern_str}",
+                        "token_breakdown": [clean_search_str],
+                        "matched_rows": matched_count,
+                        "total_amount": round(matched_amount, 2),
+                        "suggested_category": rule.target_category,
+                        "suggested_subcategory": rule.target_subcategory,
+                        "rule_code": rule.rule_code,
+                        "matched_entry_ids": new_claimed_ids,
+                    }
+                )
+
+    print(
+        "\n================================================================================"
+    )
+    print(
+        f"🚀 [SWEEP PREVIEW COMPLETE] Matched Cards: {len(rule_matches)} | Total Claimed Rows: {len(claimed_entry_ids)}"
+    )
+    print(
+        "================================================================================\n"
+    )
+    return Response({"status": "success", "rule_matches": rule_matches})
+
+
+@api_view(["POST"])
+@transaction.atomic
+def execute_bulk_sweep(request):
+    """Executes bulk reclassification matching Node 99 active rules cleanly."""
+    selected_patterns = request.data.get("patterns", [])
+    account_id = request.data.get("account_id", 99)
+
+    print(
+        "\n================================================================================"
+    )
+    print("⚡ [EXECUTE BULK SWEEP] STARTING DB COMMIT TRANSACTION")
+    print(
+        "================================================================================"
+    )
+    print(
+        f"⚙️ [COMMIT CONFIG] Target Account ID: {account_id} | Explicit Pattern Filter Count: {len(selected_patterns)}"
+    )
+
+    base_qs = JournalEntry.objects.filter(account_id=account_id, is_reclassified=False)
+    initial_pending_count = base_qs.count()
+    print(
+        f"📊 [DATABASE QUEUE] Total Pending Records on Account #{account_id}: {initial_pending_count}"
+    )
+
+    if initial_pending_count == 0:
+        print("ℹ️ [COMMIT SKIPPED] No pending records found in database.")
+        print(
+            "================================================================================\n"
+        )
+        return Response({"status": "success", "total_reclassified": 0})
+
+    active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
+        "-priority"
+    )
+    print(
+        f"⚙️ [RULES LOADED] Evaluating {active_rules.count()} active rules against DB queue..."
+    )
+
+    total_updated = 0
+    claimed_entry_ids = set()
+    seen_patterns = set()
+
+    clean_selected = (
+        [p.lstrip("#").strip().upper() for p in selected_patterns]
+        if selected_patterns
+        else []
+    )
+
+    for rule in active_rules:
+        raw_patterns = (
+            rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
+        )
+
+        if not raw_patterns:
+            continue
+
+        patterns_list = sorted(
+            list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
+        )
+        rule_type = (
+            rule.rule_type.lower()
+            if hasattr(rule, "rule_type") and rule.rule_type
+            else None
+        )
+
+        for pattern_str in patterns_list:
+            if not pattern_str or pattern_str in seen_patterns:
+                continue
+
+            clean_search_str = pattern_str.lstrip("#").strip()
+            if len(clean_search_str) < 2:
+                continue
+
+            if clean_selected and clean_search_str.upper() not in clean_selected:
+                continue
+
+            candidate_qs = base_qs.exclude(id__in=claimed_entry_ids)
+
+            if rule_type == "debit":
+                candidate_qs = candidate_qs.filter(debit__gt=0)
+            elif rule_type == "credit":
+                candidate_qs = candidate_qs.filter(credit__gt=0)
+
+            matched_qs = candidate_qs.filter(
+                Q(remarks__payee__icontains=clean_search_str)
+                | Q(remarks__narration__icontains=clean_search_str)
+                | Q(remarks__display_text__icontains=clean_search_str)
+            )
+
+            entries_to_update = list(matched_qs)
+
+            if entries_to_update:
+                seen_patterns.add(pattern_str)
+                row_identifiers_to_sync = []
+
+                for entry in entries_to_update:
+                    snapshot = entry.evaluation_matrix_snapshot or {}
+                    if isinstance(snapshot, str):
+                        try:
+                            snapshot = json.loads(snapshot)
+                        except json.JSONDecodeError:
+                            snapshot = {}
+
+                    snapshot["resolved_category"] = rule.target_category
+                    snapshot["resolved_subcategory"] = rule.target_subcategory
+                    snapshot["applied_rule_code"] = rule.rule_code
+
+                    entry.evaluation_matrix_snapshot = snapshot
+                    entry.is_reclassified = True
+                    entry.classification_status = ClassificationStatus.AUTO_SWEPT
+
+                    if entry.row_identifier:
+                        row_identifiers_to_sync.append(entry.row_identifier)
+
+                # 1. Update Node 99 legs
+                node99_updated = JournalEntry.objects.bulk_update(
+                    entries_to_update,
+                    [
+                        "evaluation_matrix_snapshot",
+                        "is_reclassified",
+                        "classification_status",
+                    ],
+                    batch_size=500,
+                )
+
+                # 2. Sync corresponding Bank Legs across row_identifiers
+                bank_legs_updated = 0
+                if row_identifiers_to_sync:
+                    bank_legs_updated = (
+                        JournalEntry.objects.filter(
+                            row_identifier__in=row_identifiers_to_sync
+                        )
+                        .exclude(account_id=account_id)
+                        .update(
+                            is_reclassified=True,
+                            classification_status=ClassificationStatus.AUTO_SWEPT,
+                        )
+                    )
+
+                matched_ids = [e.id for e in entries_to_update]
+                claimed_entry_ids.update(matched_ids)
+                total_updated += len(entries_to_update)
+
+                print(
+                    f"    💾 [DB WRITE] Rule '{rule.rule_code}' ({rule.target_category} > {rule.target_subcategory}) | "
+                    f"Pattern: '{clean_search_str}' ➔ {len(entries_to_update)} Node 99 legs + {bank_legs_updated} Bank legs updated."
+                )
+
+    print(
+        "\n================================================================================"
+    )
+    print(
+        f"🚀 [BULK SWEEP COMPLETE] Total Reclassified Entries: {total_updated} | Remaining Queue: {initial_pending_count - total_updated}"
+    )
+    print(
+        "================================================================================\n"
+    )
+
+    return Response({"status": "success", "total_reclassified": total_updated})
 
 
 def extract_candidate_patterns_from_narrations(narrations: List[str]) -> Dict[str, Any]:
