@@ -50,7 +50,7 @@ def global_audit_save_listener(sender, instance, created, **kwargs):
     if sender.__name__ not in AUDITED_MODELS or sender.__name__ == "AuditLog":
         return
 
-    from tracker.models import AuditLog
+    from .models.models import AuditLog
 
     action = "CREATE" if created else "UPDATE"
     prev_state = getattr(instance, "_old_state", {}) if not created else {}
@@ -89,7 +89,7 @@ def global_audit_delete_listener(sender, instance, **kwargs):
     if sender.__name__ not in AUDITED_MODELS or sender.__name__ == "AuditLog":
         return
 
-    from tracker.models import AuditLog
+    from .models.models import AuditLog
 
     AuditLog.objects.create(
         action_type=f"{sender.__name__.upper()}_DELETE",

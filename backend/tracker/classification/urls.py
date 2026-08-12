@@ -12,6 +12,7 @@ from tracker.classification.classificationViews import (
     get_candidate_patterns_view,
     validate_pattern_anchor,
 )
+from tracker.classification import classificationRuleViews
 
 urlpatterns = [
     # GET list of pending Node 99 items with structured JSON remarks
@@ -71,5 +72,31 @@ urlpatterns = [
         "staging/validate_pattern/",
         validate_pattern_anchor,
         name="validate_pattern",
+    ),
+    # CRUD for Classification Rules
+    path(
+        "api/rules/",
+        classificationRuleViews.list_classification_rules,
+        name="list_rules",
+    ),
+    path(
+        "api/rules/create/",
+        classificationRuleViews.create_classification_rule,
+        name="create_rule",
+    ),
+    path(
+        "api/rules/<str:rule_code>/",
+        classificationRuleViews.update_classification_rule,
+        name="update_rule",
+    ),
+    path(
+        "api/rules/<str:rule_code>/toggle/",
+        classificationRuleViews.toggle_rule_active_status,
+        name="toggle_rule",
+    ),
+    path(
+        "api/rules/<str:rule_code>/delete/",
+        classificationRuleViews.delete_classification_rule,
+        name="delete_rule",
     ),
 ]

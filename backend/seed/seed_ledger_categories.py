@@ -5,7 +5,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 django.setup()
 
 from django.db import transaction
-from tracker.models import MasterFinancialCategory
+from backend.tracker.models.models import MasterFinancialCategory
 
 # Data arrays stay compact and readable
 BALANCESHEET_SOURCE_ROWS = [

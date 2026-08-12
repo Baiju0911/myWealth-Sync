@@ -256,7 +256,7 @@ def run_final_math(
     """
     existing_hashes = set()
     if account_id:
-        from tracker.models import StatementStagingLine
+        from ....models.models import StatementStagingLine
 
         existing_hashes = set(
             StatementStagingLine.objects.filter(account_id=str(account_id)).values_list(

@@ -8,7 +8,7 @@ from pypdf import PdfReader
 from django.shortcuts import get_object_or_404
 
 # ─── 🟢 YOUR DIRECT MODULE IMPORT SIGNATURE ───
-from ..models import UserStatementTemplate, Account, BankCredential
+from ..models.models import UserStatementTemplate, Account, BankCredential
 
 
 def extract_spatial_preview(uploaded_file, password_pool, max_rows=15):

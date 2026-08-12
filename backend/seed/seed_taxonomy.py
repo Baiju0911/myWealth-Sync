@@ -11,7 +11,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 django.setup()
 
 from django.db import transaction
-from tracker.models import TaxonomyTree, ClassificationRule
+from backend.tracker.models.models import TaxonomyTree, ClassificationRule
 
 AUDITED_TAXONOMY = [
     {

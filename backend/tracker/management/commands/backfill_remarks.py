@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.db.models import Q
-from tracker.models import JournalEntry, StatementStagingLine
+from backend.tracker.models.models import JournalEntry, StatementStagingLine
 from tracker.classification.remarks_service import generate_initial_remarks
 
 

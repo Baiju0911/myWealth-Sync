@@ -13,7 +13,11 @@ from collections import Counter
 from urllib.parse import parse_qs, unquote
 from django.db.models import Q, Count, Sum
 from django.http import JsonResponse
-from tracker.models import JournalEntry, TaxonomyTree, ClassificationStatus
+from ..models.models import (
+    JournalEntry,
+    TaxonomyTree,
+    ClassificationStatus,
+)
 from tracker.classification.engine import (
     get_suspense_clusters,
     reclassify_and_learn,
@@ -33,7 +37,7 @@ from rest_framework.pagination import PageNumberPagination
 from tracker.classification.utils.upiparser import clean_payee_name
 
 from tracker.classification.engine import extract_clean_payee_pattern
-from tracker.models import ClassificationRule
+from ..models.models import ClassificationRule
 from tracker.constants import (
     RULE_SAFETY_BLACKLIST,
     NOISE_KEYWORD_BLACKLIST,

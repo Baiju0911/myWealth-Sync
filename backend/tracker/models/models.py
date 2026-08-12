@@ -23,7 +23,7 @@ class BulkAuditQuerySet(models.QuerySet):
         created_objs = super().bulk_create(objs, *args, **kwargs)
 
         # Lazy import inside method to prevent circular import issues
-        from tracker.models import AuditLog
+        from .models import AuditLog
 
         audit_logs = []
         for obj in created_objs:
@@ -63,7 +63,7 @@ class BulkAuditQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, *args, **kwargs):
         result = super().bulk_update(objs, fields, *args, **kwargs)
 
-        from tracker.models import AuditLog
+        from .models import AuditLog
 
         audit_logs = []
         for obj in objs:
@@ -1468,6 +1468,190 @@ class ClassificationRule(models.Model):
         return False
 
 
+# class JournalEntry(models.Model):
+#     objects = BulkAuditManager()
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+#     # 🏛️ Core Context Mappings
+#     account = models.ForeignKey(
+#         "Account", on_delete=models.PROTECT, related_name="journal_lines"
+#     )
+
+#     # 📅 Date & Tracking Vectors
+#     transaction_date = models.DateField(default=timezone.now)
+
+#     # 🛡️ THE AUDIT LINK: Matches the Hex fingerprint signature inside StatementStagingLine
+#     row_identifier = models.CharField(max_length=64, db_index=True)
+
+#     # 💰 Explicit Double-Entry Matrix Fields
+#     debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+#     credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+
+#     # 🟢 Reclassification & Audit Tracking Flags
+#     is_reclassified = models.BooleanField(default=False, db_index=True)
+#     classification_status = models.CharField(
+#         max_length=20,
+#         choices=ClassificationStatus.choices,
+#         default=ClassificationStatus.INITIAL,
+#         db_index=True,
+#     )
+
+#     # 📝 Integrated JSON Remarks Repository (Stores structured text, payee, upi_ref, user_note)
+#     remarks = models.JSONField(
+#         default=dict,
+#         blank=True,
+#         help_text="Stores: {display_text, directional_prefix, target_account_name, payee, upi_ref, user_note, rule_code}",
+#     )
+
+#     # 🤖 Multi-Tier Evaluation Metadata JSON Repository (Stores t1/t2/t3, rules, audit history)
+#     evaluation_matrix_snapshot = models.JSONField(
+#         default=dict,
+#         blank=True,
+#         help_text="Stores: {t1_cat, t2_cat, t3_cat, resolved_cat, resolved_sub, applied_rule, audit_history}",
+#     )
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     class Meta:
+#         db_table = "ledger_journal_entry"
+#         verbose_name_plural = "Journal Entries"
+#         indexes = [
+#             models.Index(fields=["row_identifier", "account"]),
+#             models.Index(fields=["account", "is_reclassified"]),
+#             models.Index(fields=["classification_status"]),
+#         ]
+
+#     def __str__(self):
+#         return f"Account #{self.account_id} | DR: {self.debit} | CR: {self.credit} | Status: {self.classification_status}"
+
+#     @classmethod
+#     @transaction.atomic
+#     def reclassify_statement_line(
+#         cls,
+#         row_identifier: str,
+#         new_category: str,
+#         new_subcategory: str,
+#         rule_code: str = "MANUAL",
+#         taxonomy_node_account_id: int = 99,
+#         user_note: str = None,
+#     ):
+#         """
+#         Safely reclassifies Node 99 counter-entry for a specific row_identifier while preserving
+#         the historical audit trail inside evaluation_matrix_snapshot JSON and storing structured
+#         JSON remarks on BOTH legs.
+#         """
+#         # 1. Fetch BOTH double-entry legs for this row_identifier
+#         all_legs = list(
+#             cls.objects.select_for_update().filter(row_identifier=row_identifier)
+#         )
+
+#         entry_99 = next(
+#             (leg for leg in all_legs if leg.account_id == taxonomy_node_account_id),
+#             None,
+#         )
+#         bank_leg = next(
+#             (leg for leg in all_legs if leg.account_id != taxonomy_node_account_id),
+#             None,
+#         )
+
+#         if not entry_99:
+#             raise ValueError(
+#                 f"No Taxonomy Node ({taxonomy_node_account_id}) counter-entry found for row_identifier: {row_identifier}"
+#             )
+
+#         current_snapshot = entry_99.evaluation_matrix_snapshot or {}
+
+#         # 2. Extract current state for audit trail
+#         prev_cat = current_snapshot.get("resolved_category") or current_snapshot.get(
+#             "resolved_cat", "Uncategorized"
+#         )
+#         prev_sub = current_snapshot.get("resolved_subcategory") or current_snapshot.get(
+#             "resolved_sub", "Suspense Account"
+#         )
+#         prev_rule = current_snapshot.get("applied_rule_code") or current_snapshot.get(
+#             "applied_rule", "UNKNOWN"
+#         )
+
+#         # 3. Construct updated metadata payload with full history
+#         updated_snapshot = {
+#             **current_snapshot,
+#             "previous_category": prev_cat,
+#             "previous_subcategory": prev_sub,
+#             "previous_rule_code": prev_rule,
+#             "resolved_category": new_category,
+#             "resolved_subcategory": new_subcategory,
+#             "applied_rule_code": rule_code,
+#             "confidence_score": 100,
+#             "is_reclassified": True,
+#             "reclassified_at": timezone.now().isoformat(),
+#         }
+
+#         target_account_label = f"{new_category} > {new_subcategory}"
+#         existing_remark_99 = (
+#             entry_99.remarks if isinstance(entry_99.remarks, dict) else {}
+#         )
+
+#         # 4. Generate updated JSON remark for Counter/Taxonomy Leg
+#         prefix_99 = "By" if entry_99.debit > 0 else "To"
+#         display_text_99 = (
+#             f"{prefix_99} {target_account_label} | Classified via {rule_code}"
+#         )
+#         if user_note and user_note.strip():
+#             display_text_99 += f" | Note: {user_note.strip()}"
+
+#         json_remark_99 = {
+#             **existing_remark_99,
+#             "directional_prefix": prefix_99,
+#             "target_account_name": target_account_label,
+#             "display_text": display_text_99,
+#             "rule_code": rule_code,
+#             "user_note": user_note.strip() if user_note else None,
+#             "updated_at": timezone.now().isoformat(),
+#         }
+
+#         entry_99.evaluation_matrix_snapshot = updated_snapshot
+#         entry_99.is_reclassified = True
+#         entry_99.classification_status = ClassificationStatus.RECLASSIFIED
+#         entry_99.remarks = json_remark_99
+#         entry_99.save(
+#             update_fields=[
+#                 "evaluation_matrix_snapshot",
+#                 "is_reclassified",
+#                 "classification_status",
+#                 "remarks",
+#             ]
+#         )
+
+#         # 5. Generate updated JSON remark for Bank Leg if present
+#         if bank_leg:
+#             existing_remark_bank = (
+#                 bank_leg.remarks if isinstance(bank_leg.remarks, dict) else {}
+#             )
+#             prefix_bank = "By" if bank_leg.debit > 0 else "To"
+#             display_text_bank = f"{prefix_bank} Bank A/c | Reclassified to {target_account_label} via {rule_code}"
+#             if user_note and user_note.strip():
+#                 display_text_bank += f" | Note: {user_note.strip()}"
+
+#             json_remark_bank = {
+#                 **existing_remark_bank,
+#                 "directional_prefix": prefix_bank,
+#                 "target_account_name": "Bank A/c",
+#                 "display_text": display_text_bank,
+#                 "rule_code": rule_code,
+#                 "user_note": user_note.strip() if user_note else None,
+#                 "updated_at": timezone.now().isoformat(),
+#             }
+
+#             bank_leg.classification_status = ClassificationStatus.RECLASSIFIED
+#             bank_leg.is_reclassified = True
+#             bank_leg.remarks = json_remark_bank
+#             bank_leg.save(
+#                 update_fields=["classification_status", "is_reclassified", "remarks"]
+#             )
+
+#         return entry_99
+
+
 class JournalEntry(models.Model):
     objects = BulkAuditManager()
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -1496,14 +1680,14 @@ class JournalEntry(models.Model):
         db_index=True,
     )
 
-    # 📝 Integrated JSON Remarks Repository (Stores structured text, payee, upi_ref, user_note)
+    # 📝 Integrated JSON Remarks Repository
     remarks = models.JSONField(
         default=dict,
         blank=True,
         help_text="Stores: {display_text, directional_prefix, target_account_name, payee, upi_ref, user_note, rule_code}",
     )
 
-    # 🤖 Multi-Tier Evaluation Metadata JSON Repository (Stores t1/t2/t3, rules, audit history)
+    # 🤖 Multi-Tier Evaluation Metadata JSON Repository
     evaluation_matrix_snapshot = models.JSONField(
         default=dict,
         blank=True,
@@ -1515,6 +1699,15 @@ class JournalEntry(models.Model):
     class Meta:
         db_table = "ledger_journal_entry"
         verbose_name_plural = "Journal Entries"
+
+        # 🔒 ROOT PROTECTION: Enforces exactly ONE leg per account per transaction
+        constraints = [
+            models.UniqueConstraint(
+                fields=["row_identifier", "account"],
+                name="uq_row_identifier_account",
+            )
+        ]
+
         indexes = [
             models.Index(fields=["row_identifier", "account"]),
             models.Index(fields=["account", "is_reclassified"]),

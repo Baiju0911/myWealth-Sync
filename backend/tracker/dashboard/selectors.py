@@ -1,6 +1,6 @@
 from django.db.models import Count, Sum, DecimalField, ExpressionWrapper, Min, Max
 from django.db.models.expressions import RawSQL
-from tracker.models import JournalEntry
+from ..models.models import JournalEntry
 
 
 class DashboardSelectors:

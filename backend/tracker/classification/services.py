@@ -1,7 +1,7 @@
 # tracker/classification/services.py
 
 from tracker.classification.remarks_service import generate_initial_remarks
-from tracker.models import JournalEntry
+from ..models.models import JournalEntry
 
 
 def create_journal_entry_from_staging(
