@@ -35,7 +35,7 @@ from django.core.files.storage import default_storage
 from ..parsers.parsers_v1.utils.normalizer import format_to_two_digits
 
 
-from ..models import (
+from ..models.models import (
     Account,
     Bank,
     BankCredential,

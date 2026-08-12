@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 
-from ..models import (
+from ..models.models import (
     StatementStagingLine,
     MasterFinancialCategory,
     AccountingRule,

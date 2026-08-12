@@ -11,7 +11,7 @@ from .strategies import (
     strict_matrix_v3,
 )
 from .strategies import relative_matrix, relative_matrix_v2
-from tracker.models import UserStatementTemplate
+from ...models.models import UserStatementTemplate
 from .utils.csv_engine import (
     parse_universal_csv_stream,
 )  # 🟢 Import our new CSV tokenizer

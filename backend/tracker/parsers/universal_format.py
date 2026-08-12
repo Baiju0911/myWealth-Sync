@@ -6,7 +6,7 @@ import json
 # NATIVE TABLE CONFIGURATION AND UTILITY IMPORTS
 from .raw_extractor import match_statement_template
 from .utils import generate_row_fingerprint
-from tracker.models import Account, StatementStagingLine, BankCredential
+from ..models.models import Account, StatementStagingLine, BankCredential
 
 
 class UniversalStatementParser:

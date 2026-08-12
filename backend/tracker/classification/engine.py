@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from tracker.classification.remarks_service import generate_cluster_pattern
 from tracker.classification.utils.upiparser import parse_upi_narration
-from tracker.models import (
+from ..models.models import (
     AccountingRule,
     ClassificationRule,
     JournalEntry,

@@ -6,7 +6,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 # 🛢️ Grab your live MySQL model schemas including our new metadata layers
-from .models import (
+from .models.models import (
     Account,
     TransactionHeader,
     JournalEntry,

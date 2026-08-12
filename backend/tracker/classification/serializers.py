@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from tracker.models import JournalEntry, ClassificationStatus
+from ..models.models import JournalEntry, ClassificationStatus
 
 
 class StructuredRemarksSerializer(serializers.Serializer):

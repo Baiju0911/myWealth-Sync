@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from tracker.models import JournalEntry, StatementStagingLine
+from ...models.models import JournalEntry, StatementStagingLine
 from tracker.classification.utils.upiparser import parse_upi_narration
 
 

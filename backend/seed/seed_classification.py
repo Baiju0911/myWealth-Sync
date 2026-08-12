@@ -7,10 +7,12 @@ import django
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR))
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings') # Adjust if your settings module name differs
+os.environ.setdefault(
+    "DJANGO_SETTINGS_MODULE", "core.settings"
+)  # Adjust if your settings module name differs
 django.setup()
 
-from tracker.models import ClassificationRule
+from backend.tracker.models.models import ClassificationRule
 
 SEED_RULES = [
     {
@@ -78,6 +80,7 @@ SEED_RULES = [
     },
 ]
 
+
 def seed_classification_rules():
     # 1. Truncate existing entries
     deleted_count, _ = ClassificationRule.objects.all().delete()
@@ -98,7 +101,10 @@ def seed_classification_rules():
         )
         created_count += 1
 
-    print(f"✅ Seeding Complete! Created {created_count} consolidated JSON classification rules.")
+    print(
+        f"✅ Seeding Complete! Created {created_count} consolidated JSON classification rules."
+    )
+
 
 if __name__ == "__main__":
     seed_classification_rules()

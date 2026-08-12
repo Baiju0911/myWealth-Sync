@@ -6,7 +6,7 @@ import copy
 from decimal import Decimal
 from django.db import transaction
 from collections import Counter
-from .models import (
+from .models.models import (
     StatementStagingLine,
     WIPEvaluationMatrix,
     MasterFinancialCategory,

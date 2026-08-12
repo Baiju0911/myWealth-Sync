@@ -13,7 +13,7 @@ django.setup()
 
 # 3. Model imports (MUST come after django.setup())
 from django.db import transaction
-from tracker.models import AccountingRule
+from backend.tracker.models.models import AccountingRule
 
 logger = logging.getLogger(__name__)
 

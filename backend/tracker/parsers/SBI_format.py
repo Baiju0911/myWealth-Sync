@@ -10,7 +10,7 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .utils import MatchWrapper, generate_row_fingerprint
 
-from tracker.models import (
+from ..models.models import (
     Account,
     StatementStagingLine,
     BankCredential,
