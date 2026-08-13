@@ -21,23 +21,193 @@ class DashboardSelectors:
             ),
         }
 
+    # @staticmethod
+    # def get_category_breakdowns(
+    #     bank_account_id=3, taxonomy_account_id=99, from_date=None, to_date=None
+    # ):
+    #     """
+    #     Queries Account 99 taxonomy records:
+    #     - If a specific bank account is selected, filters by its row_identifier signatures.
+    #     - If Account 99 is selected, aggregates globally across all accounts.
+    #     """
+    #     qs = JournalEntry.objects.filter(account_id=taxonomy_account_id)
+
+    #     # Only restrict to specific bank account if NOT selecting the global master node itself
+    #     if int(bank_account_id) != int(taxonomy_account_id):
+    #         bank_row_ids = JournalEntry.objects.filter(
+    #             account_id=bank_account_id
+    #         ).values_list("row_identifier", flat=True)
+
+    #         qs = qs.filter(row_identifier__in=bank_row_ids)
+
+    #     if from_date:
+    #         qs = qs.filter(transaction_date__gte=from_date)
+    #     if to_date:
+    #         qs = qs.filter(transaction_date__lte=to_date)
+
+    #     return (
+    #         qs.annotate(
+    #             category=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category'))",
+    #                 [],
+    #             ),
+    #             subcategory=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_subcategory'))",
+    #                 [],
+    #             ),
+    #         )
+    #         .values("category", "subcategory")
+    #         .annotate(
+    #             transaction_count=Count("id"),
+    #             total_debit=Sum("debit"),
+    #             total_credit=Sum("credit"),
+    #             net_balance=ExpressionWrapper(
+    #                 Sum("debit") - Sum("credit"),
+    #                 output_field=DecimalField(max_digits=15, decimal_places=2),
+    #             ),
+    #         )
+    #         .order_by("category", "subcategory")
+    #     )
+
+    # @staticmethod
+    # def get_category_breakdowns(
+    #     bank_account_id=3, taxonomy_account_id=99, from_date=None, to_date=None
+    # ):
+    #     """
+    #     Queries Account 99 taxonomy records:
+    #     - If a specific bank account is selected, filters by its row_identifier signatures.
+    #     - If Account 99 is selected, aggregates globally across all accounts.
+    #     - Automatically excludes rows already bound to an asset sub-ledger to prevent double-counting.
+    #     """
+    #     from tracker.models.subledger import AssetTransactionMapping
+
+    #     qs = JournalEntry.objects.filter(account_id=taxonomy_account_id)
+
+    #     # 🎯 Safely exclude transactions already reclassified and bound to asset sub-ledgers
+    #     mapped_row_ids = AssetTransactionMapping.objects.exclude(
+    #         row_identifier__isnull=True
+    #     ).values_list("row_identifier", flat=True)
+
+    #     qs = qs.exclude(row_identifier__in=mapped_row_ids)
+
+    #     # Only restrict to specific bank account if NOT selecting the global master node itself
+    #     if int(bank_account_id) != int(taxonomy_account_id):
+    #         bank_row_ids = JournalEntry.objects.filter(
+    #             account_id=bank_account_id
+    #         ).values_list("row_identifier", flat=True)
+
+    #         qs = qs.filter(row_identifier__in=bank_row_ids)
+
+    #     if from_date:
+    #         qs = qs.filter(transaction_date__gte=from_date)
+    #     if to_date:
+    #         qs = qs.filter(transaction_date__lte=to_date)
+
+    #     return (
+    #         qs.annotate(
+    #             category=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category'))",
+    #                 [],
+    #             ),
+    #             subcategory=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_subcategory'))",
+    #                 [],
+    #             ),
+    #         )
+    #         .values("category", "subcategory")
+    #         .annotate(
+    #             transaction_count=Count("id"),
+    #             total_debit=Sum("debit"),
+    #             total_credit=Sum("credit"),
+    #             net_balance=ExpressionWrapper(
+    #                 Sum("debit") - Sum("credit"),
+    #                 output_field=DecimalField(max_digits=15, decimal_places=2),
+    #             ),
+    #         )
+    #         .order_by("category", "subcategory")
+    #     )
+
+    # @staticmethod
+    # def get_category_breakdowns(
+    #     bank_account_id=3, taxonomy_account_id=99, from_date=None, to_date=None
+    # ):
+    #     """
+    #     Queries Account 99 taxonomy records and calculates active vs reclassified totals.
+    #     """
+    #     from tracker.models.subledger import AssetTransactionMapping
+
+    #     qs = JournalEntry.objects.filter(account_id=taxonomy_account_id)
+
+    #     # Get mapped identifiers for tracking reclassifications
+    #     mapped_rows = AssetTransactionMapping.objects.exclude(
+    #         row_identifier__isnull=True
+    #     )
+    #     mapped_row_ids = mapped_rows.values_list("row_identifier", flat=True)
+
+    #     # 🎯 Optional: If you want taxonomy to show unmapped active rows normally
+    #     qs = qs.exclude(row_identifier__in=mapped_row_ids)
+
+    #     if int(bank_account_id) != int(taxonomy_account_id):
+    #         bank_row_ids = JournalEntry.objects.filter(
+    #             account_id=bank_account_id
+    #         ).values_list("row_identifier", flat=True)
+    #         qs = qs.filter(row_identifier__in=bank_row_ids)
+
+    #     if from_date:
+    #         qs = qs.filter(transaction_date__gte=from_date)
+    #     if to_date:
+    #         qs = qs.filter(transaction_date__lte=to_date)
+
+    #     categories = (
+    #         qs.annotate(
+    #             category=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category'))",
+    #                 [],
+    #             ),
+    #             subcategory=RawSQL(
+    #                 "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_subcategory'))",
+    #                 [],
+    #             ),
+    #         )
+    #         .values("category", "subcategory")
+    #         .annotate(
+    #             transaction_count=Count("id"),
+    #             total_debit=Sum("debit"),
+    #             total_credit=Sum("credit"),
+    #             net_balance=ExpressionWrapper(
+    #                 Sum("debit") - Sum("credit"),
+    #                 output_field=DecimalField(max_digits=15, decimal_places=2),
+    #             ),
+    #         )
+    #         .order_by("category", "subcategory")
+    #     )
+
+    #     return list(categories)
+
     @staticmethod
     def get_category_breakdowns(
         bank_account_id=3, taxonomy_account_id=99, from_date=None, to_date=None
     ):
         """
-        Queries Account 99 taxonomy records:
-        - If a specific bank account is selected, filters by its row_identifier signatures.
-        - If Account 99 is selected, aggregates globally across all accounts.
+        Queries Account 99 taxonomy records and calculates active vs reclassified totals.
         """
+        from tracker.models.subledger import AssetTransactionMapping
+
         qs = JournalEntry.objects.filter(account_id=taxonomy_account_id)
 
-        # Only restrict to specific bank account if NOT selecting the global master node itself
+        # Get mapped identifiers for tracking reclassifications
+        mapped_rows = AssetTransactionMapping.objects.exclude(
+            row_identifier__isnull=True
+        )
+        mapped_row_ids = mapped_rows.values_list("row_identifier", flat=True)
+
+        # 🎯 Optional: If you want taxonomy to show unmapped active rows normally
+        qs = qs.exclude(row_identifier__in=mapped_row_ids)
+
         if int(bank_account_id) != int(taxonomy_account_id):
             bank_row_ids = JournalEntry.objects.filter(
                 account_id=bank_account_id
             ).values_list("row_identifier", flat=True)
-
             qs = qs.filter(row_identifier__in=bank_row_ids)
 
         if from_date:
@@ -45,7 +215,7 @@ class DashboardSelectors:
         if to_date:
             qs = qs.filter(transaction_date__lte=to_date)
 
-        return (
+        categories = (
             qs.annotate(
                 category=RawSQL(
                     "JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category'))",
@@ -68,6 +238,8 @@ class DashboardSelectors:
             )
             .order_by("category", "subcategory")
         )
+
+        return list(categories)
 
     @staticmethod
     def get_ledger_symmetry(

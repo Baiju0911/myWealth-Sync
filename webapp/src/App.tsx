@@ -9,6 +9,9 @@ export type AppView =
   | 'credentials' 
   | 'schemas' 
   | 'AccountingHeaders' 
+  // | 'StagingQueueEvaluator'
+  // | 'LedgerDashboard' 
+  | 'SubLedgerDashboard'
   | 'unifiedPipeline';  
 
 export default function App() {

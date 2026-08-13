@@ -3,7 +3,7 @@ import {
   fetchCandidatePatterns, 
   validatePatternAnchor, 
   type PatternValidationResponse 
-} from '../../api';
+} from '../../api/api';
 
 interface Props {
   isOpen: boolean;

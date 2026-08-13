@@ -15,3 +15,4 @@ export { UnifiedStatementPipeline } from './UnifiedStatementPipeline';
 
 //export { default as LedgerDashboard } from './LedgerDashboard';
 export { LedgerDashboard } from './LedgerDashboard';
+export { SubLedgerDashboard } from './SubLedgerDashboard';

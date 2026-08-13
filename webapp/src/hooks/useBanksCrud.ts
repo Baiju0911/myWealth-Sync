@@ -1,6 +1,6 @@
 // src/hooks/useBanksCrud.ts
 import { useState, useEffect } from 'react';
-import { bankApi } from '../api';
+import { bankApi } from '../api/api';
 import { type BankEntity } from '../types/ledger';
 
 export function useBanksCrud() {

@@ -33,7 +33,7 @@ import {
   type DashboardSummaryResponse, 
   type DashboardParams,
   type AccountNode 
-} from '../api';
+} from '../api/api';
 
 export const LedgerDashboard: React.FC = () => {
   const [accounts, setAccounts] = useState<AccountNode[]>([]);
