@@ -75,3 +75,53 @@ def dashboard_summary_view(request):
     response_serializer = DashboardSummaryResponseSerializer(data=payload)
     response_serializer.is_valid(raise_exception=True)
     return Response(response_serializer.data)
+
+
+@api_view(["GET"])
+def asset_mapped_transactions_view(request, asset_id):
+    """
+    API endpoint to list all transactions bound to a specific asset sub-ledger.
+    """
+    from tracker.models import JournalEntry
+    from tracker.models.subledger import AssetTransactionMapping
+
+    try:
+        mappings = AssetTransactionMapping.objects.filter(asset_id=asset_id).exclude(
+            row_identifier__isnull=True
+        )
+
+        row_identifiers = mappings.values_list("row_identifier", flat=True)
+
+        journal_entries = JournalEntry.objects.filter(
+            row_identifier__in=row_identifiers, account_id=99
+        ).values(
+            "id", "row_identifier", "transaction_date", "debit", "credit", "remarks"
+        )
+
+        mapping_lookup = {m.row_identifier: m for m in mappings}
+
+        results = []
+        for entry in journal_entries:
+            m_obj = mapping_lookup.get(entry["row_identifier"])
+            results.append(
+                {
+                    "mapping_id": str(m_obj.id) if m_obj else None,
+                    "journal_id": str(entry["id"]),
+                    "row_identifier": entry["row_identifier"],
+                    "transaction_date": entry["transaction_date"].strftime("%Y-%m-%d"),
+                    "debit": float(entry["debit"]),
+                    "credit": float(entry["credit"]),
+                    "remarks": entry["remarks"],
+                    "mapped_at": (
+                        m_obj.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if m_obj and hasattr(m_obj, "created_at")
+                        else None
+                    ),
+                }
+            )
+
+        return Response(
+            {"status": "success", "asset_id": asset_id, "mapped_transactions": results}
+        )
+    except Exception as e:
+        return Response({"status": "error", "message": str(e)}, status=400)

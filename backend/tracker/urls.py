@@ -173,6 +173,11 @@ urlpatterns += [
         name="get_taxonomy_tree",
     ),
     path(
+        "get_taxonomy_nodes/",
+        classificationViews.get_taxonomy_nodes_Assetview,
+        name="get_taxonomy_nodes",
+    ),
+    path(
         "apply_reclassification_and_learn/",
         classificationViews.apply_reclassification_and_learn,
         name="apply_reclassification_and_learn",

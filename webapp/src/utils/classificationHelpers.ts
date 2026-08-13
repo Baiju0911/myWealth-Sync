@@ -1,6 +1,6 @@
 // utils/classificationHelpers.ts
 
-import type { ExtendedCluster, RemarksJSON } from '../api';
+import type { ExtendedCluster, RemarksJSON } from '../api/api';
 
 /**
  * Parses raw JSON remarks safely with string fallback.

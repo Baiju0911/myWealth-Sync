@@ -1,6 +1,6 @@
 // src/hooks/useCredentialsCrud.ts
 import { useState, useEffect } from 'react';
-import { credentialApi, bankApi, accountApi } from '../api';
+import { credentialApi, bankApi, accountApi } from '../api/api';
 import type {
   BankEntity,
   AccountEntity,

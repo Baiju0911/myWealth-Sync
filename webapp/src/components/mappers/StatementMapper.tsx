@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { DragEvent, MouseEvent, ChangeEvent } from 'react';
-import { accountApi } from '../../api.ts';
+import { accountApi } from '../../api/api.ts';
 import api from '../../api/client'; 
 import type { AccountEntity } from '../../types/ledger'; 
 

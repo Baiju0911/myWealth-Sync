@@ -123,7 +123,12 @@ class AssetSubLedger(models.Model):
 
     # 🔗 Link to General Ledger Balance Sheet Account
     linked_gl_account = models.ForeignKey(
-        "Account", on_delete=models.PROTECT, related_name="subledger_assets"
+        "TaxonomyTree",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subledger_assets",
+        help_text="Chart of Accounts Taxonomy category for General Ledger alignment",
     )
 
     # 🎨 Deep Dynamic Category Metadata Repository

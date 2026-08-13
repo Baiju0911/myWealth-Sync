@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import type { TaxonomyOption, ExtendedCluster, Cluster, SuggestedRule } from '../../api';
+import type { TaxonomyOption, ExtendedCluster, Cluster, SuggestedRule } from '../../api/api';
 import { inrFormatter } from '../../utils/classificationHelpers';
 
 interface Props {

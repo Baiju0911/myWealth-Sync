@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { TableEngine } from '../components/ui/data-table/TableEngine';
 import { BULK_APPROVAL_COLUMNS, UNCATEGORIZED_VAULT_COLUMNS } from '../components/ui/data-table/columns';
-import { stagingQueueApi, ledgerMasterApi, accountApi } from '../api';
-import type { WorkspaceNode as BaseWorkspaceNode, SplitAllocationPayload } from '../api';
+import { stagingQueueApi, ledgerMasterApi, accountApi } from '../api/api';
+import type { WorkspaceNode as BaseWorkspaceNode, SplitAllocationPayload } from '../api/api';
 
 type WorkspaceTab = 'bulk-high' | 'uncategorized-zero';
 

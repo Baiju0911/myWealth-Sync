@@ -13,6 +13,7 @@ export default function Sidebar({ currentView, setCurrentView }: SidebarProps) {
     { id: 'summary', label: 'Financial Summary', icon: '📊' },
     { id: 'banks', label: 'Institutions Matrix', icon: '🏛️' }, 
     { id: 'unifiedPipeline', label: 'Statement Processor Pipeline', icon: '⚡' },
+    { id: 'SubLedgerDashboard', label: 'Sub-Ledger Dashboard', icon: '�' },
     { id: 'AccountingHeaders', label: 'Accounting Headers', icon: '📋' },
   ];
 

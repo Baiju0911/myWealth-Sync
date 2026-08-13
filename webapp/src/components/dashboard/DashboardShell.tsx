@@ -2,7 +2,8 @@ import type { AppView } from '../../App.tsx';
 import { 
   MasterInstitutionsContainer, 
   AccountingHeaders, 
-  UnifiedStatementPipeline 
+  UnifiedStatementPipeline,
+  SubLedgerDashboard,
 } from '../../views'; 
 
 interface ShellProps {
@@ -40,7 +41,10 @@ export default function DashboardShell({ currentView }: ShellProps) {
 
       case 'AccountingHeaders':
         return <AccountingHeaders />;
-        
+      
+      case 'SubLedgerDashboard':
+        return <SubLedgerDashboard />;
+
       case 'unifiedPipeline':
    //   case 'ingestDynamicBulk':
     //  case 'StagingQueueEvaluator':

@@ -1,7 +1,7 @@
 // src/hooks/useAccountsCrud.ts
 import { useState, useEffect } from 'react';
 import { type BankEntity, type AccountEntity } from '../types/ledger';
-import { accountApi, bankApi } from '../api';
+import { accountApi, bankApi } from '../api/api';
 
 export function useAccountsCrud() {
   const [banks, setBanks] = useState<BankEntity[]>([]);

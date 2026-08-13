@@ -6,7 +6,7 @@ import {
   executeBulkSweep, 
   removePatternFromRule, bulkRemovePatternsFromRules,
   type SweepMatchGroup 
-} from '../api';
+} from '../api/api';
 
 interface BulkSweephubModalProps {
   isOpen: boolean;

@@ -10,7 +10,7 @@ import {
   type TaxonomyOption, 
   type ExtendedCluster,
   type Cluster,
-} from '../api';
+} from '../api/api';
 
 import { calculateSelectedMetrics, filterClustersByQuery } from '../utils/classificationHelpers';
 import { ClusterListPanel } from '../components/classification/ClusterListPanel';

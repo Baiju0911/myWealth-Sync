@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { accountApi } from '../api.ts';
+import { accountApi } from '../api/api.ts';
 import api from '../api/client';
 import { type AccountEntity } from '../types/ledger';
 import type { DragEvent } from 'react';

@@ -441,6 +441,28 @@ def apply_reclassification_and_learn(request):
 
 
 @api_view(["GET"])
+def get_taxonomy_nodes_Assetview(request):
+    """
+    Returns active TaxonomyTree nodes with Primary Keys (IDs) for Sub-Ledger linking.
+    """
+    nodes = TaxonomyTree.objects.filter(is_active=True)
+
+    tree_dict = {}
+    for node in nodes:
+        if node.category not in tree_dict:
+            tree_dict[node.category] = []
+        tree_dict[node.category].append(
+            {"id": node.id, "subcategory": node.subcategory}
+        )
+
+    taxonomy_data = [
+        {"category": cat, "subcategories": subs} for cat, subs in tree_dict.items()
+    ]
+
+    return Response({"status": "success", "taxonomy": taxonomy_data})
+
+
+@api_view(["GET"])
 def get_taxonomy_tree_view(request):
     """
     Returns active category & subcategory tree for dropdown selection in the UI.
