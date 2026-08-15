@@ -1,25 +1,92 @@
 import uuid
-from decimal import Decimal
 from datetime import timedelta
+from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
-from django.core.validators import MinValueValidator, MaxValueValidator
+
+from ..subledgers.services import (
+    AssetCandidateMatcher as ServiceCandidateMatcher,
+)
 
 # ============================================================================
-# 1. ENUMS & CHOICES
+# 1. DYNAMIC ASSET CATEGORY TABLE (LOOKUP & TAXONOMY BRIDGE)
 # ============================================================================
 
 
-class AssetCategory(models.TextChoices):
+class AssetCategory(models.Model):
+    """Dynamic Asset Category Lookup Table.
+
+    Uses an explicit primary key ID (1, 2, 3...) to allow full runtime CRUD
+    operations without breaking foreign key relationships or requiring DB
+    migrations when adding new categories.
+    """
+
+    id = models.AutoField(primary_key=True)
+    code = models.CharField(
+        max_length=50,
+        unique=True,
+        db_index=True,
+        help_text="System key code, e.g., REAL_ESTATE, FIXED_DEPOSIT",
+    )
+    name = models.CharField(
+        max_length=100,
+        help_text="Display label, e.g., Real Estate & Land, Fixed Deposit (FD)",
+    )
+
+    # 🎯 Single Source of Truth Alignment with Taxonomy Breakdown Matrix
+    default_taxonomy_category = models.CharField(
+        max_length=100,
+        default="Asset",
+        help_text="Primary taxonomy class, e.g., Asset, Liability",
+    )
+    default_taxonomy_subcategory = models.CharField(
+        max_length=100,
+        help_text="Exact subcategory matching Dashboard matrix, e.g., Real Estate, Fixed Deposits",
+    )
+
+    # Optional direct link to TaxonomyTree chart of accounts
+    linked_gl_account = models.ForeignKey(
+        "TaxonomyTree",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="asset_categories",
+        help_text="Default Chart of Accounts node for this category",
+    )
+
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ledger_asset_category"
+        verbose_name = "Asset Category"
+        verbose_name_plural = "Asset Categories"
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"[{self.id}] {self.name} ({self.default_taxonomy_subcategory})"
+
+
+# Legacy TextChoices retained for backwards compatibility / fallback references
+class AssetCategoryChoices(models.TextChoices):
     REAL_ESTATE = "REAL_ESTATE", "Real Estate & Land"
     FIXED_DEPOSIT = "FIXED_DEPOSIT", "Fixed Deposit (FD)"
     RECURRING_DEPOSIT = "RECURRING_DEPOSIT", "Recurring Deposit (RD)"
     MARKET_INVESTMENT = "MARKET_INVESTMENT", "Stocks, Mutual Funds & ETFs"
-    PENSION_RETIREMENT = "PENSION_RETIREMENT", "Pension & Retirement (NPS, PPF, EPF)"
+    PENSION_RETIREMENT = (
+        "PENSION_RETIREMENT",
+        "Pension & Retirement (NPS, PPF, EPF)",
+    )
     INSURANCE_PLAN = "INSURANCE_PLAN", "Life & Endowment Insurance"
     VEHICLE = "VEHICLE", "Vehicles & Transport"
     PRECIOUS_METALS = "PRECIOUS_METALS", "Gold, Silver & SGBs"
-    PERSONAL_RECEIVABLE = "PERSONAL_RECEIVABLE", "Personal Loan Given / Receivable"
+    PERSONAL_RECEIVABLE = (
+        "PERSONAL_RECEIVABLE",
+        "Personal Loan Given / Receivable",
+    )
 
 
 class OwnershipType(models.TextChoices):
@@ -38,11 +105,17 @@ class AssetStatus(models.TextChoices):
 
 
 class ServiceProviderType(models.TextChoices):
-    PROPERTY_TAX = "PROPERTY_TAX", "Local Body Property Tax (Panchayat/Corporation)"
+    PROPERTY_TAX = (
+        "PROPERTY_TAX",
+        "Local Body Property Tax (Panchayat/Corporation)",
+    )
     LAND_REVENUE_TAX = "LAND_REVENUE_TAX", "Land Revenue Tax (Thandaper)"
     ELECTRICITY = "ELECTRICITY", "Electricity Board (e.g., KSEB)"
     WATER = "WATER", "Water Authority (e.g., KWA)"
-    BUILDING_MAINTENANCE = "BUILDING_MAINTENANCE", "Resident Association / Maintenance"
+    BUILDING_MAINTENANCE = (
+        "BUILDING_MAINTENANCE",
+        "Resident Association / Maintenance",
+    )
     INSURANCE = "INSURANCE", "Asset / Liability Insurance"
     GAS = "GAS", "Piped Gas / LPG Connection"
 
@@ -71,10 +144,10 @@ class RecurrencePattern(models.TextChoices):
 
 
 class AssetSubLedger(models.Model):
-    """
-    Master Asset Register & Sub-Ledger Hub.
-    Holds core financial valuations, ownership split, and category-specific
-    operational details in a structured JSON payload.
+    """Master Asset Register & Sub-Ledger Hub.
+
+    Holds core financial valuations, ownership split, dynamic asset category
+    pointers, and category-specific operational details in JSON payload.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -82,13 +155,25 @@ class AssetSubLedger(models.Model):
         max_length=32,
         unique=True,
         db_index=True,
-        help_text="Human-readable code, e.g., AST-RE-001 or AST-NPS-002",
+        help_text="Human-readable code, e.g., AST-RE-001 or AST-FD-002",
     )
     name = models.CharField(
         max_length=255, help_text="Display title, e.g., 'Ulloor Plot & House'"
     )
+
+    # 🎯 Linked to dynamic AssetCategory model with explicit integer PK
+    asset_category = models.ForeignKey(
+        AssetCategory,
+        on_delete=models.PROTECT,
+        related_name="subledger_assets",
+        null=True,
+        blank=True,
+        help_text="Foreign key to dynamic AssetCategory table",
+    )
+
+    # Fallback legacy string category column
     category = models.CharField(
-        max_length=32, choices=AssetCategory.choices, db_index=True
+        max_length=32, choices=AssetCategoryChoices.choices, db_index=True
     )
 
     # 🏛️ Financial Valuation & Cost Basis
@@ -103,7 +188,9 @@ class AssetSubLedger(models.Model):
 
     # 👥 Ownership Matrix
     ownership_type = models.CharField(
-        max_length=20, choices=OwnershipType.choices, default=OwnershipType.INDIVIDUAL
+        max_length=20,
+        choices=OwnershipType.choices,
+        default=OwnershipType.INDIVIDUAL,
     )
     ownership_share_pct = models.DecimalField(
         max_digits=5,
@@ -132,11 +219,6 @@ class AssetSubLedger(models.Model):
     )
 
     # 🎨 Deep Dynamic Category Metadata Repository
-    # Stores:
-    # - Real Estate: {sale_deed_no, sro_name, survey_no, thandaper_no, area_sqft}
-    # - Pension/NPS: {pran_number, tier_type, pfm_name, equity_pct, corporate_pct, govt_pct}
-    # - Fixed Deposit: {fd_receipt_no, bank_branch, ifsc, interest_rate, maturity_date}
-    # - Vehicle: {registration_no, chassis_no, engine_no, rc_doc_id}
     metadata_payload = models.JSONField(
         default=dict,
         blank=True,
@@ -151,11 +233,17 @@ class AssetSubLedger(models.Model):
         verbose_name_plural = "Asset Sub-Ledger Registry"
         indexes = [
             models.Index(fields=["category", "status"]),
+            models.Index(fields=["asset_category", "status"]),
             models.Index(fields=["asset_code"]),
         ]
 
     def __str__(self):
-        return f"[{self.asset_code}] {self.name} ({self.get_category_display()})"
+        cat_name = (
+            self.asset_category.name
+            if self.asset_category
+            else self.get_category_display()
+        )
+        return f"[{self.asset_code}] {self.name} ({cat_name})"
 
 
 # ============================================================================
@@ -164,14 +252,16 @@ class AssetSubLedger(models.Model):
 
 
 class AssetOperationalAccount(models.Model):
-    """
-    Stores utility consumer numbers, local tax assessment IDs, meter numbers,
+    """Stores utility consumer numbers, local tax assessment IDs, meter numbers,
+
     and matching keywords used for auto-identifying bank statement lines.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     asset = models.ForeignKey(
-        AssetSubLedger, on_delete=models.CASCADE, related_name="operational_accounts"
+        AssetSubLedger,
+        on_delete=models.CASCADE,
+        related_name="operational_accounts",
     )
     service_type = models.CharField(
         max_length=32, choices=ServiceProviderType.choices, db_index=True
@@ -181,7 +271,8 @@ class AssetOperationalAccount(models.Model):
         help_text="e.g., KSEB, KWA, Trivandrum Corporation, Revenue Dept",
     )
     consumer_identifier = models.CharField(
-        max_length=64, help_text="Consumer No / Building Assessment No / Thandaper No"
+        max_length=64,
+        help_text="Consumer No / Building Assessment No / Thandaper No",
     )
     meter_number = models.CharField(max_length=64, blank=True, null=True)
     matching_keyword = models.CharField(
@@ -207,14 +298,16 @@ class AssetOperationalAccount(models.Model):
 
 
 class AssetComplianceSchedule(models.Model):
-    """
-    Drives monthly/yearly reminders for property taxes, utility bills,
-    SIPs, and pension contributions.
+    """Drives monthly/yearly reminders for property taxes, utility bills, SIPs,
+
+    and pension contributions.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     asset = models.ForeignKey(
-        AssetSubLedger, on_delete=models.CASCADE, related_name="compliance_schedules"
+        AssetSubLedger,
+        on_delete=models.CASCADE,
+        related_name="compliance_schedules",
     )
     operational_account = models.ForeignKey(
         AssetOperationalAccount,
@@ -247,7 +340,6 @@ class AssetComplianceSchedule(models.Model):
     is_paid = models.BooleanField(default=False, db_index=True)
     paid_at = models.DateTimeField(null=True, blank=True)
 
-    # 🔗 Links directly to journal entry row once settled
     linked_row_identifier = models.CharField(
         max_length=64, blank=True, null=True, db_index=True
     )
@@ -271,23 +363,30 @@ class AssetComplianceSchedule(models.Model):
 
 
 class AssetTransactionMapping(models.Model):
-    """
-    Binds a raw bank statement transaction (row_identifier) or manual cash entry
-    directly to an Asset Sub-Ledger item and operational account.
+    """Binds a raw bank statement transaction (row_identifier) or manual cash
+
+    entry directly to an Asset Sub-Ledger item and operational account.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     asset = models.ForeignKey(
-        AssetSubLedger, on_delete=models.PROTECT, related_name="transaction_mappings"
+        AssetSubLedger,
+        on_delete=models.PROTECT,
+        related_name="transaction_mappings",
     )
     operational_account = models.ForeignKey(
-        AssetOperationalAccount, on_delete=models.SET_NULL, null=True, blank=True
+        AssetOperationalAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
     )
     schedule = models.ForeignKey(
-        AssetComplianceSchedule, on_delete=models.SET_NULL, null=True, blank=True
+        AssetComplianceSchedule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
     )
 
-    # 🛡️ Link to General Ledger Journal Entry
     row_identifier = models.CharField(
         max_length=64,
         db_index=True,
@@ -325,90 +424,7 @@ class AssetTransactionMapping(models.Model):
 
 
 class AssetCandidateMatcher:
-    """
-    Implements your ±5 to ±10 day sliding window algorithm to rank candidate
-    bank statement rows for document binding.
-    """
 
     @staticmethod
-    def find_candidate_rows(
-        document_date,
-        target_amount,
-        account_id=None,
-        keywords=None,
-        day_window=10,
-        amount_tolerance_pct=Decimal("0.0"),
-    ):
-        """
-        Queries unmapped ledger_journal_entry rows within ±day_window of document_date
-        and returns scored results sorted by probability.
-        """
-        from tracker.models import (
-            JournalEntry,
-        )  # Import inside method to avoid circular import
-
-        start_date = document_date - timedelta(days=day_window)
-        end_date = document_date + timedelta(days=day_window)
-
-        query = JournalEntry.objects.filter(
-            transaction_date__gte=start_date,
-            transaction_date__lte=end_date,
-        )
-
-        if account_id:
-            query = query.filter(account_id=account_id)
-
-        target_amount = Decimal(str(target_amount))
-        min_amount = target_amount * (Decimal("1") - amount_tolerance_pct)
-        max_amount = target_amount * (Decimal("1") + amount_tolerance_pct)
-
-        query = query.filter(
-            models.Q(debit__range=(min_amount, max_amount))
-            | models.Q(credit__range=(min_amount, max_amount))
-        )
-
-        candidates = []
-
-        for entry in query:
-            score = 0
-            entry_val = entry.debit if entry.debit > 0 else entry.credit
-
-            # 1. Amount Score (50 Pts)
-            if entry_val == target_amount:
-                score += 50
-            else:
-                score += 35
-
-            # 2. Date Proximity Score (30 Pts)
-            date_diff = abs((entry.transaction_date - document_date).days)
-            if date_diff == 0:
-                score += 30
-            elif date_diff <= 3:
-                score += 20
-            elif date_diff <= 7:
-                score += 15
-            else:
-                score += 10
-
-            # 3. Keyword Match Score (20 Pts)
-            raw_remarks = str(entry.remarks).upper()
-            if keywords:
-                matched = [kw for kw in keywords if kw.upper() in raw_remarks]
-                if matched:
-                    score += 20
-
-            candidates.append(
-                {
-                    "journal_id": str(entry.id),
-                    "row_identifier": entry.row_identifier,
-                    "account_id": entry.account_id,
-                    "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-                    "date_offset_days": (entry.transaction_date - document_date).days,
-                    "debit": float(entry.debit),
-                    "credit": float(entry.credit),
-                    "remarks": entry.remarks,
-                    "probability_score": min(score, 100),
-                }
-            )
-
-        return sorted(candidates, key=lambda x: x["probability_score"], reverse=True)
+    def find_candidate_rows(*args, **kwargs):
+        return ServiceCandidateMatcher.find_candidate_rows(*args, **kwargs)
