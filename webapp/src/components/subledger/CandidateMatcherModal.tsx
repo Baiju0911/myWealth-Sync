@@ -28,7 +28,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
   const [documentDate, setDocumentDate] = useState<string>('');
   const [targetAmount, setTargetAmount] = useState<number | string>('');
   const [keywords, setKeywords] = useState<string>('');
-  const [dayWindow, setDayWindow] = useState<number>(10);
+  const [dayWindow, setDayWindow] = useState<number>(30); // Default to 30D
 
   // Engine State
   const [loading, setLoading] = useState<boolean>(false);
@@ -38,6 +38,29 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
   const [isCash, setIsCash] = useState<boolean>(false);
   const [userNote, setUserNote] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+
+  // Preset search horizon definitions
+  const horizonPresets = [
+    { label: '30D', value: 30 },
+    { label: '60D', value: 60 },
+    { label: '90D', value: 90 },
+    { label: '6M', value: 180 },
+    { label: '1Y', value: 365 },
+    { label: '2Y', value: 730 },
+    { label: 'Till Today', value: 1825 }, // ~5 years
+  ];
+
+  // Isolated ESC Key Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    if (isOpen) window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // 🎯 Auto-initialize defaults and trigger candidate scan when modal opens
   useEffect(() => {
@@ -102,7 +125,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
     const cleanAmount =
       !isNaN(parsedAmount) && parsedAmount > 0 ? parsedAmount : null;
 
-    // 🎯 Pass asset_id so backend pulls already-bound records directly
     const payload = {
       asset_id: asset.id,
       document_date: formattedDate,
@@ -145,7 +167,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
         mapping_id: cand.mapping_info.mapping_id,
       });
 
-      // Refresh list after unmapping
       runScan(documentDate, targetAmount, keywords, dayWindow);
       onSuccess();
     } catch (err: any) {
@@ -176,12 +197,10 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
     }
   };
 
-  // 🧮 Compute total sum of checked candidate rows
   const selectedTotalSum = candidates
     .filter((c) => selectedRowIds.includes(c.row_identifier))
     .reduce((acc, curr) => acc + Number(curr.debit || curr.credit || 0), 0);
 
-  // ⚡ Single or Multi-Row Batch Bind Handler
   const handleBatchBind = async (targetCandidate?: CandidateMatchResult) => {
     setBinding(true);
     setError(null);
@@ -245,12 +264,21 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
   const unmappedCandidates = candidates.filter((c) => !c.is_mapped_to_this_asset);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-3xl rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl text-slate-100">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <div 
+        className="w-full max-w-3xl rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl text-slate-100 font-sans"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal Header */}
         <div className="flex items-start justify-between border-b border-slate-800 pb-4">
           <div>
-            <span className="text-xs font-semibold tracking-wider text-emerald-400 uppercase">
+            <span className="text-xs font-semibold tracking-wider text-emerald-400 uppercase font-mono">
               Sub-Ledger Post-Facto Reconciler
             </span>
             <h2 className="text-xl font-bold text-white">
@@ -259,15 +287,19 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
             <p className="text-xs text-slate-400">
               Asset Code: <span className="font-mono text-slate-200">{asset.asset_code}</span>
               {utility && (
-                <span className="ml-2 text-emerald-400">
+                <span className="ml-2 text-emerald-400 font-mono">
                   • Target Utility: {utility.provider_name} ({utility.consumer_identifier})
                 </span>
               )}
             </p>
           </div>
           <button
-            onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
           >
             ✕
           </button>
@@ -281,7 +313,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
               type="date"
               value={documentDate}
               onChange={(e) => setDocumentDate(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none font-mono"
             />
           </div>
 
@@ -293,7 +325,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
               placeholder="0.00"
               value={targetAmount}
               onChange={(e) => setTargetAmount(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none font-mono"
             />
           </div>
 
@@ -304,7 +336,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
               placeholder="e.g. KSEB, ULLOOR, TAX"
               value={keywords}
               onChange={(e) => setKeywords(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none font-mono"
             />
           </div>
 
@@ -312,36 +344,43 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+              className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 cursor-pointer transition-colors"
             >
               {loading ? 'Scanning...' : 'Re-Scan'}
             </button>
           </div>
 
-          {/* Sliding Day Window Slider */}
-          <div className="col-span-12 flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2">
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-slate-400">Sliding Date Window:</span>
-              <input
-                type="range"
-                min="3"
-                max="30"
-                value={dayWindow}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setDayWindow(val);
-                  runScan(documentDate, targetAmount, keywords, val);
-                }}
-                className="accent-emerald-500 cursor-pointer"
-              />
-              <span className="font-mono text-xs text-emerald-400">±{dayWindow} days</span>
+          {/* Preset Horizon Pill Bar */}
+          <div className="col-span-12 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-800/50 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-400 font-medium">Search Horizon:</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {horizonPresets.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => {
+                      setDayWindow(preset.value);
+                      runScan(documentDate, targetAmount, keywords, preset.value);
+                    }}
+                    className={`rounded px-2.5 py-1 font-mono text-[11px] font-bold cursor-pointer transition-all ${
+                      dayWindow === preset.value
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm scale-105'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+
+            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={isCash}
                 onChange={(e) => setIsCash(e.target.checked)}
-                className="rounded accent-emerald-500"
+                className="rounded accent-emerald-500 cursor-pointer"
               />
               Direct Cash / Manual Payment
             </label>
@@ -363,30 +402,31 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
                 This transaction will be logged directly to the asset sub-ledger without linking to bank statement staging lines.
               </p>
               <button
+                type="button"
                 onClick={() => handleBatchBind()}
                 disabled={binding}
-                className="mt-4 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                className="mt-4 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50 cursor-pointer transition-colors"
               >
                 {binding ? 'Binding Cash Entry...' : 'Confirm Cash Payment & Clear Due'}
               </button>
             </div>
           ) : loading ? (
-            <div className="p-8 text-center text-sm text-slate-400">
+            <div className="p-8 text-center text-sm text-slate-400 font-mono">
               ⚡ Running candidate lookup & staging matcher...
             </div>
           ) : candidates.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-400">
-              No matching bank staging rows found for "{keywords}" within ±{dayWindow} days.
+            <div className="p-8 text-center text-sm text-slate-400 font-mono">
+              No matching bank staging rows found for "{keywords}" within the selected window.
               <br />
               <span className="text-xs text-slate-500">
-                Try broadening keywords or increasing the sliding date window.
+                Try broadening keywords or selecting a larger search horizon (e.g. 6M, 1Y, Till Today).
               </span>
             </div>
           ) : (
             <div>
               {/* Batch Action Header Bar */}
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs px-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none text-slate-400">
+                <label className="flex items-center gap-2 cursor-pointer select-none text-slate-400 font-mono">
                   <input
                     type="checkbox"
                     checked={
@@ -394,14 +434,13 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
                       selectedRowIds.length === unmappedCandidates.length
                     }
                     onChange={toggleSelectAll}
-                    className="rounded accent-emerald-500"
+                    className="rounded accent-emerald-500 cursor-pointer"
                   />
                   <span>
                     Select Unmapped ({selectedRowIds.length}/{unmappedCandidates.length})
                   </span>
                 </label>
 
-                {/* Live Selected Total */}
                 {selectedRowIds.length > 0 && (
                   <div className="flex items-center gap-2 font-mono text-emerald-400 font-semibold">
                     <span>Selected Total:</span>
@@ -413,9 +452,10 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
 
                 {selectedRowIds.length > 0 && (
                   <button
+                    type="button"
                     onClick={() => handleBatchBind()}
                     disabled={binding}
-                    className="rounded bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                    className="rounded bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors cursor-pointer"
                   >
                     {binding ? 'Binding...' : `⚡ Bind Selected (${selectedRowIds.length})`}
                   </button>
@@ -464,7 +504,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
                           : 'border-slate-800 bg-slate-900 hover:border-slate-700'
                       }`}
                     >
-                      {/* Checkbox + Metadata */}
                       <div className="flex items-start gap-2.5 min-w-0 flex-1">
                         {!isBoundToAsset && (
                           <input
@@ -498,7 +537,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
                             </span>
                             
                             {!isBoundToAsset && (
-                              <span className="text-[10px] text-slate-500">
+                              <span className="text-[10px] text-slate-500 font-mono">
                                 ({cand.date_offset_days > 0 ? `+${cand.date_offset_days}` : cand.date_offset_days}d offset)
                               </span>
                             )}
@@ -513,7 +552,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Right Side: Amount & Actions */}
                       <div className="flex shrink-0 flex-col items-end justify-between pl-2 border-l border-slate-800">
                         <div className="font-mono text-xs font-bold text-emerald-400">
                           ₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -521,17 +559,19 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
 
                         {isBoundToAsset ? (
                           <button
+                            type="button"
                             onClick={() => handleUnmap(cand)}
                             disabled={binding}
-                            className="mt-1.5 rounded bg-rose-600/80 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-rose-500 disabled:opacity-50 transition-colors"
+                            className="mt-1.5 rounded bg-rose-600/80 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-rose-500 disabled:opacity-50 cursor-pointer transition-colors font-mono"
                           >
                             {binding ? 'Working...' : 'Disconnect'}
                           </button>
                         ) : (
                           <button
+                            type="button"
                             onClick={() => handleBatchBind(cand)}
                             disabled={binding}
-                            className="mt-1.5 rounded bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                            className="mt-1.5 rounded bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 cursor-pointer transition-colors font-mono"
                           >
                             {binding ? 'Binding...' : '⚡ Bind'}
                           </button>
@@ -552,7 +592,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = ({
             placeholder="Audit Note (e.g. Cleared via KSEB Online Portal / Trivandrum Corp)"
             value={userNote}
             onChange={(e) => setUserNote(e.target.value)}
-            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none font-mono"
           />
         </div>
       </div>

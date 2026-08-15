@@ -1,11 +1,38 @@
 from rest_framework import serializers
+
+from ..models.models import TaxonomyTree
 from ..models.subledger import (
-    AssetSubLedger,
-    AssetOperationalAccount,
+    AssetCategory,
     AssetComplianceSchedule,
+    AssetOperationalAccount,
+    AssetSubLedger,
     AssetTransactionMapping,
 )
-from ..models.models import TaxonomyTree
+
+# ============================================================================
+# 1. DYNAMIC ASSET CATEGORY SERIALIZER
+# ============================================================================
+
+
+class AssetCategorySerializer(serializers.ModelSerializer):
+    """Serializes dynamic AssetCategory lookup instances."""
+
+    class Meta:
+        model = AssetCategory
+        fields = [
+            "id",
+            "code",
+            "name",
+            "default_taxonomy_category",
+            "default_taxonomy_subcategory",
+            "linked_gl_account",
+            "is_active",
+        ]
+
+
+# ============================================================================
+# 2. OPERATIONAL ACCOUNTS & SCHEDULES
+# ============================================================================
 
 
 class AssetOperationalAccountSerializer(serializers.ModelSerializer):
@@ -31,6 +58,11 @@ class AssetComplianceScheduleSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+# ============================================================================
+# 3. MASTER ASSET SUB-LEDGER SERIALIZER
+# ============================================================================
+
+
 class AssetSubLedgerSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(
         source="get_category_display", read_only=True
@@ -40,7 +72,19 @@ class AssetSubLedgerSerializer(serializers.ModelSerializer):
         source="get_ownership_type_display", read_only=True
     )
 
-    # 🎯 PrimaryKeyRelatedField now cleanly handles the TaxonomyTree UUID!
+    # 🎯 Primary Key Foreign Key for writing (POST/PUT accepts asset_category ID)
+    asset_category = serializers.PrimaryKeyRelatedField(
+        queryset=AssetCategory.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    # 🎯 Nested read-only detail object for rich frontend representation
+    asset_category_detail = AssetCategorySerializer(
+        source="asset_category", read_only=True
+    )
+
+    # SlugRelatedField cleanly handles TaxonomyTree UUID resolution by subcategory name
     linked_gl_account = serializers.SlugRelatedField(
         slug_field="subcategory",
         queryset=TaxonomyTree.objects.all(),
@@ -56,23 +100,13 @@ class AssetSubLedgerSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-# class CandidateMatchRequestSerializer(serializers.Serializer):
-#     document_date = serializers.DateField(required=True)  # Parses YYYY-MM-DD
-#     target_amount = serializers.DecimalField(
-#         max_digits=15,
-#         decimal_places=2,
-#         required=False,
-#         allow_null=True,
-#     )
-#     account_id = serializers.IntegerField(required=False, allow_null=True)
-#     keywords = serializers.ListField(
-#         child=serializers.CharField(), required=False, default=list
-#     )
-#     day_window = serializers.IntegerField(default=10, min_value=1, max_value=60)
+# ============================================================================
+# 4. ACTION & MATCHING REQUEST SERIALIZERS
+# ============================================================================
 
 
 class CandidateMatchRequestSerializer(serializers.Serializer):
-    document_date = serializers.DateField(required=True)  # Parses YYYY-MM-DD
+    document_date = serializers.DateField(required=True)
     target_amount = serializers.DecimalField(
         max_digits=15,
         decimal_places=2,
@@ -80,13 +114,13 @@ class CandidateMatchRequestSerializer(serializers.Serializer):
         allow_null=True,
     )
     account_id = serializers.IntegerField(required=False, allow_null=True)
-    asset_id = serializers.CharField(
-        required=False, allow_null=True, allow_blank=True
-    )  # 👈 Added asset_id (supports UUID or Integer primary keys)
+    asset_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     keywords = serializers.ListField(
         child=serializers.CharField(), required=False, default=list
     )
-    day_window = serializers.IntegerField(default=10, min_value=1, max_value=60)
+    day_window = serializers.IntegerField(
+        default=10, min_value=1, max_value=3650, required=False
+    )
 
 
 class BindRowRequestSerializer(serializers.Serializer):
