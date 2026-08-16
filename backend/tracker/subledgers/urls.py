@@ -7,6 +7,7 @@ from .subledgerViews import (
     AssetComplianceScheduleViewSet,
     SubledgerMetadataView,
     SubledgerSubcategoryBreakdownView,
+    VendorViewSet,
 )
 
 router = DefaultRouter()
@@ -21,6 +22,7 @@ router.register(
     AssetComplianceScheduleViewSet,
     basename="subledger-schedules",
 )
+router.register(r"vendors", VendorViewSet, basename="vendor")
 
 urlpatterns = [
     # 🎯 Direct endpoints (no redundant 'subledgers/' prefix here)

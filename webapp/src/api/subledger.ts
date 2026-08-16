@@ -120,6 +120,7 @@ export interface AssetSubLedgerPayload {
   name: string;
   asset_category_id?: number; // Foreign Key to AssetCategory
   category?: AssetCategoryType; // Legacy fallback
+  vendor?: string | null; // 🎯 Foreign Key UUID to Vendor master table
   acquisition_date: string;
   acquisition_cost: number | string;
   current_valuation: number | string;
@@ -128,11 +129,13 @@ export interface AssetSubLedgerPayload {
   status: AssetStatusType;
   linked_gl_account?: number | string | null;
   metadata_payload?: Record<string, any>;
+  user_note?: string; // Optional user note for asset
 }
 
 export interface AssetSubLedgerNode extends AssetSubLedgerPayload {
   id: string;
   asset_category_detail?: AssetCategoryNode;
+  vendor_detail?: Vendor | null; // 🎯 Nested Vendor object returned by DRF serializer
   category_display?: string;
   status_display?: string;
   ownership_type_display?: string;
@@ -140,6 +143,8 @@ export interface AssetSubLedgerNode extends AssetSubLedgerPayload {
   created_at?: string;
   operational_accounts: AssetOperationalAccount[];
   compliance_schedules: AssetComplianceSchedule[];
+  mapped_total?: number | string;
+  bound_rows_count?: number;
 }
 
 export interface CandidateMatchQuery {
@@ -187,6 +192,7 @@ export interface BindTransactionPayload {
   amount: number | string;
   transaction_purpose: string;
   user_note?: string;
+  sync_acquisition_cost?: boolean;
 }
 
 export interface BindTransactionResponse {
@@ -239,8 +245,27 @@ export interface CandidateMatchPayload {
   day_window?: number;
   keywords?: string[];
 }
+export interface Vendor {
+  id: string;
+  name: string;
+  code?: string;
+  default_keywords?: string[];
+}
 
 export const subledgerApi = {
+  getVendors: async (): Promise<Vendor[]> => {
+    const res = await api.get('/subledgers/vendors/');
+    return res.data;
+  },
+
+  createVendor: async (payload: {
+    name: string;
+    default_keywords?: string[];
+  }): Promise<Vendor> => {
+    const res = await api.post('/subledgers/vendors/', payload);
+    return res.data;
+  },
+
   /**
    * 🌐 GET: Dynamic Asset Categories & Subledger-Capable Subcategories
    */
@@ -295,7 +320,7 @@ export const subledgerApi = {
     id: string,
     payload: Partial<AssetSubLedgerPayload>
   ): Promise<AssetSubLedgerNode> => {
-    const res = await api.put<AssetSubLedgerNode>(
+    const res = await api.patch<AssetSubLedgerNode>(
       `/subledgers/assets/${id}/`,
       payload
     );
