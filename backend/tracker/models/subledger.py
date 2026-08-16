@@ -141,6 +141,23 @@ class RecurrencePattern(models.TextChoices):
 # ============================================================================
 # 2. MASTER ASSET SUB-LEDGER
 # ============================================================================
+class Vendor(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=150, unique=True)  # e.g., "Bhima Jewels"
+    code = models.CharField(
+        max_length=50, blank=True, null=True, unique=True
+    )  # e.g., "VND-BHIMA"
+    default_keywords = models.JSONField(
+        default=list, blank=True
+    )  # e.g., ["Bhima", "BHIMA JEWELLERY"]
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
 
 
 class AssetSubLedger(models.Model):
@@ -206,6 +223,9 @@ class AssetSubLedger(models.Model):
         choices=AssetStatus.choices,
         default=AssetStatus.ACTIVE,
         db_index=True,
+    )
+    vendor = models.ForeignKey(
+        Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name="assets"
     )
 
     # 🔗 Link to General Ledger Balance Sheet Account

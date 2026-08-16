@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { 
   AlertTriangle, 
@@ -57,12 +56,12 @@ export const LedgerDashboard: React.FC = () => {
   // State for Smart Sweep Hub Modal
   const [isSweepHubOpen, setIsSweepHubOpen] = useState<boolean>(false);
 
-  // 🎯 Subledger Capabilities & Drawer States (Dynamic Source of Truth)
+  // 🎯 Subledger Capabilities & Drawer States
   const [isSubledgerDrawerOpen, setIsSubledgerDrawerOpen] = useState<boolean>(false);
   const [selectedSubcategoryForSubledger, setSelectedSubcategoryForSubledger] = useState<string | null>(null);
   const [subledgerCapableSet, setSubledgerCapableSet] = useState<Set<string>>(new Set());
 
-  // 🟢 CSV Export Utility
+  // CSV Export Utility
   const exportToCSV = (exportData: any[], filenamePrefix: string) => {
     if (!exportData || !exportData.length) return;
 
@@ -131,11 +130,9 @@ export const LedgerDashboard: React.FC = () => {
     }
   }, []);
 
-  // 🎯 Reverted Row & Chart Click Handler -> Always opens Classification Workbench Modal
   const handleTaxonomyRowClick = useCallback((row: any) => {
     console.log('🔍 [Taxonomy Matrix Row Clicked]:', row);
 
-    // Extract clicked subcategory name
     const subcategory = row?.subcategory || row?.name || row?.payload?.subcategory || row?.payload?.name;
     
     console.log('📌 [Extracted Subcategory]:', subcategory);
@@ -145,7 +142,6 @@ export const LedgerDashboard: React.FC = () => {
       return;
     }
 
-    // Set the selected subcategory dynamically
     setSelectedSubcategoryForWorkbench(subcategory);
     setIsWorkbenchOpen(true);
   }, []);
@@ -406,7 +402,6 @@ export const LedgerDashboard: React.FC = () => {
       
       {/* 1. Header & Context Switcher */}
       <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full">
-        {/* Left Title Info */}
         <div className="space-y-0.5">
           <div className="flex items-center space-x-2">
             <Layers className="w-4 h-4 text-cyan-400" />
@@ -419,7 +414,6 @@ export const LedgerDashboard: React.FC = () => {
           </p>
         </div>
 
-        {/* Select Dropdown */}
         <div className="w-full md:w-72 font-mono text-xs ml-0 md:ml-6">
           <select
             value={selectedAccountId}
@@ -531,7 +525,6 @@ export const LedgerDashboard: React.FC = () => {
                 </p>
               </div>
 
-              {/* ⚡ SMART CLEARANCE HUB & KPI CSV EXPORT */}
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
@@ -546,7 +539,7 @@ export const LedgerDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsSweepHubOpen(true)}
-                 className="flex items-center gap-1.5 bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 px-3 py-1 rounded-lg text-xs font-mono font-bold shadow-lg transition-all cursor-pointer z-10"
+                  className="flex items-center gap-1.5 bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 px-3 py-1 rounded-lg text-xs font-mono font-bold shadow-lg transition-all cursor-pointer z-10"
                 >
                   <Zap className="w-3.5 h-3.5 fill-zinc-950 shrink-0" />
                   <span>Node 99 Rule Sweep Hub</span>
@@ -563,10 +556,7 @@ export const LedgerDashboard: React.FC = () => {
 
           {/* Interactive Inflow/Outflow Distribution Bar Chart */}
           <div className="bg-zinc-900/80 border border-zinc-800 p-4 rounded-xl shadow-md space-y-3">
-            
-            {/* Header with Class Selector Tabs */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
-              
               <div className="space-y-0.5">
                 <div className="flex items-center space-x-2">
                   <span className={`w-2 h-2 rounded-full animate-pulse ${
@@ -581,10 +571,7 @@ export const LedgerDashboard: React.FC = () => {
                 </p>
               </div>
 
-              {/* Segmented Control & Stat Pills */}
               <div className="flex flex-wrap items-center gap-2 font-mono">
-                
-                {/* Outflow vs Inflow Toggle Controls */}
                 <div className="bg-zinc-950 border border-zinc-800 p-0.5 rounded-lg flex items-center space-x-1 shadow-inner">
                   <button
                     type="button"
@@ -613,7 +600,6 @@ export const LedgerDashboard: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Stat Pill: Top Category */}
                 {chartData.length > 0 && (
                   <div className="bg-zinc-950/90 border border-zinc-800/90 px-3 py-1 rounded-lg flex flex-col justify-center space-y-0.5 shadow-inner">
                     <span className="text-zinc-500 text-[9px] uppercase tracking-wider block" style={{ fontWeight: 600 }}>
@@ -630,7 +616,6 @@ export const LedgerDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* Stat Pill: Total Analyzed */}
                 {chartData.length > 0 && (
                   <div className="bg-zinc-950/90 border border-zinc-800/90 px-3 py-1 rounded-lg flex flex-col justify-center space-y-0.5 shadow-inner">
                     <span className="text-zinc-500 text-[9px] uppercase tracking-wider block" style={{ fontWeight: 600 }}>
@@ -712,7 +697,6 @@ export const LedgerDashboard: React.FC = () => {
                 <p className="text-[11px] text-zinc-500 font-mono">Audited double-entry class breakdown across primary groups and subcategories.</p>
               </div>
 
-              {/* 🟢 CSV Export Button for Taxonomy Matrix */}
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
