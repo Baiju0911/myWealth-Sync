@@ -772,6 +772,126 @@ class JournalEntryMapping(models.Model):
         return f"Mapping -> {self.assigned_category.categories_items} (Rule: {self.applied_rule.rule_code if self.applied_rule else 'MANUAL'})"
 
 
+# class WIPEvaluationMatrix(models.Model):
+#     objects = BulkAuditManager()
+
+#     CONFIDENCE_CHOICES = [
+#         ("HIGH", "100% Validated (Staged for Bulk Approval)"),
+#         ("ZERO", "Validation Failed (Sent to Uncategorized Container)"),
+#     ]
+
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+#     # 🔗 Cloned Parent Identity Link from Staging row
+#     staging_line = models.ForeignKey(
+#         "StatementStagingLine", on_delete=models.CASCADE, related_name="wip_records"
+#     )
+
+#     # 🛡️ THE ARCHITECTURAL STATE Machine KEY
+#     # Generated exactly as: SHA256(date + dr + cr + running_balance) or inherited sequence
+#     row_footprint_hash = models.CharField(
+#         max_length=64,
+#         db_index=True,
+#         help_text="Cloned hash state footprint linking back to Staging line",
+#     )
+
+#     # 💼 Copied Structural Context Bindings
+#     account = models.ForeignKey("Account", on_delete=models.CASCADE)
+#     bank = models.ForeignKey("Bank", on_delete=models.CASCADE)
+#     raw_statement_date = models.DateField()
+#     narration_normalized = models.TextField(
+#         help_text="Cleaned, lowercase text token scanning target"
+#     )
+
+#     # 💰 Absolute Value Ledger Matrix Legs (No calculations inside table)
+#     debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+#     credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+
+#     # 🔀 Manual Split Layout Infrastructure
+#     parent_wip = models.ForeignKey(
+#         "self",
+#         on_delete=models.CASCADE,
+#         null=True,
+#         blank=True,
+#         related_name="split_children",
+#         help_text="Points to the parent container when split across multiple headers",
+#     )
+#     is_split_component = models.BooleanField(default=False)
+
+#     # 🤖 Three-Tier Verification Engine Mappings
+#     confidence_level = models.CharField(
+#         max_length=10, choices=CONFIDENCE_CHOICES, default="ZERO", db_index=True
+#     )
+#     matched_category = models.ForeignKey(
+#         "MasterFinancialCategory", on_delete=models.SET_NULL, null=True, blank=True
+#     )
+#     applied_rule = models.ForeignKey(
+#         "AccountingRule", on_delete=models.SET_NULL, null=True, blank=True
+#     )
+
+#     # 🛡️ Pipeline Auditing Flags
+#     tier_1_passed = models.BooleanField(default=False)
+#     tier_2_passed = models.BooleanField(default=False)
+#     tier_3_passed = models.BooleanField(default=False)
+#     evaluation_errors = models.JSONField(
+#         default=list,
+#         blank=True,
+#         help_text="Array listing gate block errors: ['UNMAPPED_PATTERN', 'MISALIGNED_HEADER']",
+#     )
+
+#     # 🎯 Tier 1: Pattern/Keyword Match Results
+#     t1_category = models.CharField(max_length=100, null=True, blank=True)
+#     t1_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+#     # 🎯 Tier 2: Dashboard Context Match Results
+#     t2_category = models.CharField(max_length=100, null=True, blank=True)
+#     t2_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+#     # 🎯 Tier 3: Accounting Golden Rule Match Results
+#     t3_category = models.CharField(max_length=100, null=True, blank=True)
+#     t3_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+#     # 🎯 Tier 4: Master Rulebook (52 Golden Rules Regex Search)
+#     t4_category = models.CharField(max_length=100, null=True, blank=True)
+#     t4_subcategory = models.CharField(max_length=100, null=True, blank=True)
+#     t4_passed = models.BooleanField(default=False)
+
+#     # 🎯 Tier 5: Local AI Memory & Hybrid SLM Classifier
+#     t5_category = models.CharField(max_length=100, null=True, blank=True)
+#     t5_subcategory = models.CharField(max_length=100, null=True, blank=True)
+#     t5_source = models.CharField(
+#         max_length=50,
+#         null=True,
+#         blank=True,
+#         help_text="Classification origin: 'vector_db_cache', 'ollama_slm', or 'bypassed'"
+#     )
+#     tier_5_passed = models.BooleanField(default=False)
+
+#     # 🏆 Final Resolved Winner (Calculated via Weightage Engine)
+#     resolved_category = models.CharField(max_length=100, null=True, blank=True)
+#     resolved_subcategory = models.CharField(max_length=100, null=True, blank=True)
+
+#     confidence_score = models.IntegerField(default=0)  # 0 to 100%
+#     confidence_level = models.CharField(
+#         max_length=10, default="ZERO"
+#     )  # HIGH, MEDIUM, ZERO
+
+#     processing_status = models.CharField(
+#         max_length=20,
+#         default="PENDING",
+#         choices=[("PENDING", "Pending Ledger Sync"), ("COMPLETED", "Synced to Ledger")],
+#     )
+
+#     class Meta:
+#         db_table = "ledger_wip_evaluation_matrix"
+#         verbose_name = "WIP Evaluation Matrix"
+#         verbose_name_plural = "WIP Evaluation Matrices"
+#         ordering = ["raw_statement_date"]
+
+#     def __str__(self):
+#         return f"WIP [{self.confidence_level}] - Hash: {self.row_footprint_hash[:8]} - DR: {self.debit} | CR: {self.credit}"
+
+
 class WIPEvaluationMatrix(models.Model):
     objects = BulkAuditManager()
 
@@ -787,8 +907,7 @@ class WIPEvaluationMatrix(models.Model):
         "StatementStagingLine", on_delete=models.CASCADE, related_name="wip_records"
     )
 
-    # 🛡️ THE ARCHITECTURAL STATE Machine KEY
-    # Generated exactly as: SHA256(date + dr + cr + running_balance) or inherited sequence
+    # 🛡️ Architectural State Machine Footprint Hash
     row_footprint_hash = models.CharField(
         max_length=64,
         db_index=True,
@@ -803,25 +922,21 @@ class WIPEvaluationMatrix(models.Model):
         help_text="Cleaned, lowercase text token scanning target"
     )
 
-    # 💰 Absolute Value Ledger Matrix Legs (No calculations inside table)
+    # 💰 Ledger Matrix Legs
     debit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
     credit = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
 
-    # 🔀 Manual Split Layout Infrastructure
+    # 🔀 Manual Split Infrastructure
     parent_wip = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
         null=True,
         blank=True,
         related_name="split_children",
-        help_text="Points to the parent container when split across multiple headers",
     )
     is_split_component = models.BooleanField(default=False)
 
-    # 🤖 Three-Tier Verification Engine Mappings
-    confidence_level = models.CharField(
-        max_length=10, choices=CONFIDENCE_CHOICES, default="ZERO", db_index=True
-    )
+    # 🤖 Verification Engine Mappings
     matched_category = models.ForeignKey(
         "MasterFinancialCategory", on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -829,36 +944,28 @@ class WIPEvaluationMatrix(models.Model):
         "AccountingRule", on_delete=models.SET_NULL, null=True, blank=True
     )
 
-    # 🛡️ Pipeline Auditing Flags
-    tier_1_passed = models.BooleanField(default=False)
-    tier_2_passed = models.BooleanField(default=False)
-    tier_3_passed = models.BooleanField(default=False)
+    # 🧩 CONSOLIDATED 5-TIER EVALUATION MATRIX SNAPSHOT (JSON)
+    # Stores t1, t2, t3, t4, and t5 AI outputs in one structured payload
+    matrix_evaluation = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="JSON payload containing t1..t5 tier breakdowns and system certainty scores",
+    )
+
     evaluation_errors = models.JSONField(
         default=list,
         blank=True,
-        help_text="Array listing gate block errors: ['UNMAPPED_PATTERN', 'MISALIGNED_HEADER']",
+        help_text="Array listing gate block errors",
     )
 
-    # 🎯 Tier 1: Pattern/Keyword Match Results
-    t1_category = models.CharField(max_length=100, null=True, blank=True)
-    t1_subcategory = models.CharField(max_length=100, null=True, blank=True)
-
-    # 🎯 Tier 2: Dashboard Context Match Results
-    t2_category = models.CharField(max_length=100, null=True, blank=True)
-    t2_subcategory = models.CharField(max_length=100, null=True, blank=True)
-
-    # 🎯 Tier 3: Accounting Golden Rule Match Results
-    t3_category = models.CharField(max_length=100, null=True, blank=True)
-    t3_subcategory = models.CharField(max_length=100, null=True, blank=True)
-
-    # 🏆 Final Resolved Winner (Calculated via Weightage Engine)
+    # 🏆 Final Resolved Winner
     resolved_category = models.CharField(max_length=100, null=True, blank=True)
     resolved_subcategory = models.CharField(max_length=100, null=True, blank=True)
 
     confidence_score = models.IntegerField(default=0)  # 0 to 100%
     confidence_level = models.CharField(
-        max_length=10, default="ZERO"
-    )  # HIGH, MEDIUM, ZERO
+        max_length=10, choices=CONFIDENCE_CHOICES, default="ZERO", db_index=True
+    )
 
     processing_status = models.CharField(
         max_length=20,

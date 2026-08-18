@@ -1,0 +1,24 @@
+services:
+  # 🧠 Local SLM Engine (Zero Cloud / Offline Inference)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: local_ai_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - S:/AI_Workspace/ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  # 🔍 Local Vector Database for Fast Narration Matching
+  vector_db:
+    image: pgvector/pgvector:pg16
+    container_name: local_vector_db
+    environment:
+      POSTGRES_DB: mywealth_vector_db
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: rootpassword
+    ports:
+      - "5433:5432"
+    volumes:
+      - S:/AI_Workspace/vector_db_data:/var/lib/postgresql/data
+    restart: unless-stopped

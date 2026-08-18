@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { subledgerApi } from '../api/subledger';
 import type {
@@ -26,7 +25,10 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
   const [pendingDues, setPendingDues] = useState<AssetComplianceSchedule[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Vendor Accordion Collapsed State
+  // 🎯 Active Subledger Tab Filter (ASSET, INCOME, EXPENSE)
+  const [activeTab, setActiveTab] = useState<'ASSET' | 'INCOME' | 'EXPENSE'>('ASSET');
+
+  // Accordion Collapsed State by Vendor
   const [expandedVendors, setExpandedVendors] = useState<Record<string, boolean>>({});
 
   // Matcher Modal Control State
@@ -35,15 +37,15 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
   const [selectedUtility, setSelectedUtility] = useState<AssetOperationalAccount | null>(null);
   const [isMatcherOpen, setIsMatcherOpen] = useState<boolean>(false);
 
-  // Master Asset Form Modal State
+  // Form Modal State
   const [isAssetModalOpen, setIsAssetModalOpen] = useState<boolean>(false);
   const [assetToEdit, setAssetToEdit] = useState<AssetSubLedgerNode | null>(null);
 
-  // Operational Account (Utility) Modal State (Create & Edit)
+  // Operational Account (Utility) Modal State
   const [isOpModalOpen, setIsOpModalOpen] = useState<boolean>(false);
   const [utilityToEdit, setUtilityToEdit] = useState<AssetOperationalAccount | null>(null);
 
-  // Schedule Reminder Modal State (Create & Edit)
+  // Schedule Reminder Modal State
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState<boolean>(false);
   const [scheduleToEdit, setScheduleToEdit] = useState<AssetComplianceSchedule | null>(null);
 
@@ -62,7 +64,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
   };
 
   const handleDeleteAsset = async (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to delete asset "${name}"?`)) {
+    if (window.confirm(`Are you sure you want to delete entity "${name}"?`)) {
       await subledgerApi.deleteAsset(id);
       loadDashboardData();
     }
@@ -107,14 +109,13 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         subledgerApi.getPendingDues().catch(() => []),
       ]);
 
-      // Client-side fallback filter with explicit string conversion
       const filteredAssets = targetCategory
         ? assetsData.filter((a) => {
             const categoryMatch = String(a.category || '').toLowerCase().includes(targetCategory.toLowerCase());
             const displayMatch = String(a.category_display || '').toLowerCase().includes(targetCategory.toLowerCase());
             const glMatch = String(a.linked_gl_account || '').toLowerCase().includes(targetCategory.toLowerCase());
             const nameMatch = String(a.name || '').toLowerCase().includes(targetCategory.toLowerCase());
-            
+
             return categoryMatch || displayMatch || glMatch || nameMatch;
           })
         : assetsData;
@@ -139,18 +140,33 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
     }));
   };
 
-  // 🎯 Multi-key Vendor Grouping Logic
-  const groupedAssets = useMemo(() => {
+  // Helper to resolve string category_type
+  const getSubledgerType = (asset: any): string => {
+    if (asset.category_type) return String(asset.category_type).toUpperCase();
+    if (asset.category_detail?.category_type) return String(asset.category_detail.category_type).toUpperCase();
+    if (asset.asset_code?.startsWith('INC')) return 'INCOME';
+    if (asset.asset_code?.startsWith('EXP')) return 'EXPENSE';
+    return 'ASSET';
+  };
+
+  // 🎯 Filter Assets strictly by active tab
+  const filteredAssetsByTab = useMemo(() => {
+    return assets.filter((asset: any) => getSubledgerType(asset) === activeTab);
+  }, [assets, activeTab]);
+
+  // 🎯 Group Vendor Entries Based on Tab-Filtered Data
+  const groupedVendorEntries = useMemo(() => {
     const groups: Record<
       string,
       {
+        vendorKey: string;
         vendorName: string;
         assets: AssetSubLedgerNode[];
         totalValuation: number;
       }
     > = {};
 
-    assets.forEach((asset: any) => {
+    filteredAssetsByTab.forEach((asset: any) => {
       const vendorName =
         asset.vendor_name ||
         asset.vendor_detail?.name ||
@@ -165,6 +181,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
 
       if (!groups[vendorKey]) {
         groups[vendorKey] = {
+          vendorKey,
           vendorName,
           assets: [],
           totalValuation: 0,
@@ -175,8 +192,12 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
       groups[vendorKey].totalValuation += Number(asset.current_valuation || 0);
     });
 
-    return groups;
-  }, [assets]);
+    return Object.values(groups).sort((a, b) => {
+      if (a.vendorKey === 'uncategorized') return 1;
+      if (b.vendorKey === 'uncategorized') return -1;
+      return b.totalValuation - a.totalValuation;
+    });
+  }, [filteredAssetsByTab]);
 
   const openMatcher = (
     asset: AssetSubLedgerNode,
@@ -189,173 +210,235 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
     setIsMatcherOpen(true);
   };
 
-  return (
-    <div className={isModal ? 'p-2 bg-transparent text-slate-100 space-y-4 font-sans' : 'min-h-screen bg-slate-950 p-6 text-slate-100 font-sans'}>
-      {/* Top Navigation Banner (Hidden in Modal Mode) */}
-      {!isModal && (
-        <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              Asset Sub-Ledgers & Compliance
-            </h1>
-            <p className="text-sm text-slate-400">
-              Manage real estate, fixed deposits, utility IDs, and post-facto transaction bindings.
-            </p>
-          </div>
+  const getMetricLabel = () => {
+    if (activeTab === 'INCOME') return 'TARGET YIELD / INCOME';
+    if (activeTab === 'EXPENSE') return 'BUDGET / YTD SPEND';
+    return 'CURRENT VALUATION';
+  };
 
+  return (
+    <div
+      className={
+        isModal
+          ? 'p-2 bg-transparent text-slate-100 space-y-4 font-sans'
+          : 'min-h-screen bg-slate-950 p-6 text-slate-100 font-sans'
+      }
+    >
+      {/* Top Banner & Switcher Tabs */}
+      <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-4 gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-white">
+            Sub-Ledger & Compliance Engine
+          </h1>
+          <p className="text-xs text-slate-400 font-mono mt-0.5">
+            Manage balance sheet assets, income yield streams, vendor cost centers, and transaction bindings.
+          </p>
+        </div>
+
+        {/* 🎯 Subledger Category Type Tabs */}
+        <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+          <button
+            onClick={() => setActiveTab('ASSET')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg transition-all cursor-pointer ${
+              activeTab === 'ASSET'
+                ? 'bg-emerald-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            📦 Assets ({assets.filter((a) => getSubledgerType(a) === 'ASSET').length})
+          </button>
+          <button
+            onClick={() => setActiveTab('INCOME')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg transition-all cursor-pointer ${
+              activeTab === 'INCOME'
+                ? 'bg-cyan-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            💰 Income ({assets.filter((a) => getSubledgerType(a) === 'INCOME').length})
+          </button>
+          <button
+            onClick={() => setActiveTab('EXPENSE')}
+            className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg transition-all cursor-pointer ${
+              activeTab === 'EXPENSE'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            📊 Expenses ({assets.filter((a) => getSubledgerType(a) === 'EXPENSE').length})
+          </button>
+        </div>
+
+        {!isModal && (
           <div className="flex items-center gap-2">
             <button
               onClick={handleCreateAsset}
-              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors cursor-pointer"
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold font-mono text-white hover:bg-emerald-500 transition-colors cursor-pointer shadow-md"
             >
-              + New Asset
+              + New Sub-Ledger
             </button>
             <button
               onClick={loadDashboardData}
-              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
+              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-bold font-mono text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
             >
-              🔄 Refresh Feed
+              🔄 Refresh
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {loading ? (
-        <div className="py-12 text-center text-sm text-slate-400 font-mono">
-          Loading sub-ledger assets and compliance queues...
+        <div className="py-16 text-center text-xs text-slate-400 font-mono flex flex-col items-center gap-2">
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-emerald-500"></div>
+          <span>Loading sub-ledger entities and compliance queues...</span>
         </div>
       ) : (
         <div className={`grid grid-cols-12 gap-6 ${isModal ? 'mt-1' : 'mt-6'}`}>
-          {/* Left Side: Vendor-Grouped Asset Cards (8 Columns) */}
+          {/* Left Side: Subledger Cards */}
           <div className="col-span-12 lg:col-span-8 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-bold tracking-wider text-slate-400 uppercase font-mono">
-                {filterSubcategory ? `${filterSubcategory} Assets` : 'Registered Master Assets'} ({assets.length})
+                {activeTab} SUB-LEDGER NODES ({filteredAssetsByTab.length})
               </h2>
               {isModal && (
                 <button
                   onClick={handleCreateAsset}
-                  className="rounded bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-500 transition-colors cursor-pointer"
+                  className="rounded bg-emerald-600 px-2.5 py-1 text-[11px] font-bold font-mono text-white hover:bg-emerald-500 transition-colors cursor-pointer"
                 >
-                  + New Asset
+                  + New Sub-Ledger
                 </button>
               )}
             </div>
 
-            {assets.length === 0 ? (
-              <div className="p-8 border border-dashed border-slate-800 rounded-xl text-center text-slate-500 text-xs font-mono space-y-2">
-                <p>No asset instances registered under {filterSubcategory || 'this category'} yet.</p>
+            {filteredAssetsByTab.length === 0 ? (
+              <div className="p-8 border border-dashed border-slate-800/80 rounded-xl text-center text-slate-500 text-xs font-mono space-y-3 bg-slate-900/30">
+                <p>No subledger entities registered under {activeTab} mode yet.</p>
                 <button
                   onClick={handleCreateAsset}
-                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded text-xs font-bold transition-colors cursor-pointer"
+                  className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded text-xs font-bold font-mono transition-colors cursor-pointer border border-slate-700"
                 >
-                  Register First Asset
+                  Register First {activeTab} Node
                 </button>
               </div>
             ) : (
-              Object.entries(groupedAssets).map(([vendorKey, group]) => {
-                const isExpanded = expandedVendors[vendorKey] !== false;
+              groupedVendorEntries.map((group) => {
+                const isExpanded = expandedVendors[group.vendorKey] !== false;
 
                 return (
                   <div
-                    key={vendorKey}
-                    className="rounded-xl border border-slate-800/80 bg-slate-900/60 overflow-hidden shadow-lg"
+                    key={group.vendorKey}
+                    className="rounded-xl border border-slate-800/90 bg-slate-900/60 overflow-hidden shadow-xl"
                   >
-                    {/* Collapsible Vendor Group Header */}
+                    {/* Collapsible Group Header */}
                     <div
-                      onClick={() => toggleVendor(vendorKey)}
+                      onClick={() => toggleVendor(group.vendorKey)}
                       className="flex items-center justify-between bg-slate-800/80 px-4 py-3 cursor-pointer hover:bg-slate-800 transition-colors select-none border-b border-slate-800/60"
                     >
                       <div className="flex items-center gap-3">
-                        <span className="text-xs text-emerald-400 font-mono">
+                        <span className="text-[10px] text-emerald-400 font-mono">
                           {isExpanded ? '▼' : '▶'}
                         </span>
-                        <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-white font-mono flex items-center gap-2">
                           🏬 {group.vendorName}
-                          <span className="text-[10px] font-normal text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-700">
-                            {group.assets.length} {group.assets.length === 1 ? 'Asset' : 'Assets'}
+                          <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-700/80">
+                            {group.assets.length} {group.assets.length === 1 ? 'Node' : 'Nodes'}
                           </span>
                         </h3>
                       </div>
 
                       <div className="flex items-center gap-6 text-xs font-mono">
                         <div className="text-right">
-                          <span className="text-slate-400 block text-[9px]">TOTAL VALUATION</span>
-                          <span className="text-emerald-400 font-bold">
+                          <span className="text-slate-500 block text-[9px] uppercase tracking-wider">
+                            TOTAL {getMetricLabel()}
+                          </span>
+                          <span className="text-emerald-400 font-bold text-xs">
                             ₹{group.totalValuation.toLocaleString('en-IN')}
                           </span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Group Asset Cards Container */}
+                    {/* Node Cards */}
                     {isExpanded && (
                       <div className="p-4 space-y-4 bg-slate-950/40">
                         {group.assets.map((asset) => (
                           <div
                             key={asset.id}
-                            className="rounded-xl border border-slate-800/80 bg-slate-900/90 p-4 sm:p-5 shadow-lg space-y-3"
+                            className="rounded-xl border border-slate-800/80 bg-slate-900/90 p-4 sm:p-5 shadow-lg space-y-3 hover:border-slate-700/80 transition-all"
                           >
-                            {/* Card Header with Interactive Taxonomy GL Badge */}
                             <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
+                              <div className="min-w-0 space-y-1">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="rounded bg-emerald-500/10 px-2 py-0.5 font-mono text-xs font-bold text-emerald-400 border border-emerald-500/20">
+                                  <span className="rounded bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-400 border border-emerald-500/20">
                                     {asset.asset_code}
                                   </span>
-                                  <span className="text-xs text-slate-400">
+                                  <span className="text-[11px] font-mono text-slate-400">
                                     {asset.category_display || asset.category}
                                   </span>
 
-                                  {/* 🏛️ Clickable GL Taxonomy Badge */}
                                   <button
                                     onClick={() => handleEditAsset(asset)}
-                                    className="rounded bg-amber-500/10 px-2.5 py-0.5 font-mono text-[11px] font-bold text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-colors flex items-center gap-1 cursor-pointer"
+                                    className="rounded bg-amber-500/10 px-2.5 py-0.5 font-mono text-[10px] font-bold text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-colors flex items-center gap-1 cursor-pointer"
                                     title="Click to remap General Ledger Taxonomy"
                                   >
-                                    🏛️ GL: {asset.linked_gl_account ? `${asset.linked_gl_account}` : 'Real Estate'}
+                                    🏛️ GL: {asset.linked_gl_account ? `${asset.linked_gl_account}` : 'Mapped GL'}
                                     <span className="text-[9px] text-amber-500">✏️</span>
                                   </button>
                                 </div>
-                                <h3 className="mt-1 text-base sm:text-lg font-bold text-white truncate">{asset.name}</h3>
+
+                                <h3 className="text-sm sm:text-base font-bold text-white truncate font-mono">
+                                  {asset.name}
+                                </h3>
+
+                                {/* 🎯 Linked Parent Asset Badge for Income/Expense items */}
+                                {(asset as any).parent_asset_detail && (
+                                  <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 w-fit">
+                                    <span>🔗 Linked Asset:</span>
+                                    <span className="text-emerald-400 font-semibold">
+                                      [{(asset as any).parent_asset_detail.asset_code}] {(asset as any).parent_asset_detail.name}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-3 shrink-0">
                                 <div className="text-right hidden sm:block">
-                                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Valuation</span>
-                                  <p className="font-mono text-sm sm:text-base font-bold text-emerald-400">
-                                    ₹{Number(asset.current_valuation).toLocaleString('en-IN')}
+                                  <span className="text-[9px] text-slate-400 uppercase tracking-wider block font-mono">
+                                    {getMetricLabel()}
+                                  </span>
+                                  <p className="font-mono text-sm font-bold text-emerald-400">
+                                    ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
                                   </p>
                                 </div>
 
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 font-mono">
                                   <button
                                     onClick={() => openMatcher(asset, null, null)}
-                                    className="rounded bg-emerald-950/60 border border-emerald-500/30 px-2 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-900/50 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                                    title="Scan bank/journal entries to map asset purchase payments"
+                                    className="rounded bg-emerald-950/60 border border-emerald-500/30 px-2 py-1 text-[10px] font-bold text-emerald-400 hover:bg-emerald-900/50 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                                    title="Scan bank/journal entries to map transactions"
                                   >
-                                    🔍 Scan Outflows
+                                    🔍 Scan & Map
                                   </button>
 
                                   <button
                                     onClick={() => openHistoryDrawer(asset)}
-                                    className="rounded bg-slate-800 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:text-emerald-400 hover:bg-slate-700 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                                    title="View Asset History & Mapped Transactions"
+                                    className="rounded bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-300 hover:text-emerald-400 hover:bg-slate-700 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer border border-slate-700/60"
+                                    title="View Entity History"
                                   >
                                     📜 History
                                   </button>
 
                                   <button
                                     onClick={() => handleEditAsset(asset)}
-                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-white text-xs transition-colors cursor-pointer"
-                                    title="Edit Asset Details"
+                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-white text-xs transition-colors cursor-pointer border border-slate-700/60"
+                                    title="Edit Details"
                                   >
                                     ✏️
                                   </button>
                                   <button
                                     onClick={() => handleDeleteAsset(asset.id, asset.name)}
-                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-rose-400 text-xs transition-colors cursor-pointer"
-                                    title="Delete Asset"
+                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-rose-400 text-xs transition-colors cursor-pointer border border-slate-700/60"
+                                    title="Delete Entity"
                                   >
                                     🗑️
                                   </button>
@@ -365,7 +448,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
 
                             {/* Metadata Badges */}
                             {asset.metadata_payload && Object.keys(asset.metadata_payload).length > 0 && (
-                              <div className="flex flex-wrap gap-2 border-t border-slate-800/80 pt-2">
+                              <div className="flex flex-wrap gap-1.5 border-t border-slate-800/80 pt-2">
                                 {Object.entries(asset.metadata_payload).map(([k, v]) => (
                                   <span
                                     key={k}
@@ -377,65 +460,57 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
                               </div>
                             )}
 
-                            {/* Operational Accounts & Compliance Schedules Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-slate-950 p-3 border border-slate-800/50">
-                              {/* Operational Sub-Ledgers Section */}
+                            {/* Utilities & Reminders */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-slate-950 p-3 border border-slate-800/60">
+                              {/* Operational Identifiers */}
                               <div className="space-y-2 min-w-0">
                                 <div className="flex items-center justify-between">
                                   <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                                    Operational Sub-Ledgers
+                                    Operational Identifiers
                                   </h4>
                                   <button
                                     onClick={() => handleCreateUtility(asset)}
-                                    className="text-[10px] text-emerald-400 hover:underline font-semibold cursor-pointer"
+                                    className="text-[10px] text-emerald-400 hover:underline font-semibold font-mono cursor-pointer"
                                   >
                                     + Add Utility
                                   </button>
                                 </div>
 
                                 {asset.operational_accounts.length === 0 ? (
-                                  <p className="text-[11px] text-slate-600 italic">None registered</p>
+                                  <p className="text-[10px] text-slate-600 italic font-mono">None registered</p>
                                 ) : (
-                                  <ul className="space-y-1.5">
+                                  <ul className="space-y-1.5 font-mono">
                                     {asset.operational_accounts.map((op) => (
                                       <li
                                         key={op.id}
-                                        className="flex items-center justify-between gap-2 text-xs text-slate-300 rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
+                                        className="flex items-center justify-between gap-2 text-[11px] text-slate-300 rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
                                       >
                                         <div className="flex items-center gap-1.5 min-w-0 truncate">
                                           <span className="font-semibold text-slate-200 truncate">
                                             {op.provider_name}
                                           </span>
-                                          <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                                          <span className="text-[9px] text-slate-500 shrink-0">
                                             ({op.consumer_identifier})
-                                          </span>
-                                          <span className="text-[10px] text-emerald-400/80 font-mono shrink-0">
-                                            [{op.matching_keyword}]
                                           </span>
                                         </div>
 
                                         <div className="flex items-center gap-1 shrink-0">
                                           <button
                                             onClick={() => openMatcher(asset, null, op)}
-                                            className="rounded bg-emerald-600/20 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
-                                            title="Scan staging lines & map to sub-ledger"
+                                            className="rounded bg-emerald-600/20 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-colors cursor-pointer"
                                           >
                                             Scan & Map
                                           </button>
                                           <button
                                             onClick={() => handleEditUtility(asset, op)}
                                             className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer"
-                                            title="Edit Utility Keywords & Details"
+                                            title="Edit Utility Details"
                                           >
                                             ✏️
                                           </button>
                                           <button
                                             onClick={async () => {
-                                              if (
-                                                window.confirm(
-                                                  `Delete sub-ledger utility ${op.provider_name}?`
-                                                )
-                                              ) {
+                                              if (window.confirm(`Delete utility ${op.provider_name}?`)) {
                                                 await subledgerApi.deleteOperationalAccount(op.id);
                                                 loadDashboardData();
                                               }
@@ -452,86 +527,57 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
                                 )}
                               </div>
 
-                              {/* Compliance Reminders Section */}
+                              {/* Schedules & Due Dates */}
                               <div className="space-y-2 min-w-0">
                                 <div className="flex items-center justify-between">
                                   <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                                    Compliance Reminders
+                                    Schedules & Due Dates
                                   </h4>
                                   <button
                                     onClick={() => handleCreateSchedule(asset)}
-                                    className="text-[10px] text-emerald-400 hover:underline font-semibold cursor-pointer"
+                                    className="text-[10px] text-emerald-400 hover:underline font-semibold font-mono cursor-pointer"
                                   >
                                     + Add Reminder
                                   </button>
                                 </div>
 
                                 {asset.compliance_schedules.length === 0 ? (
-                                  <p className="text-[11px] text-slate-600 italic">No pending schedules</p>
+                                  <p className="text-[10px] text-slate-600 italic font-mono">No pending schedules</p>
                                 ) : (
-                                  <ul className="space-y-1.5">
-                                    {asset.compliance_schedules.map((sch) => {
-                                      const linkedUtility = asset.operational_accounts.find(
-                                        (op) => op.id === sch.operational_account
-                                      );
+                                  <ul className="space-y-1.5 font-mono">
+                                    {asset.compliance_schedules.map((sch) => (
+                                      <li
+                                        key={sch.id}
+                                        className="flex items-center justify-between gap-2 text-[11px] rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
+                                      >
+                                        <span className="truncate text-slate-200">• {sch.title}</span>
 
-                                      return (
-                                        <li
-                                          key={sch.id}
-                                          className="flex items-center justify-between gap-2 text-xs rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
-                                        >
-                                          <div className="min-w-0 truncate pr-1">
-                                            <span
-                                              className={`truncate ${
-                                                sch.is_paid
-                                                  ? 'line-through text-slate-500 font-medium'
-                                                  : 'text-slate-200 font-medium'
-                                              }`}
-                                            >
-                                              • {sch.title}
-                                            </span>
-                                            {linkedUtility && (
-                                              <span className="ml-1 text-[10px] text-slate-500 font-mono">
-                                                [{linkedUtility.provider_name}]
-                                              </span>
-                                            )}
-                                          </div>
-
-                                          <div className="flex items-center gap-1 shrink-0">
-                                            {sch.is_paid ? (
-                                              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-emerald-400 border border-emerald-500/20">
-                                                PAID
-                                              </span>
-                                            ) : (
-                                              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400 border border-amber-500/20 whitespace-nowrap">
-                                                DUE {sch.due_date} (₹
-                                                {Number(sch.expected_amount).toLocaleString('en-IN')})
-                                              </span>
-                                            )}
-
-                                            <button
-                                              onClick={() => handleEditSchedule(asset, sch)}
-                                              className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer"
-                                              title="Edit Reminder Details"
-                                            >
-                                              ✏️
-                                            </button>
-                                            <button
-                                              onClick={async () => {
-                                                if (window.confirm(`Delete reminder ${sch.title}?`)) {
-                                                  await subledgerApi.deleteSchedule(sch.id);
-                                                  loadDashboardData();
-                                                }
-                                              }}
-                                              className="text-slate-500 hover:text-rose-400 text-[10px] p-0.5 transition-colors cursor-pointer"
-                                              title="Delete Reminder"
-                                            >
-                                              🗑️
-                                            </button>
-                                          </div>
-                                        </li>
-                                      );
-                                    })}
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-400 border border-amber-500/20">
+                                            DUE {sch.due_date}
+                                          </span>
+                                          <button
+                                            onClick={() => handleEditSchedule(asset, sch)}
+                                            className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer"
+                                            title="Edit Reminder Details"
+                                          >
+                                            ✏️
+                                          </button>
+                                          <button
+                                            onClick={async () => {
+                                              if (window.confirm(`Delete reminder ${sch.title}?`)) {
+                                                await subledgerApi.deleteSchedule(sch.id);
+                                                loadDashboardData();
+                                              }
+                                            }}
+                                            className="text-slate-500 hover:text-rose-400 text-[10px] p-0.5 transition-colors cursor-pointer"
+                                            title="Delete Reminder"
+                                          >
+                                            🗑️
+                                          </button>
+                                        </div>
+                                      </li>
+                                    ))}
                                   </ul>
                                 )}
                               </div>
@@ -546,46 +592,41 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
             )}
           </div>
 
-          {/* Right Side: Pending Dues Feed (4 Columns) */}
+          {/* Right Side: Compliance Feed */}
           <div className="col-span-12 lg:col-span-4 space-y-4">
             <h2 className="text-xs font-bold tracking-wider text-slate-400 uppercase font-mono">
-              Upcoming Compliance Dues ({pendingDues.length})
+              Upcoming Dues & Reminders ({pendingDues.length})
             </h2>
 
-            <div className="rounded-xl border border-slate-800/80 bg-slate-900/90 p-4 space-y-3">
+            <div className="rounded-xl border border-slate-800/80 bg-slate-900/90 p-4 space-y-3 shadow-xl">
               {pendingDues.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-4 font-mono">
+                <p className="text-xs text-slate-500 text-center py-6 font-mono">
                   🎉 No pending dues in queue!
                 </p>
               ) : (
                 pendingDues.map((due) => {
                   const targetAsset = assets.find((a) => a.id === due.asset);
-                  const linkedUtility = targetAsset?.operational_accounts.find(
-                    (op) => op.id === due.operational_account
-                  );
-
                   return (
                     <div
                       key={due.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950 p-3 space-y-2 shadow-inner"
+                      className="rounded-lg border border-slate-800 bg-slate-950 p-3 space-y-2.5 shadow-inner"
                     >
                       <div className="flex justify-between items-start gap-2">
                         <div className="min-w-0">
-                          <p className="text-xs font-bold text-white truncate">{due.title}</p>
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            Due Date:{' '}
-                            <span className="font-mono text-amber-400">{due.due_date}</span>
+                          <p className="text-xs font-bold text-white truncate font-mono">{due.title}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                            Due Date: <span className="text-amber-400 font-bold">{due.due_date}</span>
                           </p>
                         </div>
                         <span className="font-mono text-xs font-bold text-emerald-400 whitespace-nowrap">
-                          ₹{Number(due.expected_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{Number(due.expected_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </span>
                       </div>
 
                       {targetAsset && (
                         <button
-                          onClick={() => openMatcher(targetAsset, due, linkedUtility)}
-                          className="w-full rounded bg-emerald-600 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors cursor-pointer"
+                          onClick={() => openMatcher(targetAsset, due, null)}
+                          className="w-full rounded bg-emerald-600 py-1 text-xs font-bold font-mono text-white hover:bg-emerald-500 transition-colors cursor-pointer shadow-md"
                         >
                           ⚡ Scan Staging & Resolve
                         </button>
@@ -599,7 +640,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         </div>
       )}
 
-      {/* Candidate Matcher Modal Component */}
+      {/* Modals */}
       {selectedAsset && (
         <CandidateMatcherModal
           isOpen={isMatcherOpen}
@@ -611,15 +652,19 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         />
       )}
 
-      {/* Asset Form Modal (Create / Edit Master Asset) */}
       <AssetFormModal
         isOpen={isAssetModalOpen}
         onClose={() => setIsAssetModalOpen(false)}
         assetToEdit={assetToEdit}
+        defaultSubcategory={filterSubcategory}
+        activeTab={
+          assetToEdit
+            ? (getSubledgerType(assetToEdit) as 'ASSET' | 'INCOME' | 'EXPENSE')
+            : activeTab
+        }
         onSuccess={loadDashboardData}
       />
 
-      {/* Utility / Operational Account Modal (Create / Edit Utility) */}
       {selectedAsset && (
         <OperationalAccountModal
           isOpen={isOpModalOpen}
@@ -630,7 +675,6 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         />
       )}
 
-      {/* Compliance Schedule Modal (Create / Edit Reminder) */}
       {selectedAsset && (
         <ScheduleModal
           isOpen={isScheduleModalOpen}
@@ -641,7 +685,6 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         />
       )}
 
-      {/* History Slide-over Drawer Modal */}
       {historyAsset && (
         <HistoryDrawerModal
           isOpen={isHistoryOpen}
@@ -652,6 +695,9 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
     </div>
   );
 };
+
+export default SubLedgerDashboard;
+
 
 
 // import React, { useEffect, useState, useCallback } from 'react';

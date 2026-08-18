@@ -15,45 +15,125 @@ from ..subledgers.services import (
 # ============================================================================
 
 
+# class AssetCategory(models.Model):
+#     """Dynamic Asset Category Lookup Table.
+
+#     Uses an explicit primary key ID (1, 2, 3...) to allow full runtime CRUD
+#     operations without breaking foreign key relationships or requiring DB
+#     migrations when adding new categories.
+#     """
+
+#     id = models.AutoField(primary_key=True)
+#     code = models.CharField(
+#         max_length=50,
+#         unique=True,
+#         db_index=True,
+#         help_text="System key code, e.g., REAL_ESTATE, FIXED_DEPOSIT",
+#     )
+#     name = models.CharField(
+#         max_length=100,
+#         help_text="Display label, e.g., Real Estate & Land, Fixed Deposit (FD)",
+#     )
+
+#     # 🎯 Single Source of Truth Alignment with Taxonomy Breakdown Matrix
+#     default_taxonomy_category = models.CharField(
+#         max_length=100,
+#         default="Asset",
+#         help_text="Primary taxonomy class, e.g., Asset, Liability",
+#     )
+#     default_taxonomy_subcategory = models.CharField(
+#         max_length=100,
+#         help_text="Exact subcategory matching Dashboard matrix, e.g., Real Estate, Fixed Deposits",
+#     )
+
+#     # Optional direct link to TaxonomyTree chart of accounts
+#     linked_gl_account = models.ForeignKey(
+#         "TaxonomyTree",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="asset_categories",
+#         help_text="Default Chart of Accounts node for this category",
+#     )
+
+#     is_active = models.BooleanField(default=True, db_index=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+#     class Meta:
+#         db_table = "ledger_asset_category"
+#         verbose_name = "Asset Category"
+#         verbose_name_plural = "Asset Categories"
+#         ordering = ["id"]
+
+#     def __str__(self):
+#         return f"[{self.id}] {self.name} ({self.default_taxonomy_subcategory})"
+
+
+# Legacy TextChoices retained for backwards compatibility / fallback references
+# class AssetCategoryChoices(models.TextChoices):
+#     REAL_ESTATE = "REAL_ESTATE", "Real Estate & Land"
+#     FIXED_DEPOSIT = "FIXED_DEPOSIT", "Fixed Deposit (FD)"
+#     RECURRING_DEPOSIT = "RECURRING_DEPOSIT", "Recurring Deposit (RD)"
+#     MARKET_INVESTMENT = "MARKET_INVESTMENT", "Stocks, Mutual Funds & ETFs"
+#     PENSION_RETIREMENT = (
+#         "PENSION_RETIREMENT",
+#         "Pension & Retirement (NPS, PPF, EPF)",
+#     )
+#     INSURANCE_PLAN = "INSURANCE_PLAN", "Life & Endowment Insurance"
+#     VEHICLE = "VEHICLE", "Vehicles & Transport"
+#     PRECIOUS_METALS = "PRECIOUS_METALS", "Gold, Silver & SGBs"
+#     PERSONAL_RECEIVABLE = (
+#         "PERSONAL_RECEIVABLE",
+#         "Personal Loan Given / Receivable",
+#     )
+
+
+# 1. Define choices FIRST at the top of the module
+class SubledgerCategoryType(models.TextChoices):
+    ASSET = "ASSET", "Asset (Balance Sheet)"
+    INCOME = "INCOME", "Income Stream (P&L Inflow)"
+    EXPENSE = "EXPENSE", "Expense Cost Center (P&L Outflow)"
+
+
+class AssetCategoryChoices(models.TextChoices):
+    REAL_ESTATE = "REAL_ESTATE", "Real Estate & Land"
+    FIXED_DEPOSIT = "FIXED_DEPOSIT", "Fixed Deposit (FD)"
+    RECURRING_DEPOSIT = "RECURRING_DEPOSIT", "Recurring Deposit (RD)"
+    MARKET_INVESTMENT = "MARKET_INVESTMENT", "Stocks, Mutual Funds & ETFs"
+    PENSION_RETIREMENT = "PENSION_RETIREMENT", "Pension & Retirement"
+    INSURANCE_PLAN = "INSURANCE_PLAN", "Life & Endowment Insurance"
+    VEHICLE = "VEHICLE", "Vehicles & Transport"
+    PRECIOUS_METALS = "PRECIOUS_METALS", "Gold, Silver & SGBs"
+    PERSONAL_RECEIVABLE = "PERSONAL_RECEIVABLE", "Personal Loan Given"
+    RENTAL_STREAM = "RENTAL_STREAM", "Property Rental Stream"
+    DIVIDEND_FOLIO = "DIVIDEND_FOLIO", "Dividend & Yield Stream"
+    VENDOR_MERCHANT = "VENDOR_MERCHANT", "Merchant / Service Provider"
+    CHARITY_RECIPIENT = "CHARITY_RECIPIENT", "Charity / 80G Recipient"
+
+
+# 2. Define Model SECOND after choices exist
 class AssetCategory(models.Model):
-    """Dynamic Asset Category Lookup Table.
-
-    Uses an explicit primary key ID (1, 2, 3...) to allow full runtime CRUD
-    operations without breaking foreign key relationships or requiring DB
-    migrations when adding new categories.
-    """
-
     id = models.AutoField(primary_key=True)
-    code = models.CharField(
-        max_length=50,
-        unique=True,
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    name = models.CharField(max_length=100)
+
+    category_type = models.CharField(
+        max_length=20,
+        choices=SubledgerCategoryType.choices,
+        default=SubledgerCategoryType.ASSET,
         db_index=True,
-        help_text="System key code, e.g., REAL_ESTATE, FIXED_DEPOSIT",
-    )
-    name = models.CharField(
-        max_length=100,
-        help_text="Display label, e.g., Real Estate & Land, Fixed Deposit (FD)",
     )
 
-    # 🎯 Single Source of Truth Alignment with Taxonomy Breakdown Matrix
-    default_taxonomy_category = models.CharField(
-        max_length=100,
-        default="Asset",
-        help_text="Primary taxonomy class, e.g., Asset, Liability",
-    )
-    default_taxonomy_subcategory = models.CharField(
-        max_length=100,
-        help_text="Exact subcategory matching Dashboard matrix, e.g., Real Estate, Fixed Deposits",
-    )
+    default_taxonomy_category = models.CharField(max_length=100, default="Asset")
+    default_taxonomy_subcategory = models.CharField(max_length=100)
 
-    # Optional direct link to TaxonomyTree chart of accounts
     linked_gl_account = models.ForeignKey(
         "TaxonomyTree",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="asset_categories",
-        help_text="Default Chart of Accounts node for this category",
     )
 
     is_active = models.BooleanField(default=True, db_index=True)
@@ -62,31 +142,14 @@ class AssetCategory(models.Model):
 
     class Meta:
         db_table = "ledger_asset_category"
-        verbose_name = "Asset Category"
-        verbose_name_plural = "Asset Categories"
+        verbose_name = "Asset & Subledger Category"
+        verbose_name_plural = "Asset & Subledger Categories"
         ordering = ["id"]
 
     def __str__(self):
-        return f"[{self.id}] {self.name} ({self.default_taxonomy_subcategory})"
-
-
-# Legacy TextChoices retained for backwards compatibility / fallback references
-class AssetCategoryChoices(models.TextChoices):
-    REAL_ESTATE = "REAL_ESTATE", "Real Estate & Land"
-    FIXED_DEPOSIT = "FIXED_DEPOSIT", "Fixed Deposit (FD)"
-    RECURRING_DEPOSIT = "RECURRING_DEPOSIT", "Recurring Deposit (RD)"
-    MARKET_INVESTMENT = "MARKET_INVESTMENT", "Stocks, Mutual Funds & ETFs"
-    PENSION_RETIREMENT = (
-        "PENSION_RETIREMENT",
-        "Pension & Retirement (NPS, PPF, EPF)",
-    )
-    INSURANCE_PLAN = "INSURANCE_PLAN", "Life & Endowment Insurance"
-    VEHICLE = "VEHICLE", "Vehicles & Transport"
-    PRECIOUS_METALS = "PRECIOUS_METALS", "Gold, Silver & SGBs"
-    PERSONAL_RECEIVABLE = (
-        "PERSONAL_RECEIVABLE",
-        "Personal Loan Given / Receivable",
-    )
+        return (
+            f"[{self.category_type}] {self.name} ({self.default_taxonomy_subcategory})"
+        )
 
 
 class OwnershipType(models.TextChoices):
@@ -236,6 +299,14 @@ class AssetSubLedger(models.Model):
         blank=True,
         related_name="subledger_assets",
         help_text="Chart of Accounts Taxonomy category for General Ledger alignment",
+    )
+    parent_asset = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="child_streams",
+        help_text="Parent asset generating this income or incurring this expense (e.g. SBI-NRE1 FD generating Interest)",
     )
 
     # 🎨 Deep Dynamic Category Metadata Repository

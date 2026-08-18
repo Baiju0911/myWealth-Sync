@@ -253,6 +253,33 @@ export interface Vendor {
 }
 
 export const subledgerApi = {
+  getCategorySchemaKeys: async (categoryCode: string): Promise<string[]> => {
+    const res = await api.get(
+      `/subledgers/assets/category-schema-keys/?category=${categoryCode}`
+    );
+    return res.data.db_keys || [];
+  },
+  createTaxonomyNode: async (payload: {
+    category: 'Asset' | 'Income' | 'Expense' | 'Liability' | 'Transfer';
+    subcategory: string;
+    display_order?: number;
+    is_active?: boolean;
+  }) => {
+    const res = await api.post('/api/taxonomy/tree/', payload); // Or your active taxonomy endpoint
+    return res.data;
+  },
+
+  createCategory: async (payload: {
+    name: string;
+    code: string;
+    category_type: string;
+    default_taxonomy_category: string;
+    default_taxonomy_subcategory: string;
+  }) => {
+    const res = await api.post('/subledgers/categories/', payload);
+    return res.data;
+  },
+
   getVendors: async (): Promise<Vendor[]> => {
     const res = await api.get('/subledgers/vendors/');
     return res.data;
@@ -260,6 +287,7 @@ export const subledgerApi = {
 
   createVendor: async (payload: {
     name: string;
+    code?: string;
     default_keywords?: string[];
   }): Promise<Vendor> => {
     const res = await api.post('/subledgers/vendors/', payload);
