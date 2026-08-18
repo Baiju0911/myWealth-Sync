@@ -296,6 +296,103 @@ export const UNCATEGORIZED_VAULT_COLUMNS: ColumnConfig[] = [
   { key: 'actions', label: 'Manual Allocation', width: '10%', align: 'center' },
 ];
 
+// export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
+//   {
+//     key: 'category',
+//     label: 'Primary Class',
+//     width: '15%',
+//     align: 'left',
+//     textColor: 'text-zinc-200 font-bold',
+//   },
+//   {
+//     key: 'subcategory',
+//     label: 'Subcategory',
+//     width: '22%',
+//     align: 'left',
+//     textColor: 'text-zinc-300',
+//   },
+//   {
+//     key: 'transaction_count',
+//     label: 'Txn Count',
+//     width: '8%',
+//     align: 'center',
+//     textColor: 'text-zinc-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'total_debit',
+//     label: 'Debit (DR)',
+//     width: '13%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-amber-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'total_credit',
+//     label: 'Credit (CR)',
+//     width: '13%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-emerald-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'net_balance',
+//     label: 'Net Balance',
+//     width: '17%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-zinc-100 font-bold font-mono text-xs',
+//     renderFooter: (data: any[]) => {
+//       const net = data.reduce((acc, row) => {
+//         const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
+//         const cr = parseFloat(
+//           String(row.total_credit || '0').replace(/,/g, '')
+//         );
+//         return acc + (dr - cr);
+//       }, 0);
+
+//       return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+//     },
+//   },
+//   // 🎯 Dynamic Action Button Column for Subledger-Capable Rows
+//   {
+//     key: 'actions',
+//     label: 'Actions',
+//     width: '12%',
+//     align: 'center',
+//     renderCell: (row: any, meta?: any) => {
+//       const subcategory = row.subcategory;
+//       const isSubledgerCapable = meta?.subledgerCapableSet?.has(subcategory);
+
+//       if (!isSubledgerCapable) return null;
+
+//       return React.createElement(
+//         'button',
+//         {
+//           type: 'button',
+//           onClick: (e: React.MouseEvent) => {
+//             e.stopPropagation();
+//             console.log(
+//               '📦 [Subledger Hub Button Clicked for]:',
+//               subcategory,
+//               'Row Data:',
+//               row
+//             );
+//             if (meta?.onOpenSubledgerDrawer) {
+//               meta.onOpenSubledgerDrawer(subcategory);
+//             }
+//           },
+//           className:
+//             'px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800/80 text-cyan-300 font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto',
+//           title: `Open Subledger Hub for ${subcategory}`,
+//         },
+//         '📦 Subledger Hub'
+//       );
+//     },
+//   },
+// ];
+
+// Ledger Dashboard
+
 export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
   {
     key: 'category',
@@ -353,17 +450,32 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
       return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
     },
   },
-  // 🎯 Dynamic Action Button Column for Subledger-Capable Rows
+  // 🎯 Flexible Action Button Column for Subledger-Capable Rows
   {
     key: 'actions',
     label: 'Actions',
     width: '12%',
     align: 'center',
     renderCell: (row: any, meta?: any) => {
-      const subcategory = row.subcategory;
-      const isSubledgerCapable = meta?.subledgerCapableSet?.has(subcategory);
+      const subcategory = String(row.subcategory || '').trim();
+      const primaryCategory = String(row.category || '')
+        .trim()
+        .toLowerCase();
 
-      if (!isSubledgerCapable) return null;
+      const capableSet: Set<string> = meta?.subledgerCapableSet || new Set();
+
+      // 1. Case-insensitive & trimmed matching against backend subledgerCapableSet
+      const isSetCapable = Array.from(capableSet).some(
+        (item) =>
+          String(item).trim().toLowerCase() === subcategory.toLowerCase()
+      );
+
+      // 2. Fallback: Automatically render for any row in the "Asset" primary class
+      const isAssetRow = primaryCategory === 'asset';
+
+      const isSubledgerCapable = isSetCapable || isAssetRow;
+
+      if (!isSubledgerCapable || !subcategory) return null;
 
       return React.createElement(
         'button',
@@ -385,13 +497,12 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
             'px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800/80 text-cyan-300 font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto',
           title: `Open Subledger Hub for ${subcategory}`,
         },
-        '📦 Subledger Hub'
+        '📦 Asset Hub'
       );
     },
   },
 ];
 
-// Ledger Dashboard
 export const KPI_SUMMARY_COLUMNS: ColumnConfig[] = [
   {
     key: 'kpi_name',
@@ -437,6 +548,87 @@ export const KPI_SUMMARY_COLUMNS: ColumnConfig[] = [
     align: 'right',
     isCurrency: true,
     textColor: 'text-amber-400 font-bold font-mono text-xs',
+  },
+];
+
+export const EVALUATOR_5TIER_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'date',
+    label: 'TXN DATE',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'narration',
+    label: 'STATEMENT DESCRIPTION REFERENCE',
+    width: '26%',
+    align: 'left',
+    textColor: 'text-zinc-100',
+  },
+  {
+    key: 'debit',
+    label: 'DEBIT (DR)',
+    width: '7%',
+    align: 'right',
+    textColor: 'text-amber-500',
+    isCurrency: true,
+  },
+  {
+    key: 'credit',
+    label: 'CREDIT (CR)',
+    width: '7%',
+    align: 'right',
+    textColor: 'text-emerald-500',
+    isCurrency: true,
+  },
+  {
+    key: 'category_item',
+    label: 'ASSIGNED HEADER',
+    width: '10%',
+    align: 'left',
+    textColor: 'text-cyan-400 font-bold',
+  },
+  {
+    key: 'T1_item',
+    label: 'T1 SYSTEM',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'T2_item',
+    label: 'T2 TUNNEL',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'T3_item',
+    label: 'T3 LAYOUT',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'T4_item',
+    label: 'T4 MASTER',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-zinc-400',
+  },
+  {
+    key: 'T5_item',
+    label: 'T5 (AI)',
+    width: '8%',
+    align: 'left',
+    textColor: 'text-emerald-400 font-semibold',
+  },
+  {
+    key: 'actions',
+    label: 'CLEARANCE',
+    width: '4%',
+    align: 'center',
   },
 ];
 

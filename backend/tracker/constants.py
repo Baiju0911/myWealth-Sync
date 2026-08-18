@@ -261,6 +261,36 @@ OK_WORD_LIST = {
 }
 
 
+TAXONOMY_NOISE_KEYWORDS = (
+    "TRANSFER",
+    "TRANSFERS",
+    "MB FT",
+    "MB FTO",
+    "MB FTB",
+    "SBI",
+    "SIB",
+    "SIBL",
+    "SBONR",
+    "FED-NRO",
+    "FED-NRO-1050",
+    "FED-NRE",
+)
+
+TRANSFER_BANK_NOISE = {
+    "TRANSFER",
+    "TRANSFERS",
+    "MB FT",
+    "MB FTO",
+    "MB FTB",
+    "SBI",
+    "SIB",
+    "SIBL",
+    "SBONR",
+    "FED-NRO",
+    "FED-NRE",
+}
+
+
 # # tracker/constants.py
 
 # # For Classification View

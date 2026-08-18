@@ -18,7 +18,12 @@ from ..models.subledger import (
 class VendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vendor
-        fields = "__all__"
+        fields = ["id", "name", "code", "default_keywords", "created_at"]
+        extra_kwargs = {
+            "code": {
+                "required": False
+            },  # Auto-generates in model or serializer if omitted
+        }
 
 
 class AssetCategorySerializer(serializers.ModelSerializer):
@@ -30,6 +35,7 @@ class AssetCategorySerializer(serializers.ModelSerializer):
             "id",
             "code",
             "name",
+            "category_type",
             "default_taxonomy_category",
             "default_taxonomy_subcategory",
             "linked_gl_account",
