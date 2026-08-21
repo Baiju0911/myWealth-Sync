@@ -5,16 +5,46 @@ import api from './client'; // Points directly to your pre-configured Axios inst
    Sub-Ledger & Asset Management Interfaces & APIs
    ========================================================================== */
 
-export type AssetCategoryType =
-  | 'REAL_ESTATE'
-  | 'FIXED_DEPOSIT'
-  | 'RECURRING_DEPOSIT'
-  | 'MARKET_INVESTMENT'
-  | 'PENSION_RETIREMENT'
-  | 'INSURANCE_PLAN'
-  | 'VEHICLE'
-  | 'PRECIOUS_METALS'
-  | 'PERSONAL_RECEIVABLE';
+// export type AssetCategoryType =
+//   | 'REAL_ESTATE'
+//   | 'FIXED_DEPOSIT'
+//   | 'RECURRING_DEPOSIT'
+//   | 'MARKET_INVESTMENT'
+//   | 'PENSION_RETIREMENT'
+//   | 'INSURANCE_PLAN'
+//   | 'VEHICLE'
+//   | 'PRECIOUS_METALS'
+//   | 'PERSONAL_RECEIVABLE'
+//   | 'VENDOR_MERCHANT'
+//   | 'RENTAL_STREAM'
+//   | 'CHARITY_RECIPIENT'
+//   | 'DIVIDEND_FOLIO';
+
+// 🟢 Replace hardcoded union with a dynamic string type matching API choice codes
+
+// Interface for backend dynamic choices API response
+export type AssetCategoryType = string;
+export interface CategoryChoice {
+  code: string;
+  label: string;
+}
+
+export interface AssetSubLedgerPayload {
+  asset_code: string;
+  name: string;
+  category: AssetCategoryType; // Accepts dynamic string codes fetched from Django
+  vendor?: string | null;
+  parent_asset?: string | null;
+  acquisition_date: string;
+  acquisition_cost: number;
+  current_valuation: number;
+  ownership_type: string;
+  ownership_share_pct: string;
+  status: string;
+  user_note?: string;
+  linked_gl_account?: string | null;
+  metadata_payload?: Record<string, any>;
+}
 
 // 🎯 Dynamic Asset Category interface linked to backend DB Table
 export interface AssetCategoryNode {
@@ -52,14 +82,22 @@ export interface SubcategoryBreakdownResponse {
   assets: SubcategoryAssetSummary[];
 }
 
-export type OwnershipType = 'INDIVIDUAL' | 'JOINT' | 'FAMILY' | 'BUSINESS';
+export type OwnershipType =
+  | 'INDIVIDUAL'
+  | 'JOINT'
+  | 'FAMILY'
+  | 'BUSINESS'
+  | 'CORPORATE'
+  | string;
 
 export type AssetStatusType =
   | 'ACTIVE'
   | 'MATURED'
   | 'LIQUIDATED'
   | 'SOLD'
-  | 'WRITTEN_OFF';
+  | 'CLOSED'
+  | 'WRITTEN_OFF'
+  | string;
 
 export type ServiceProviderType =
   | 'PROPERTY_TAX'
@@ -115,22 +153,23 @@ export interface AssetComplianceSchedule {
   operational_account?: string | null;
 }
 
-export interface AssetSubLedgerPayload {
-  asset_code: string;
-  name: string;
-  asset_category_id?: number; // Foreign Key to AssetCategory
-  category?: AssetCategoryType; // Legacy fallback
-  vendor?: string | null; // 🎯 Foreign Key UUID to Vendor master table
-  acquisition_date: string;
-  acquisition_cost: number | string;
-  current_valuation: number | string;
-  ownership_type: OwnershipType;
-  ownership_share_pct: number | string;
-  status: AssetStatusType;
-  linked_gl_account?: number | string | null;
-  metadata_payload?: Record<string, any>;
-  user_note?: string; // Optional user note for asset
-}
+// export interface AssetSubLedgerPayload {
+//   asset_code: string;
+//   name: string;
+//   asset_category_id?: number; // Foreign Key to AssetCategory
+//   category?: AssetCategoryType; // Legacy fallback
+//   vendor?: string | null;
+//   parent_asset?: string | null;
+//   acquisition_date: string;
+//   acquisition_cost: number | string;
+//   current_valuation: number | string;
+//   ownership_type: OwnershipType;
+//   ownership_share_pct: number | string;
+//   status: AssetStatusType;
+//   linked_gl_account?: number | string | null;
+//   metadata_payload?: Record<string, any>;
+//   user_note?: string; // Optional user note for asset
+// }
 
 export interface AssetSubLedgerNode extends AssetSubLedgerPayload {
   id: string;
@@ -325,6 +364,11 @@ export const subledgerApi = {
     const res = await api.get<AssetSubLedgerNode[]>('/subledgers/assets/', {
       params,
     });
+    return res.data;
+  },
+
+  getCategoryChoices: async (): Promise<{ code: string; label: string }[]> => {
+    const res = await api.get('/subledgers/assets/category-choices/');
     return res.data;
   },
 

@@ -1,6 +1,6 @@
 // webapp/src/components/subledger/SubledgerBreakdownDrawer.tsx
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { X, Building2, RefreshCw, Plus, Edit2 } from 'lucide-react';
+import { X, Building2, RefreshCw, Plus, Edit2, Search } from 'lucide-react';
 import {
   subledgerApi,
   type SubcategoryBreakdownResponse,
@@ -83,7 +83,7 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
     setIsAssetModalOpen(true);
   };
 
-  // ✏️ Helper to fetch full asset node payload and launch Edit Form Modal
+  // Helper to fetch full asset node payload and launch Edit Form Modal
   const handleEditAsset = async (assetId: string) => {
     setLoadingAssetId(assetId);
     try {
@@ -109,6 +109,12 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
     } finally {
       setLoadingAssetId(null);
     }
+  };
+
+  // 🎯 Launch matcher for the entire subcategory without a pre-selected single asset
+  const handleLaunchCategoryScan = () => {
+    setSelectedAssetForScan(null);
+    setIsMatcherOpen(true);
   };
 
   // Helper to fetch full asset node payload and launch history modal
@@ -177,7 +183,7 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl h-[78vh] max-h-95 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+        className="w-full max-w-5xl h-[165vh] max-h-160 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Bar */}
@@ -197,6 +203,17 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
           </div>
 
           <div className="flex items-center space-x-2">
+            {/* 🎯 Category-Wide Scan Button */}
+            <button
+              type="button"
+              onClick={handleLaunchCategoryScan}
+              className="px-2.5 py-1 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/80 font-mono text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center space-x-1"
+              title={`Scan staging lines for all nodes in ${subcategory}`}
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>Category Scan</span>
+            </button>
+
             <button
               type="button"
               onClick={handleCreateAsset}
@@ -323,56 +340,79 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                          {group.assets.map((asset) => (
-                            <tr key={asset.asset_id} className="hover:bg-slate-900/50 transition-colors">
-                              <td className="p-2.5 font-bold text-emerald-400">{asset.asset_code}</td>
-                              <td className="p-2.5 text-slate-200 font-semibold">{asset.name}</td>
-                              <td className="p-2.5 text-right">
-                                ₹{Number(asset.current_valuation).toLocaleString('en-IN')}
-                              </td>
-                              <td className="p-2.5 text-right text-emerald-400 font-bold">
-                                ₹{Number(asset.mapped_transaction_total).toLocaleString('en-IN')}
-                              </td>
-                              <td className="p-2.5 text-center text-slate-400">
-                                {asset.mapped_count} entries
-                              </td>
-                              <td className="p-2.5 text-center">
-                                <div className="flex items-center justify-center space-x-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleLaunchMatcherForAsset(asset.asset_id)}
-                                    disabled={loadingAssetId === asset.asset_id}
-                                    className="px-2 py-1 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-400 text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
-                                    title="Scan staging lines & bind transactions"
-                                  >
-                                    {loadingAssetId === asset.asset_id ? 'Loading...' : '🔍 Scan Outflows'}
-                                  </button>
+                          {group.assets.map((asset: any) => {
+                            const isClosedOrMatured =
+                              asset.status === 'MATURED' ||
+                              asset.status === 'CLOSED' ||
+                              asset.status === 'LIQUIDATED';
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenHistoryForAsset(asset.asset_id)}
-                                    disabled={loadingAssetId === asset.asset_id}
-                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
-                                    title="View bound transaction history"
-                                  >
-                                    📜 History
-                                  </button>
+                            const assetId = asset.asset_id || asset.id;
 
-                                  {/* ✏️ Edit Asset Action */}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleEditAsset(asset.asset_id)}
-                                    disabled={loadingAssetId === asset.asset_id}
-                                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
-                                    title="Edit asset details"
-                                  >
-                                    <Edit2 className="w-3 h-3" />
-                                    <span>Edit</span>
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
+                            return (
+                              <tr key={assetId} className="hover:bg-slate-900/50 transition-colors">
+                                <td className="p-2.5 font-bold text-emerald-400">{asset.asset_code}</td>
+                                <td className="p-2.5 text-slate-200 font-semibold flex items-center gap-2">
+                                  <span>{asset.name}</span>
+                                  {isClosedOrMatured && (
+                                    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 border border-amber-500/40">
+                                      🏁 MATURED
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-2.5 text-right">
+                                  ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
+                                </td>
+                                <td className="p-2.5 text-right text-emerald-400 font-bold">
+                                  ₹{Number(asset.mapped_transaction_total || 0).toLocaleString('en-IN')}
+                                </td>
+                                <td className="p-2.5 text-center text-slate-400">
+                                  {asset.mapped_count || 0} entries
+                                </td>
+                                <td className="p-2.5 text-center">
+                                  <div className="flex items-center justify-center space-x-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleLaunchMatcherForAsset(assetId)}
+                                      disabled={isClosedOrMatured || loadingAssetId === assetId}
+                                      className={`px-2 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${
+                                        isClosedOrMatured
+                                          ? 'bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed opacity-60'
+                                          : 'bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-400 cursor-pointer'
+                                      }`}
+                                      title={
+                                        isClosedOrMatured
+                                          ? 'Transaction mapping is locked for matured/closed nodes'
+                                          : 'Scan staging lines & bind transactions'
+                                      }
+                                    >
+                                      {loadingAssetId === assetId ? 'Loading...' : '🔍 Scan Outflows'}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenHistoryForAsset(assetId)}
+                                      disabled={loadingAssetId === assetId}
+                                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
+                                      title="View bound transaction history"
+                                    >
+                                      📜 History
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditAsset(assetId)}
+                                      disabled={loadingAssetId === assetId}
+                                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                                      title="Edit asset details"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                      <span>Edit</span>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -383,8 +423,8 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
           )}
         </div>
 
-        {/* Candidate Matcher Modal */}
-        {selectedAssetForScan && (
+        {/* 🎯 Candidate Matcher Modal (Handles both single-asset and category-wide scans) */}
+        {isMatcherOpen && (
           <CandidateMatcherModal
             isOpen={isMatcherOpen}
             onClose={() => {
@@ -392,6 +432,11 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
               setSelectedAssetForScan(null);
             }}
             asset={selectedAssetForScan}
+            taxonomyContext={{
+              category: 'EXPENSE',
+              subcategory: subcategory,
+              defaultKeyword: subcategory,
+            }}
             onSuccess={() => {
               fetchBreakdown();
               setIsMatcherOpen(false);
@@ -433,6 +478,470 @@ export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> =
 };
 
 export default SubledgerBreakdownDrawer;
+
+
+// // webapp/src/components/subledger/SubledgerBreakdownDrawer.tsx
+// import React, { useEffect, useState, useCallback, useMemo } from 'react';
+// import { X, Building2, RefreshCw, Plus, Edit2 } from 'lucide-react';
+// import {
+//   subledgerApi,
+//   type SubcategoryBreakdownResponse,
+//   type AssetSubLedgerNode,
+// } from '../../api/subledger';
+// import { CandidateMatcherModal } from './CandidateMatcherModal';
+// import { HistoryDrawerModal } from './HistoryDrawerModal';
+// import { AssetFormModal } from './AssetFormModal';
+
+// export interface SubledgerBreakdownDrawerProps {
+//   isOpen: boolean;
+//   subcategory: string | null;
+//   onClose: () => void;
+// }
+
+// export const SubledgerBreakdownDrawer: React.FC<SubledgerBreakdownDrawerProps> = ({
+//   isOpen,
+//   subcategory,
+//   onClose,
+// }) => {
+//   const [breakdownData, setBreakdownData] = useState<SubcategoryBreakdownResponse | null>(null);
+//   const [loading, setLoading] = useState<boolean>(false);
+
+//   // Vendor Accordion Collapsed State
+//   const [expandedVendors, setExpandedVendors] = useState<Record<string, boolean>>({});
+
+//   // Candidate Matcher Modal State
+//   const [selectedAssetForScan, setSelectedAssetForScan] = useState<AssetSubLedgerNode | null>(null);
+//   const [isMatcherOpen, setIsMatcherOpen] = useState<boolean>(false);
+
+//   // History Drawer State
+//   const [historyAsset, setHistoryAsset] = useState<AssetSubLedgerNode | null>(null);
+//   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+
+//   // Master Asset Form Modal State
+//   const [isAssetModalOpen, setIsAssetModalOpen] = useState<boolean>(false);
+//   const [assetToEdit, setAssetToEdit] = useState<AssetSubLedgerNode | null>(null);
+
+//   const [loadingAssetId, setLoadingAssetId] = useState<string | null>(null);
+
+//   // ESC Key listener
+//   useEffect(() => {
+//     const handleKeyDown = (e: KeyboardEvent) => {
+//       if (isMatcherOpen || isHistoryOpen || isAssetModalOpen) return;
+//       if (e.key === 'Escape') onClose();
+//     };
+//     if (isOpen) window.addEventListener('keydown', handleKeyDown);
+//     return () => window.removeEventListener('keydown', handleKeyDown);
+//   }, [isOpen, isMatcherOpen, isHistoryOpen, isAssetModalOpen, onClose]);
+
+//   // Fetch breakdown summary & asset array from backend
+//   const fetchBreakdown = useCallback(async () => {
+//     if (!subcategory) return;
+//     setLoading(true);
+//     try {
+//       const data = await subledgerApi.getSubcategoryBreakdown(subcategory);
+//       setBreakdownData(data);
+//     } catch (err) {
+//       console.error('Failed to load subcategory breakdown:', err);
+//     } finally {
+//       setLoading(false);
+//     }
+//   }, [subcategory]);
+
+//   useEffect(() => {
+//     if (isOpen && subcategory) {
+//       fetchBreakdown();
+//     }
+//   }, [isOpen, subcategory, fetchBreakdown]);
+
+//   const toggleVendor = (vendorKey: string) => {
+//     setExpandedVendors((prev) => ({
+//       ...prev,
+//       [vendorKey]: !prev[vendorKey],
+//     }));
+//   };
+
+//   const handleCreateAsset = () => {
+//     setAssetToEdit(null);
+//     setIsAssetModalOpen(true);
+//   };
+
+//   // ✏️ Helper to fetch full asset node payload and launch Edit Form Modal
+//   const handleEditAsset = async (assetId: string) => {
+//     setLoadingAssetId(assetId);
+//     try {
+//       const fullAsset = await subledgerApi.getAssetById(assetId);
+//       setAssetToEdit(fullAsset);
+//       setIsAssetModalOpen(true);
+//     } catch (err) {
+//       console.error('Failed to load asset details for editing:', err);
+//     } finally {
+//       setLoadingAssetId(null);
+//     }
+//   };
+
+//   // Helper to fetch full asset node payload and launch matcher modal
+//   const handleLaunchMatcherForAsset = async (assetId: string) => {
+//     setLoadingAssetId(assetId);
+//     try {
+//       const fullAsset = await subledgerApi.getAssetById(assetId);
+//       setSelectedAssetForScan(fullAsset);
+//       setIsMatcherOpen(true);
+//     } catch (err) {
+//       console.error('Failed to load asset details for scanner:', err);
+//     } finally {
+//       setLoadingAssetId(null);
+//     }
+//   };
+
+//   // Helper to fetch full asset node payload and launch history modal
+//   const handleOpenHistoryForAsset = async (assetId: string) => {
+//     setLoadingAssetId(assetId);
+//     try {
+//       const fullAsset = await subledgerApi.getAssetById(assetId);
+//       setHistoryAsset(fullAsset);
+//       setIsHistoryOpen(true);
+//     } catch (err) {
+//       console.error('Failed to load asset details for history:', err);
+//     } finally {
+//       setLoadingAssetId(null);
+//     }
+//   };
+
+//   // Group breakdown assets by Vendor / Counterparty
+//   const groupedAssets = useMemo(() => {
+//     if (!breakdownData?.assets) return {};
+
+//     const groups: Record<
+//       string,
+//       {
+//         vendorName: string;
+//         assets: typeof breakdownData.assets;
+//         totalValuation: number;
+//         totalMapped: number;
+//       }
+//     > = {};
+
+//     breakdownData.assets.forEach((asset: any) => {
+//       const vendorName =
+//         asset.vendor_name ||
+//         asset.vendor_detail?.name ||
+//         (typeof asset.vendor === 'string' && asset.vendor.length > 0 ? asset.vendor : null) ||
+//         'Independent / Uncategorized';
+
+//       const vendorKey =
+//         asset.vendor_id ||
+//         asset.vendor_detail?.id ||
+//         asset.vendor ||
+//         'uncategorized';
+
+//       if (!groups[vendorKey]) {
+//         groups[vendorKey] = {
+//           vendorName,
+//           assets: [],
+//           totalValuation: 0,
+//           totalMapped: 0,
+//         };
+//       }
+
+//       groups[vendorKey].assets.push(asset);
+//       groups[vendorKey].totalValuation += Number(asset.current_valuation || 0);
+//       groups[vendorKey].totalMapped += Number(asset.mapped_transaction_total || 0);
+//     });
+
+//     return groups;
+//   }, [breakdownData]);
+
+//   if (!isOpen || !subcategory) return null;
+
+//   return (
+//     <div
+//       className="fixed inset-0 z-50 overflow-hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 font-sans"
+//       onClick={onClose}
+//     >
+//       <div
+//         className="w-full max-w-4xl h-[78vh] max-h-95 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+//         onClick={(e) => e.stopPropagation()}
+//       >
+//         {/* Header Bar */}
+//         <div className="px-5 py-3.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0">
+//           <div className="flex items-center space-x-3">
+//             <div className="p-1.5 bg-emerald-950/80 border border-emerald-800/60 rounded-xl text-emerald-400">
+//               <Building2 className="w-4 h-4" />
+//             </div>
+//             <div className="flex items-center space-x-2">
+//               <h1 className="text-xs font-mono uppercase tracking-wider font-bold text-white">
+//                 {subcategory}
+//               </h1>
+//               <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/80 px-2 py-0.5 rounded-full font-mono">
+//                 Subledger Operations Hub
+//               </span>
+//             </div>
+//           </div>
+
+//           <div className="flex items-center space-x-2">
+//             <button
+//               type="button"
+//               onClick={handleCreateAsset}
+//               className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center space-x-1"
+//               title="Register new subledger asset instance"
+//             >
+//               <Plus className="w-3.5 h-3.5" />
+//               <span>New Asset</span>
+//             </button>
+
+//             <button
+//               type="button"
+//               onClick={fetchBreakdown}
+//               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+//               title="Refresh Breakdown"
+//             >
+//               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+//             </button>
+
+//             <button
+//               type="button"
+//               onClick={onClose}
+//               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+//             >
+//               <X className="w-4 h-4" />
+//             </button>
+//           </div>
+//         </div>
+
+//         {/* Financial KPI Summary Bar */}
+//         {breakdownData && (
+//           <div className="grid grid-cols-4 gap-2 px-5 py-2.5 bg-slate-900/50 border-b border-slate-800/80 text-xs font-mono shrink-0">
+//             <div>
+//               <span className="text-[10px] text-slate-500 uppercase block">Taxonomy Balance</span>
+//               <span className="font-bold text-slate-200">
+//                 ₹{Number(breakdownData.total_taxonomy_balance).toLocaleString('en-IN')}
+//               </span>
+//             </div>
+//             <div>
+//               <span className="text-[10px] text-slate-500 uppercase block">Mapped Total</span>
+//               <span className="font-bold text-emerald-400">
+//                 ₹{Number(breakdownData.total_subledger_mapped).toLocaleString('en-IN')}
+//               </span>
+//             </div>
+//             <div>
+//               <span className="text-[10px] text-slate-500 uppercase block">Unmapped Variance</span>
+//               <span className="font-bold text-amber-400">
+//                 ₹{Number(breakdownData.unmapped_variance).toLocaleString('en-IN')}
+//               </span>
+//             </div>
+//             <div>
+//               <span className="text-[10px] text-slate-500 uppercase block">Asset Instances</span>
+//               <span className="font-bold text-slate-200">{breakdownData.asset_count} Registered</span>
+//             </div>
+//           </div>
+//         )}
+
+//         {/* Content Body: Collapsible Vendor Groups */}
+//         <div className="flex-1 overflow-y-auto p-4 bg-slate-950 space-y-3 font-mono">
+//           {loading ? (
+//             <div className="py-12 text-center text-xs text-slate-400 font-mono">
+//               Fetching subledger breakdown for {subcategory}...
+//             </div>
+//           ) : !breakdownData?.assets || breakdownData.assets.length === 0 ? (
+//             <div className="p-8 border border-dashed border-slate-800 rounded-xl text-center text-slate-500 text-xs font-mono space-y-3">
+//               <p>No asset instances mapped under {subcategory} yet.</p>
+//               <button
+//                 type="button"
+//                 onClick={handleCreateAsset}
+//                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold font-mono transition-colors cursor-pointer inline-flex items-center gap-1.5"
+//               >
+//                 <Plus className="w-3.5 h-3.5" />
+//                 <span>Register First Asset</span>
+//               </button>
+//             </div>
+//           ) : (
+//             Object.entries(groupedAssets).map(([vendorKey, group]) => {
+//               const isExpanded = expandedVendors[vendorKey] !== false;
+
+//               return (
+//                 <div
+//                   key={vendorKey}
+//                   className="rounded-xl border border-slate-800/80 bg-slate-900/90 overflow-hidden shadow-lg space-y-0"
+//                 >
+//                   {/* Collapsible Vendor Header */}
+//                   <div
+//                     onClick={() => toggleVendor(vendorKey)}
+//                     className="flex items-center justify-between bg-slate-800/80 px-4 py-3 cursor-pointer hover:bg-slate-800 transition-colors select-none border-b border-slate-800/60"
+//                   >
+//                     <div className="flex items-center gap-3">
+//                       <span className="text-xs text-emerald-400">
+//                         {isExpanded ? '▼' : '▶'}
+//                       </span>
+//                       <h3 className="text-sm font-bold text-white flex items-center gap-2">
+//                         🏬 {group.vendorName}
+//                         <span className="text-[10px] font-normal text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-700">
+//                           {group.assets.length} {group.assets.length === 1 ? 'Asset' : 'Assets'}
+//                         </span>
+//                       </h3>
+//                     </div>
+
+//                     <div className="flex items-center gap-6 text-xs">
+//                       <div className="text-right">
+//                         <span className="text-slate-400 block text-[9px]">TOTAL VALUATION</span>
+//                         <span className="text-emerald-400 font-bold">
+//                           ₹{group.totalValuation.toLocaleString('en-IN')}
+//                         </span>
+//                       </div>
+//                     </div>
+//                   </div>
+
+//                   {/* Expandable Table Rows */}
+//                   {isExpanded && (
+//                     <div className="border-t border-slate-800/60 bg-slate-950/40">
+//                       <table className="w-full text-left font-mono text-xs">
+//                         <thead className="bg-slate-900/40 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+//                           <tr>
+//                             <th className="p-2.5">Code</th>
+//                             <th className="p-2.5">Asset Name</th>
+//                             <th className="p-2.5 text-right">Valuation</th>
+//                             <th className="p-2.5 text-right">Mapped Total</th>
+//                             <th className="p-2.5 text-center">Mapped Count</th>
+//                             <th className="p-2.5 text-center">Actions</th>
+//                           </tr>
+//                         </thead>
+//                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+//   {group.assets.map((asset: any) => {
+//     // 🎯 Lifecycle Status Lock Check
+//     const isClosedOrMatured =
+//       asset.status === 'MATURED' ||
+//       asset.status === 'CLOSED' ||
+//       asset.status === 'LIQUIDATED';
+
+//     const assetId = asset.asset_id || asset.id;
+
+//     return (
+//       <tr key={assetId} className="hover:bg-slate-900/50 transition-colors">
+//         <td className="p-2.5 font-bold text-emerald-400">{asset.asset_code}</td>
+//         <td className="p-2.5 text-slate-200 font-semibold flex items-center gap-2">
+//           <span>{asset.name}</span>
+//           {isClosedOrMatured && (
+//             <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 border border-amber-500/40">
+//               🏁 MATURED
+//             </span>
+//           )}
+//         </td>
+//         <td className="p-2.5 text-right">
+//           ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
+//         </td>
+//         <td className="p-2.5 text-right text-emerald-400 font-bold">
+//           ₹{Number(asset.mapped_transaction_total || 0).toLocaleString('en-IN')}
+//         </td>
+//         <td className="p-2.5 text-center text-slate-400">
+//           {asset.mapped_count || 0} entries
+//         </td>
+//         <td className="p-2.5 text-center">
+//           <div className="flex items-center justify-center space-x-1.5">
+//             {/* 🎯 Scan Outflows Button (Locked if Matured) */}
+//             <button
+//               type="button"
+//               onClick={() => handleLaunchMatcherForAsset(assetId)}
+//               disabled={isClosedOrMatured || loadingAssetId === assetId}
+//               className={`px-2 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${
+//                 isClosedOrMatured
+//                   ? 'bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed opacity-60'
+//                   : 'bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-400 cursor-pointer'
+//               }`}
+//               title={
+//                 isClosedOrMatured
+//                   ? 'Transaction mapping is locked for matured/closed nodes'
+//                   : 'Scan staging lines & bind transactions'
+//               }
+//             >
+//               {loadingAssetId === assetId ? 'Loading...' : '🔍 Scan Outflows'}
+//             </button>
+
+//             {/* History Button (Always Enabled) */}
+//             <button
+//               type="button"
+//               onClick={() => handleOpenHistoryForAsset(assetId)}
+//               disabled={loadingAssetId === assetId}
+//               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
+//               title="View bound transaction history"
+//             >
+//               📜 History
+//             </button>
+
+//             {/* Edit Asset Action */}
+//             <button
+//               type="button"
+//               onClick={() => handleEditAsset(assetId)}
+//               disabled={loadingAssetId === assetId}
+//               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-bold rounded transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
+//               title="Edit asset details"
+//             >
+//               <Edit2 className="w-3 h-3" />
+//               <span>Edit</span>
+//             </button>
+//           </div>
+//         </td>
+//       </tr>
+//     );
+//   })}
+// </tbody>
+//                       </table>
+//                     </div>
+//                   )}
+//                 </div>
+//               );
+//             })
+//           )}
+//         </div>
+
+//         {/* Candidate Matcher Modal */}
+//         {selectedAssetForScan && (
+//           <CandidateMatcherModal
+//             isOpen={isMatcherOpen}
+//             onClose={() => {
+//               setIsMatcherOpen(false);
+//               setSelectedAssetForScan(null);
+//             }}
+//             asset={selectedAssetForScan}
+//             onSuccess={() => {
+//               fetchBreakdown();
+//               setIsMatcherOpen(false);
+//               setSelectedAssetForScan(null);
+//             }}
+//           />
+//         )}
+
+//         {/* History Drawer Modal */}
+//         {historyAsset && (
+//           <HistoryDrawerModal
+//             isOpen={isHistoryOpen}
+//             onClose={() => {
+//               setIsHistoryOpen(false);
+//               setHistoryAsset(null);
+//             }}
+//             asset={historyAsset}
+//           />
+//         )}
+
+//         {/* Master Asset Creation/Edit Form Modal */}
+//         <AssetFormModal
+//           isOpen={isAssetModalOpen}
+//           onClose={() => {
+//             setIsAssetModalOpen(false);
+//             setAssetToEdit(null);
+//           }}
+//           defaultSubcategory={subcategory}
+//           assetToEdit={assetToEdit}
+//           onSuccess={() => {
+//             fetchBreakdown();
+//             setIsAssetModalOpen(false);
+//             setAssetToEdit(null);
+//           }}
+//         />
+//       </div>
+//     </div>
+//   );
+// };
+
+// export default SubledgerBreakdownDrawer;
 
 
 

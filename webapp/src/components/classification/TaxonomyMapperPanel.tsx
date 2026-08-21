@@ -182,27 +182,64 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
 
           {!isCreatingNew ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+{/* Primary Category Select */}
               <div>
                 <label style={{ fontSize: '10px', textTransform: 'uppercase', color: '#71717a', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>
                   Primary Category
                 </label>
                 <select
-                  value={selectedCategory}
+                  value={selectedCategory || ''}
                   onChange={(e) => {
                     const newCat = e.target.value;
                     setSelectedCategory(newCat);
-                    const found = taxonomyTree.find((t) => t.category === newCat);
-                    if (found && found.subcategories && found.subcategories.length > 0) {
-                      setSelectedSubcategory(found.subcategories[0]);
+                    const found = taxonomyTree.find((t) => String(t?.category) === newCat);
+                    if (found && Array.isArray(found.subcategories) && found.subcategories.length > 0) {
+                      setSelectedSubcategory(String(found.subcategories[0] || ''));
                     }
                   }}
                   style={{ width: '100%', backgroundColor: '#09090b', border: '1px solid #27272a', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: getCategoryColor(selectedCategory), fontWeight: 'bold', outline: 'none' }}
                 >
-                  {taxonomyTree.map((t, catIdx) => (
-                    <option key={`cat-${t.category}-${catIdx}`} value={t.category} style={{ color: '#f4f4f5', backgroundColor: '#18181b' }}>
-                      {t.category === 'Income' ? '🟢 Income (Inflows)' : t.category === 'Expense' ? '🔴 Expense (Outflows)' : t.category}
-                    </option>
-                  ))}
+                  {(taxonomyTree || []).map((t, catIdx) => {
+                    const catName = String(t?.category || '');
+                    if (!catName) return null;
+                    const label = catName === 'Income' ? 'Income (Inflows)' : catName === 'Expense' ? 'Expense (Outflows)' : catName;
+                    return (
+                      <option key={`cat-${catName}-${catIdx}`} value={catName} style={{ color: '#f4f4f5', backgroundColor: '#18181b' }}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+{/* Subcategory Select */}
+              <div>
+                <label style={{ fontSize: '10px', textTransform: 'uppercase', color: '#71717a', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>
+                  Subcategory
+                </label>
+                <select
+                  value={typeof selectedSubcategory === 'string' ? selectedSubcategory : ''}
+                  onChange={(e) => setSelectedSubcategory(e.target.value)}
+                  style={{ width: '100%', backgroundColor: '#09090b', border: '1px solid #27272a', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#f4f4f5', outline: 'none' }}
+                >
+                  {(availableSubcategories || []).map((sub: any, subIdx: number) => {
+                    // Extract plain string if `sub` is an object (e.g. { subcategory: 'Rent Income' })
+                    const displayLabel = typeof sub === 'object' && sub !== null 
+                      ? (sub.subcategory || sub.name || sub.title || String(sub)) 
+                      : String(sub || '');
+
+                    if (!displayLabel) return null;
+
+                    return (
+                      <option 
+                        key={`sub-opt-${subIdx}-${displayLabel}`} 
+                        value={displayLabel} 
+                        style={{ color: '#f4f4f5', backgroundColor: '#18181b' }}
+                      >
+                        {displayLabel}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

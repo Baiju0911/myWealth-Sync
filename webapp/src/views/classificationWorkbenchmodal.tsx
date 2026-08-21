@@ -120,14 +120,51 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
     }
   };
 
+  // const loadTaxonomy = async () => {
+  //   try {
+  //     const data = await getTaxonomyTree();
+  //     if (data && data.length > 0) {
+  //       setTaxonomyTree(data);
+        
+  //       let matchedCatNode = data.find((t: TaxonomyOption) => 
+  //         (t.subcategories || []).includes(targetSubcategory)
+  //       );
+
+  //       if (!matchedCatNode) {
+  //         matchedCatNode = data.find((t: TaxonomyOption) => t.category === 'Expense') || data[0];
+  //       }
+
+  //       setSelectedCategory(matchedCatNode.category);
+  //       if (matchedCatNode.subcategories && matchedCatNode.subcategories.length > 0) {
+  //         setSelectedSubcategory(
+  //           matchedCatNode.subcategories.includes(targetSubcategory) 
+  //             ? targetSubcategory 
+  //             : matchedCatNode.subcategories[0]
+  //         );
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to load dynamic taxonomy:', err);
+  //   }
+  // };
+
   const loadTaxonomy = async () => {
     try {
       const data = await getTaxonomyTree();
       if (data && data.length > 0) {
         setTaxonomyTree(data);
-        
+
+        // Helper to extract string name from string OR object
+        const getSubName = (sub: any): string => 
+          typeof sub === 'object' && sub !== null 
+            ? String(sub.subcategory || sub.name || sub.title || '') 
+            : String(sub || '');
+
+        const targetName = String(targetSubcategory || 'Suspense Account');
+
+        // Find matching node comparing extracted strings
         let matchedCatNode = data.find((t: TaxonomyOption) => 
-          (t.subcategories || []).includes(targetSubcategory)
+          (t.subcategories || []).some((s: any) => getSubName(s) === targetName)
         );
 
         if (!matchedCatNode) {
@@ -135,11 +172,11 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
         }
 
         setSelectedCategory(matchedCatNode.category);
-        if (matchedCatNode.subcategories && matchedCatNode.subcategories.length > 0) {
+
+        const currentSubs = (matchedCatNode.subcategories || []).map(getSubName).filter(Boolean);
+        if (currentSubs.length > 0) {
           setSelectedSubcategory(
-            matchedCatNode.subcategories.includes(targetSubcategory) 
-              ? targetSubcategory 
-              : matchedCatNode.subcategories[0]
+            currentSubs.includes(targetName) ? targetName : currentSubs[0]
           );
         }
       }
@@ -148,12 +185,30 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
     }
   };
 
+
+  // const availableSubcategories = useMemo(() => {
+  //   if (!taxonomyTree || taxonomyTree.length === 0) return [];
+  //   const found = taxonomyTree.find((item: TaxonomyOption) => item.category === selectedCategory) || taxonomyTree[0];
+  //   return found ? found.subcategories || [] : [];
+  // }, [taxonomyTree, selectedCategory]);
+
   const availableSubcategories = useMemo(() => {
     if (!taxonomyTree || taxonomyTree.length === 0) return [];
+    
     const found = taxonomyTree.find((item: TaxonomyOption) => item.category === selectedCategory) || taxonomyTree[0];
-    return found ? found.subcategories || [] : [];
-  }, [taxonomyTree, selectedCategory]);
+    const rawList = found ? found.subcategories || [] : [];
 
+    // Ensure array contains ONLY plain primitive strings for <option> components
+    return rawList
+      .map((sub: any) => {
+        if (typeof sub === 'object' && sub !== null) {
+          return String(sub.subcategory || sub.name || sub.title || '');
+        }
+        return String(sub || '');
+      })
+      .filter(Boolean);
+  }, [taxonomyTree, selectedCategory]);
+  
   const filteredClusters = useMemo(() => filterClustersByQuery(clusters, searchQuery), [clusters, searchQuery]);
   const visibleTxnIds = useMemo(() => filteredClusters.flatMap((c) => c.transaction_ids || []), [filteredClusters]);
   const selectedSummary = useMemo(() => calculateSelectedMetrics(clusters, selectedTxnIds), [clusters, selectedTxnIds]);

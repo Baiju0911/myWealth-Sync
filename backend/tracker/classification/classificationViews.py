@@ -27,6 +27,8 @@ from tracker.classification.engine import (
     generate_strict_multitoken_pattern,
     extract_clean_payee_pattern,
 )
+from tracker.models.subledger import AssetCategory
+
 from typing import List, Dict, Any
 from ..ai.services.hybrid_classifier import push_to_vector_cache
 
@@ -318,21 +320,70 @@ def get_taxonomy_nodes_Assetview(request):
     return Response({"status": "success", "taxonomy": taxonomy_data})
 
 
+# @api_view(["GET"])
+# def get_taxonomy_tree_view(request):
+#     nodes = TaxonomyTree.objects.filter(is_active=True)
+
+#     tree_dict = {}
+#     for node in nodes:
+#         if node.category not in tree_dict:
+#             tree_dict[node.category] = []
+#         tree_dict[node.category].append(node.subcategory)
+
+#     taxonomy_data = [
+#         {"category": cat, "subcategories": subs} for cat, subs in tree_dict.items()
+#     ]
+
+#     return Response({"status": "success", "taxonomy": taxonomy_data})
+
+
 @api_view(["GET"])
 def get_taxonomy_tree_view(request):
+    """GET /api/get_taxonomy_tree/
+
+    Builds an in-memory taxonomy tree grouping active subcategories under
+    primary categories, complete with explicit choice/category codes.
+    """
+    # 🟢 1. Query TaxonomyTree nodes directly without invalid select_related
     nodes = TaxonomyTree.objects.filter(is_active=True)
 
+    # 🟢 2. Build fast lookup map for AssetCategories by default subcategory
+    cat_map = {
+        cat.default_taxonomy_subcategory.strip().lower(): cat.code
+        for cat in AssetCategory.objects.filter(is_active=True)
+        if cat.default_taxonomy_subcategory
+    }
+
     tree_dict = {}
+
     for node in nodes:
+        sub_name = node.subcategory.strip()
+        sub_lower = sub_name.lower()
+
+        # Resolve category_code dynamically from cat_map or fallback to code-friendly string
+        resolved_code = cat_map.get(
+            sub_lower, sub_name.replace(" ", "_").replace("&", "").upper()
+        )
+
         if node.category not in tree_dict:
             tree_dict[node.category] = []
-        tree_dict[node.category].append(node.subcategory)
+
+        tree_dict[node.category].append(
+            {
+                "id": str(node.id),
+                "subcategory": sub_name,
+                "category_code": resolved_code,
+            }
+        )
 
     taxonomy_data = [
         {"category": cat, "subcategories": subs} for cat, subs in tree_dict.items()
     ]
 
-    return Response({"status": "success", "taxonomy": taxonomy_data})
+    return Response(
+        {"status": "success", "taxonomy": taxonomy_data},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])
