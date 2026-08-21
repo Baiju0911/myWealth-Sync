@@ -11,9 +11,9 @@ urlpatterns = [
         asset_mapped_transactions_view,
         name="asset-mapped-transactions",
     ),
-    path(
-        "api/subledgers/assets/<int:asset_id>/mapped-transactions/",
-        asset_mapped_transactions_view,
-        name="asset-mapped-transactions",
-    ),
+    # path(
+    #     "api/subledgers/assets/<int:asset_id>/mapped-transactions/",
+    #     asset_mapped_transactions_view,
+    #     name="asset-mapped-transactions",
+    # ),
 ]

@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from ..subledgers.services import (
     AssetCandidateMatcher as ServiceCandidateMatcher,
@@ -223,11 +224,139 @@ class Vendor(models.Model):
         return self.name
 
 
+# class AssetSubLedger(models.Model):
+#     """Master Asset Register & Sub-Ledger Hub.
+
+#     Holds core financial valuations, ownership split, dynamic asset category
+#     pointers, and category-specific operational details in JSON payload.
+#     """
+
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+#     asset_code = models.CharField(
+#         max_length=32,
+#         unique=True,
+#         db_index=True,
+#         help_text="Human-readable code, e.g., AST-RE-001 or AST-FD-002",
+#     )
+#     name = models.CharField(
+#         max_length=255, help_text="Display title, e.g., 'Ulloor Plot & House'"
+#     )
+
+#     # 🎯 Linked to dynamic AssetCategory model with explicit integer PK
+#     asset_category = models.ForeignKey(
+#         AssetCategory,
+#         on_delete=models.PROTECT,
+#         related_name="subledger_assets",
+#         null=True,
+#         blank=True,
+#         help_text="Foreign key to dynamic AssetCategory table",
+#     )
+
+#     # Fallback legacy string category column
+#     category = models.CharField(
+#         max_length=32, choices=AssetCategoryChoices.choices, db_index=True
+#     )
+
+#     # 🏛️ Financial Valuation & Cost Basis
+#     acquisition_date = models.DateField(default=timezone.now)
+#     acquisition_cost = models.DecimalField(
+#         max_digits=15, decimal_places=2, default=Decimal("0.00")
+#     )
+#     current_valuation = models.DecimalField(
+#         max_digits=15, decimal_places=2, default=Decimal("0.00")
+#     )
+#     valuation_updated_at = models.DateTimeField(auto_now=True)
+
+#     # 👥 Ownership Matrix
+#     ownership_type = models.CharField(
+#         max_length=20,
+#         choices=OwnershipType.choices,
+#         default=OwnershipType.INDIVIDUAL,
+#     )
+#     ownership_share_pct = models.DecimalField(
+#         max_digits=5,
+#         decimal_places=2,
+#         default=Decimal("100.00"),
+#         validators=[
+#             MinValueValidator(Decimal("0.01")),
+#             MaxValueValidator(Decimal("100.00")),
+#         ],
+#     )
+#     status = models.CharField(
+#         max_length=20,
+#         choices=AssetStatus.choices,
+#         default=AssetStatus.ACTIVE,
+#         db_index=True,
+#     )
+#     vendor = models.ForeignKey(
+#         Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name="assets"
+#     )
+
+#     # 🔗 Link to General Ledger Balance Sheet Account
+#     linked_gl_account = models.ForeignKey(
+#         "TaxonomyTree",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="subledger_assets",
+#         help_text="Chart of Accounts Taxonomy category for General Ledger alignment",
+#     )
+#     parent_asset = models.ForeignKey(
+#         "self",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="child_streams",
+#         help_text="Parent asset generating this income or incurring this expense (e.g. SBI-NRE1 FD generating Interest)",
+#     )
+
+#     # 🎨 Deep Dynamic Category Metadata Repository
+#     metadata_payload = models.JSONField(
+#         default=dict,
+#         blank=True,
+#         help_text="Stores category-specific attributes (deed numbers, PRAN, survey numbers, etc.)",
+#     )
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     class Meta:
+#         db_table = "ledger_asset_subledger"
+#         verbose_name = "Asset Sub-Ledger Record"
+#         verbose_name_plural = "Asset Sub-Ledger Registry"
+#         indexes = [
+#             models.Index(fields=["category", "status"]),
+#             models.Index(fields=["asset_category", "status"]),
+#             models.Index(fields=["asset_code"]),
+#         ]
+
+#     def __str__(self):
+#         cat_name = (
+#             self.asset_category.name
+#             if self.asset_category
+#             else self.get_category_display()
+#         )
+#         return f"[{self.asset_code}] {self.name} ({cat_name})"
+
+
+class AcquisitionFundingSource(models.TextChoices):
+    BANK_STAGING = "BANK_STAGING", "🏦 Bank Line (Reconciled via Staging)"
+    DIRECT_CASH = "DIRECT_CASH", "💵 Direct Cash / Manual (Bank Row Missing)"
+    HISTORICAL_OPENING = (
+        "HISTORICAL_OPENING",
+        "📜 Historical / Opening Balance (Pre-System Asset)",
+    )
+    GIFTS_INHERITANCE = (
+        "GIFTS_INHERITANCE",
+        "🎁 Gift / Family Inheritance (Non-Cash Capital)",
+    )
+    OTHER = "OTHER", "📁 Other / Manual Adjustment"
+
+
 class AssetSubLedger(models.Model):
     """Master Asset Register & Sub-Ledger Hub.
 
     Holds core financial valuations, ownership split, dynamic asset category
-    pointers, and category-specific operational details in JSON payload.
+    pointers, funding origin trails, and category-specific operational details in JSON payload.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -243,7 +372,7 @@ class AssetSubLedger(models.Model):
 
     # 🎯 Linked to dynamic AssetCategory model with explicit integer PK
     asset_category = models.ForeignKey(
-        AssetCategory,
+        "AssetCategory",
         on_delete=models.PROTECT,
         related_name="subledger_assets",
         null=True,
@@ -265,6 +394,19 @@ class AssetSubLedger(models.Model):
         max_digits=15, decimal_places=2, default=Decimal("0.00")
     )
     valuation_updated_at = models.DateTimeField(auto_now=True)
+
+    # 🧾 Funding Origin & Bank Row Tracking
+    acquisition_funding_source = models.CharField(
+        max_length=30,
+        choices=AcquisitionFundingSource.choices,
+        default=AcquisitionFundingSource.BANK_STAGING,
+        db_index=True,
+        help_text="Tracks how the acquisition cost baseline was funded or if bank statement line is missing",
+    )
+    is_bank_row_missing = models.BooleanField(
+        default=False,
+        help_text="True if asset was acquired via cash, opening balance, or unbanked transaction",
+    )
 
     # 👥 Ownership Matrix
     ownership_type = models.CharField(
@@ -288,7 +430,11 @@ class AssetSubLedger(models.Model):
         db_index=True,
     )
     vendor = models.ForeignKey(
-        Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name="assets"
+        "Vendor",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assets",
     )
 
     # 🔗 Link to General Ledger Balance Sheet Account
@@ -326,7 +472,16 @@ class AssetSubLedger(models.Model):
             models.Index(fields=["category", "status"]),
             models.Index(fields=["asset_category", "status"]),
             models.Index(fields=["asset_code"]),
+            models.Index(fields=["acquisition_funding_source"]),
         ]
+
+    def save(self, *args, **kwargs):
+        # Auto-toggle `is_bank_row_missing` flag based on chosen funding origin
+        if self.acquisition_funding_source != AcquisitionFundingSource.BANK_STAGING:
+            self.is_bank_row_missing = True
+        else:
+            self.is_bank_row_missing = False
+        super().save(*args, **kwargs)
 
     def __str__(self):
         cat_name = (
@@ -519,3 +674,19 @@ class AssetCandidateMatcher:
     @staticmethod
     def find_candidate_rows(*args, **kwargs):
         return ServiceCandidateMatcher.find_candidate_rows(*args, **kwargs)
+
+
+NON_EDITABLE_STATUSES = [
+    AssetStatus.MATURED,
+    AssetStatus.LIQUIDATED,
+    AssetStatus.SOLD,
+    AssetStatus.WRITTEN_OFF,
+]
+
+
+def validate_node_is_editable(asset_node):
+    if asset_node.status in NON_EDITABLE_STATUSES:
+        raise ValidationError(
+            f"Sub-ledger node '{asset_node.name}' ({asset_node.asset_code}) is in '{asset_node.status}' state. "
+            "Modifications to transactions or income lines are locked for non-active nodes."
+        )

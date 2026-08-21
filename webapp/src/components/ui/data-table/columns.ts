@@ -450,7 +450,6 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
       return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
     },
   },
-  // 🎯 Flexible Action Button Column for Subledger-Capable Rows
   {
     key: 'actions',
     label: 'Actions',
@@ -462,20 +461,35 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
         .trim()
         .toLowerCase();
 
+      // 🎯 1. Fetch capability set passed directly from backend metadata
       const capableSet: Set<string> = meta?.subledgerCapableSet || new Set();
 
-      // 1. Case-insensitive & trimmed matching against backend subledgerCapableSet
-      const isSetCapable = Array.from(capableSet).some(
+      // 🎯 2. Strict Check: Only render button if backend confirmed subledger existence
+      const isSubledgerCapable = Array.from(capableSet).some(
         (item) =>
           String(item).trim().toLowerCase() === subcategory.toLowerCase()
       );
 
-      // 2. Fallback: Automatically render for any row in the "Asset" primary class
-      const isAssetRow = primaryCategory === 'asset';
-
-      const isSubledgerCapable = isSetCapable || isAssetRow;
-
       if (!isSubledgerCapable || !subcategory) return null;
+
+      // 🎯 3. Style button dynamically based on row class
+      let buttonLabel = '📦 Subledger';
+      let colorStyles =
+        'bg-teal-950/80 hover:bg-teal-900 border-teal-800/80 text-teal-300';
+
+      if (primaryCategory === 'asset') {
+        buttonLabel = '📦 Asset Hub';
+        colorStyles =
+          'bg-cyan-950/80 hover:bg-cyan-900 border-cyan-800/80 text-cyan-300';
+      } else if (primaryCategory === 'expense') {
+        buttonLabel = '📊 Subledger';
+        colorStyles =
+          'bg-rose-950/80 hover:bg-rose-900 border-rose-800/80 text-rose-300';
+      } else if (primaryCategory === 'income') {
+        buttonLabel = '💰 Subledger';
+        colorStyles =
+          'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-800/80 text-emerald-300';
+      }
 
       return React.createElement(
         'button',
@@ -483,26 +497,18 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
           type: 'button',
           onClick: (e: React.MouseEvent) => {
             e.stopPropagation();
-            console.log(
-              '📦 [Subledger Hub Button Clicked for]:',
-              subcategory,
-              'Row Data:',
-              row
-            );
             if (meta?.onOpenSubledgerDrawer) {
               meta.onOpenSubledgerDrawer(subcategory);
             }
           },
-          className:
-            'px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800/80 text-cyan-300 font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto',
+          className: `px-2 py-0.5 border font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto ${colorStyles}`,
           title: `Open Subledger Hub for ${subcategory}`,
         },
-        '📦 Asset Hub'
+        buttonLabel
       );
     },
   },
 ];
-
 export const KPI_SUMMARY_COLUMNS: ColumnConfig[] = [
   {
     key: 'kpi_name',

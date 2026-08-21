@@ -17,6 +17,10 @@ interface SubLedgerDashboardProps {
   isModal?: boolean;
 }
 
+export interface HierarchyAssetNode extends AssetSubLedgerNode {
+  children?: AssetSubLedgerNode[];
+}
+
 export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
   filterSubcategory,
   isModal = false,
@@ -25,7 +29,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
   const [pendingDues, setPendingDues] = useState<AssetComplianceSchedule[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // 🎯 Active Subledger Tab Filter (ASSET, INCOME, EXPENSE)
+  // Active Subledger Tab Filter (ASSET, INCOME, EXPENSE)
   const [activeTab, setActiveTab] = useState<'ASSET' | 'INCOME' | 'EXPENSE'>('ASSET');
 
   // Accordion Collapsed State by Vendor
@@ -124,7 +128,8 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
       setPendingDues(duesData);
     } catch (err) {
       console.error('Failed to load sub-ledger data:', err);
-    } finally {
+    } 
+    finally {
       setLoading(false);
     }
   }, [filterSubcategory]);
@@ -149,20 +154,21 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
     return 'ASSET';
   };
 
-  // 🎯 Filter Assets strictly by active tab
+  // Filter Assets strictly by active tab
   const filteredAssetsByTab = useMemo(() => {
     return assets.filter((asset: any) => getSubledgerType(asset) === activeTab);
   }, [assets, activeTab]);
 
-  // 🎯 Group Vendor Entries Based on Tab-Filtered Data
-  const groupedVendorEntries = useMemo(() => {
+  // 🎯 Structure Vendor Groups with Master Node Top Sorting & Sub-Asset Nesting
+  const structuredVendorEntries = useMemo(() => {
     const groups: Record<
       string,
       {
         vendorKey: string;
         vendorName: string;
-        assets: AssetSubLedgerNode[];
+        rootAssets: HierarchyAssetNode[];
         totalValuation: number;
+        totalNodeCount: number;
       }
     > = {};
 
@@ -183,13 +189,51 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
         groups[vendorKey] = {
           vendorKey,
           vendorName,
-          assets: [],
+          rootAssets: [],
           totalValuation: 0,
+          totalNodeCount: 0,
         };
       }
 
-      groups[vendorKey].assets.push(asset);
       groups[vendorKey].totalValuation += Number(asset.current_valuation || 0);
+      groups[vendorKey].totalNodeCount += 1;
+    });
+
+    // Build Parent -> Child relations per vendor group
+    Object.keys(groups).forEach((vKey) => {
+      const vendorAssets = filteredAssetsByTab.filter((a: any) => {
+        const key = a.vendor_id || a.vendor_detail?.id || a.vendor || 'uncategorized';
+        return key === vKey;
+      });
+
+      const nodeMap = new Map<string, HierarchyAssetNode>();
+      vendorAssets.forEach((a) => {
+        nodeMap.set(a.id, { ...a, children: [] });
+      });
+
+      const rootNodes: HierarchyAssetNode[] = [];
+
+      nodeMap.forEach((node) => {
+        const parentId = (node as any).parent_asset_id || (node as any).parent_asset?.id || (node as any).parent_asset;
+
+        if (parentId && nodeMap.has(parentId)) {
+          // Attach as child component
+          nodeMap.get(parentId)!.children!.push(node);
+        } else {
+          // Master top-level node
+          rootNodes.push(node);
+        }
+      });
+
+      // 🟢 Sort Root Master Nodes and ensure child sub-assets follow deterministically
+      rootNodes.sort((a, b) => a.asset_code.localeCompare(b.asset_code));
+      rootNodes.forEach((parent) => {
+        if (parent.children) {
+          parent.children.sort((a, b) => a.asset_code.localeCompare(b.asset_code));
+        }
+      });
+
+      groups[vKey].rootAssets = rootNodes;
     });
 
     return Object.values(groups).sort((a, b) => {
@@ -216,6 +260,211 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
     return 'CURRENT VALUATION';
   };
 
+  // Reusable Single Node Card Renderer (Differentiates Master vs Sub-Assets)
+  const renderAssetNodeCard = (asset: HierarchyAssetNode, isChild: boolean = false) => {
+    // 🟢 Distinct Compact Teal Row for Sub-Assets
+    if (isChild) {
+      return (
+        <div
+          key={asset.id}
+          className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg bg-slate-950/90 border border-teal-500/30 border-l-4 border-l-teal-400 hover:border-teal-400/60 transition-all font-mono shadow-sm"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-teal-400 font-bold text-xs shrink-0">↳</span>
+            <span className="rounded bg-teal-500/10 px-2 py-0.5 text-[10px] font-bold text-teal-300 border border-teal-500/30 shrink-0">
+              SUB-ASSET [{asset.asset_code}]
+            </span>
+            <span className="text-xs font-bold text-slate-100 truncate">
+              {asset.name}
+            </span>
+            {asset.metadata_payload && Object.keys(asset.metadata_payload).length > 0 && (
+              <span className="text-[10px] text-slate-400 truncate hidden md:inline font-sans">
+                ({Object.entries(asset.metadata_payload).map(([k, v]) => `${k}: ${v}`).join(', ')})
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-xs font-bold text-teal-300">
+              ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
+            </span>
+
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => openMatcher(asset, null, null)}
+                className="rounded bg-teal-950/90 border border-teal-500/40 px-2.5 py-1 text-[10px] font-bold text-teal-300 hover:bg-teal-900/80 transition-colors cursor-pointer"
+                title="Scan & Map"
+              >
+                🔍 Map
+              </button>
+              <button
+                onClick={() => handleEditAsset(asset)}
+                className="rounded bg-slate-800 p-1 text-slate-400 hover:text-white text-xs cursor-pointer border border-slate-700/60"
+                title="Edit Details"
+              >
+                ✏️
+              </button>
+              <button
+                onClick={() => handleDeleteAsset(asset.id, asset.name)}
+                className="rounded bg-slate-800 p-1 text-slate-400 hover:text-rose-400 text-xs cursor-pointer border border-slate-700/60"
+                title="Delete Sub-Node"
+              >
+                🗑️
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 🟢 Master Parent Container Card
+    return (
+      <div
+        key={asset.id}
+        className="p-4 sm:p-5 rounded-xl bg-slate-900/90 border border-slate-800/90 shadow-xl space-y-3 hover:border-slate-700/80 transition-all"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="rounded bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-400 border border-emerald-500/20">
+                {asset.asset_code}
+              </span>
+
+              <span className="text-[11px] font-mono text-slate-400">
+                {asset.category_display || asset.category}
+              </span>
+
+              <button
+                onClick={() => handleEditAsset(asset)}
+                className="rounded bg-amber-500/10 px-2.5 py-0.5 font-mono text-[10px] font-bold text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                🏛️ GL: {asset.linked_gl_account ? `${asset.linked_gl_account}` : 'Mapped GL'}
+                <span className="text-[9px] text-amber-500">✏️</span>
+              </button>
+            </div>
+
+            <h3 className="font-bold font-mono text-white text-sm sm:text-base truncate">
+              {asset.name}
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="text-right hidden sm:block">
+              <span className="text-[9px] text-slate-400 uppercase tracking-wider block font-mono">
+                {getMetricLabel()}
+              </span>
+              <p className="font-mono text-sm font-bold text-emerald-400">
+                ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1 font-mono">
+              <button
+                onClick={() => openMatcher(asset, null, null)}
+                className="rounded bg-emerald-950/80 border border-emerald-500/40 px-2 py-1 text-[10px] font-bold text-emerald-400 hover:bg-emerald-900/80 transition-colors cursor-pointer"
+              >
+                🔍 Scan & Map
+              </button>
+              <button
+                onClick={() => openHistoryDrawer(asset)}
+                className="rounded bg-slate-800/90 px-2 py-1 text-[10px] font-bold text-slate-300 hover:text-emerald-400 hover:bg-slate-700 transition-colors cursor-pointer border border-slate-700/80"
+              >
+                📜 History
+              </button>
+              <button
+                onClick={() => handleEditAsset(asset)}
+                className="rounded bg-slate-800/80 p-1 text-slate-400 hover:text-white text-xs cursor-pointer border border-slate-700/60"
+              >
+                ✏️
+              </button>
+              <button
+                onClick={() => handleDeleteAsset(asset.id, asset.name)}
+                className="rounded bg-slate-800/80 p-1 text-slate-400 hover:text-rose-400 text-xs cursor-pointer border border-slate-700/60"
+              >
+                🗑️
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic Metadata Attributes */}
+        {asset.metadata_payload && Object.keys(asset.metadata_payload).length > 0 && (
+          <div className="flex flex-wrap gap-1.5 border-t border-slate-800/60 pt-2">
+            {Object.entries(asset.metadata_payload).map(([k, v]) => (
+              <span
+                key={k}
+                className="rounded bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-slate-300 border border-slate-800/80"
+              >
+                <span className="text-slate-500">{k}:</span> {String(v)}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Operational Identifiers & Schedules */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 rounded-lg bg-slate-950/90 p-2.5 border border-slate-800/60">
+          <div className="space-y-1.5 min-w-0">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[9px] font-bold text-slate-400 uppercase font-mono">Operational Identifiers</h4>
+              <button onClick={() => handleCreateUtility(asset)} className="text-[9px] text-emerald-400 font-mono">+ Add Utility</button>
+            </div>
+            {asset.operational_accounts.length === 0 ? (
+              <p className="text-[10px] text-slate-600 italic font-mono">None registered</p>
+            ) : (
+              <ul className="space-y-1 font-mono">
+                {asset.operational_accounts.map((op) => (
+                  <li key={op.id} className="flex items-center justify-between text-[10px] text-slate-300 bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                    <span>{op.provider_name} ({op.consumer_identifier})</span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => openMatcher(asset, null, op)} className="text-[9px] text-emerald-400 font-bold">Map</button>
+                      <button onClick={() => handleEditUtility(asset, op)} className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer" title="Edit Utility">✏️</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="space-y-1.5 min-w-0">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[9px] font-bold text-slate-400 uppercase font-mono">Schedules & Due Dates</h4>
+              <button onClick={() => handleCreateSchedule(asset)} className="text-[9px] text-emerald-400 font-mono">+ Add Reminder</button>
+            </div>
+            {asset.compliance_schedules.length === 0 ? (
+              <p className="text-[10px] text-slate-600 italic font-mono">No pending schedules</p>
+            ) : (
+              <ul className="space-y-1 font-mono">
+                {asset.compliance_schedules.map((sch) => (
+                  <li key={sch.id} className="flex items-center justify-between text-[10px] bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                    <span className="text-slate-200">{sch.title}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[9px] text-amber-400 font-bold">DUE {sch.due_date}</span>
+                      <button onClick={() => handleEditSchedule(asset, sch)} className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer" title="Edit Schedule">✏️</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* 🟢 Distinct Sub-Components Container */}
+        {asset.children && asset.children.length > 0 && (
+          <div className="pt-2 space-y-2 border-t border-slate-800/80">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono font-bold text-teal-300 bg-teal-950 px-2 py-0.5 rounded border border-teal-500/40 uppercase tracking-wider">
+                📦 LINKED SUB-ASSETS ({asset.children.length})
+              </span>
+            </div>
+            <div className="space-y-2 pl-3 border-l-2 border-teal-500/40">
+              {asset.children.map((childNode) => renderAssetNodeCard(childNode, true))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div
       className={
@@ -235,7 +484,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
           </p>
         </div>
 
-        {/* 🎯 Subledger Category Type Tabs */}
+        {/* Subledger Category Type Tabs */}
         <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
           <button
             onClick={() => setActiveTab('ASSET')}
@@ -321,7 +570,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
                 </button>
               </div>
             ) : (
-              groupedVendorEntries.map((group) => {
+              structuredVendorEntries.map((group) => {
                 const isExpanded = expandedVendors[group.vendorKey] !== false;
 
                 return (
@@ -341,7 +590,7 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
                         <h3 className="text-xs font-bold text-white font-mono flex items-center gap-2">
                           🏬 {group.vendorName}
                           <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-700/80">
-                            {group.assets.length} {group.assets.length === 1 ? 'Node' : 'Nodes'}
+                            {group.totalNodeCount} {group.totalNodeCount === 1 ? 'Node' : 'Nodes'}
                           </span>
                         </h3>
                       </div>
@@ -358,232 +607,10 @@ export const SubLedgerDashboard: React.FC<SubLedgerDashboardProps> = ({
                       </div>
                     </div>
 
-                    {/* Node Cards */}
+                    {/* Hierarchy Node Cards */}
                     {isExpanded && (
                       <div className="p-4 space-y-4 bg-slate-950/40">
-                        {group.assets.map((asset) => (
-                          <div
-                            key={asset.id}
-                            className="rounded-xl border border-slate-800/80 bg-slate-900/90 p-4 sm:p-5 shadow-lg space-y-3 hover:border-slate-700/80 transition-all"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 space-y-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="rounded bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-400 border border-emerald-500/20">
-                                    {asset.asset_code}
-                                  </span>
-                                  <span className="text-[11px] font-mono text-slate-400">
-                                    {asset.category_display || asset.category}
-                                  </span>
-
-                                  <button
-                                    onClick={() => handleEditAsset(asset)}
-                                    className="rounded bg-amber-500/10 px-2.5 py-0.5 font-mono text-[10px] font-bold text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-colors flex items-center gap-1 cursor-pointer"
-                                    title="Click to remap General Ledger Taxonomy"
-                                  >
-                                    🏛️ GL: {asset.linked_gl_account ? `${asset.linked_gl_account}` : 'Mapped GL'}
-                                    <span className="text-[9px] text-amber-500">✏️</span>
-                                  </button>
-                                </div>
-
-                                <h3 className="text-sm sm:text-base font-bold text-white truncate font-mono">
-                                  {asset.name}
-                                </h3>
-
-                                {/* 🎯 Linked Parent Asset Badge for Income/Expense items */}
-                                {(asset as any).parent_asset_detail && (
-                                  <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 w-fit">
-                                    <span>🔗 Linked Asset:</span>
-                                    <span className="text-emerald-400 font-semibold">
-                                      [{(asset as any).parent_asset_detail.asset_code}] {(asset as any).parent_asset_detail.name}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-3 shrink-0">
-                                <div className="text-right hidden sm:block">
-                                  <span className="text-[9px] text-slate-400 uppercase tracking-wider block font-mono">
-                                    {getMetricLabel()}
-                                  </span>
-                                  <p className="font-mono text-sm font-bold text-emerald-400">
-                                    ₹{Number(asset.current_valuation || 0).toLocaleString('en-IN')}
-                                  </p>
-                                </div>
-
-                                <div className="flex items-center gap-1 font-mono">
-                                  <button
-                                    onClick={() => openMatcher(asset, null, null)}
-                                    className="rounded bg-emerald-950/60 border border-emerald-500/30 px-2 py-1 text-[10px] font-bold text-emerald-400 hover:bg-emerald-900/50 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                                    title="Scan bank/journal entries to map transactions"
-                                  >
-                                    🔍 Scan & Map
-                                  </button>
-
-                                  <button
-                                    onClick={() => openHistoryDrawer(asset)}
-                                    className="rounded bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-300 hover:text-emerald-400 hover:bg-slate-700 transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer border border-slate-700/60"
-                                    title="View Entity History"
-                                  >
-                                    📜 History
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleEditAsset(asset)}
-                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-white text-xs transition-colors cursor-pointer border border-slate-700/60"
-                                    title="Edit Details"
-                                  >
-                                    ✏️
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteAsset(asset.id, asset.name)}
-                                    className="rounded bg-slate-800 p-1 text-slate-400 hover:text-rose-400 text-xs transition-colors cursor-pointer border border-slate-700/60"
-                                    title="Delete Entity"
-                                  >
-                                    🗑️
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Metadata Badges */}
-                            {asset.metadata_payload && Object.keys(asset.metadata_payload).length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 border-t border-slate-800/80 pt-2">
-                                {Object.entries(asset.metadata_payload).map(([k, v]) => (
-                                  <span
-                                    key={k}
-                                    className="rounded bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-slate-300 border border-slate-800"
-                                  >
-                                    <span className="text-slate-500">{k}:</span> {String(v)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Utilities & Reminders */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-slate-950 p-3 border border-slate-800/60">
-                              {/* Operational Identifiers */}
-                              <div className="space-y-2 min-w-0">
-                                <div className="flex items-center justify-between">
-                                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                                    Operational Identifiers
-                                  </h4>
-                                  <button
-                                    onClick={() => handleCreateUtility(asset)}
-                                    className="text-[10px] text-emerald-400 hover:underline font-semibold font-mono cursor-pointer"
-                                  >
-                                    + Add Utility
-                                  </button>
-                                </div>
-
-                                {asset.operational_accounts.length === 0 ? (
-                                  <p className="text-[10px] text-slate-600 italic font-mono">None registered</p>
-                                ) : (
-                                  <ul className="space-y-1.5 font-mono">
-                                    {asset.operational_accounts.map((op) => (
-                                      <li
-                                        key={op.id}
-                                        className="flex items-center justify-between gap-2 text-[11px] text-slate-300 rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
-                                      >
-                                        <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                          <span className="font-semibold text-slate-200 truncate">
-                                            {op.provider_name}
-                                          </span>
-                                          <span className="text-[9px] text-slate-500 shrink-0">
-                                            ({op.consumer_identifier})
-                                          </span>
-                                        </div>
-
-                                        <div className="flex items-center gap-1 shrink-0">
-                                          <button
-                                            onClick={() => openMatcher(asset, null, op)}
-                                            className="rounded bg-emerald-600/20 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-colors cursor-pointer"
-                                          >
-                                            Scan & Map
-                                          </button>
-                                          <button
-                                            onClick={() => handleEditUtility(asset, op)}
-                                            className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer"
-                                            title="Edit Utility Details"
-                                          >
-                                            ✏️
-                                          </button>
-                                          <button
-                                            onClick={async () => {
-                                              if (window.confirm(`Delete utility ${op.provider_name}?`)) {
-                                                await subledgerApi.deleteOperationalAccount(op.id);
-                                                loadDashboardData();
-                                              }
-                                            }}
-                                            className="text-slate-500 hover:text-rose-400 text-[10px] p-0.5 transition-colors cursor-pointer"
-                                            title="Delete Utility"
-                                          >
-                                            🗑️
-                                          </button>
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-                              </div>
-
-                              {/* Schedules & Due Dates */}
-                              <div className="space-y-2 min-w-0">
-                                <div className="flex items-center justify-between">
-                                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                                    Schedules & Due Dates
-                                  </h4>
-                                  <button
-                                    onClick={() => handleCreateSchedule(asset)}
-                                    className="text-[10px] text-emerald-400 hover:underline font-semibold font-mono cursor-pointer"
-                                  >
-                                    + Add Reminder
-                                  </button>
-                                </div>
-
-                                {asset.compliance_schedules.length === 0 ? (
-                                  <p className="text-[10px] text-slate-600 italic font-mono">No pending schedules</p>
-                                ) : (
-                                  <ul className="space-y-1.5 font-mono">
-                                    {asset.compliance_schedules.map((sch) => (
-                                      <li
-                                        key={sch.id}
-                                        className="flex items-center justify-between gap-2 text-[11px] rounded bg-slate-900/80 p-1.5 border border-slate-800/80 min-w-0"
-                                      >
-                                        <span className="truncate text-slate-200">• {sch.title}</span>
-
-                                        <div className="flex items-center gap-1 shrink-0">
-                                          <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-400 border border-amber-500/20">
-                                            DUE {sch.due_date}
-                                          </span>
-                                          <button
-                                            onClick={() => handleEditSchedule(asset, sch)}
-                                            className="text-slate-400 hover:text-white text-[10px] p-0.5 transition-colors cursor-pointer"
-                                            title="Edit Reminder Details"
-                                          >
-                                            ✏️
-                                          </button>
-                                          <button
-                                            onClick={async () => {
-                                              if (window.confirm(`Delete reminder ${sch.title}?`)) {
-                                                await subledgerApi.deleteSchedule(sch.id);
-                                                loadDashboardData();
-                                              }
-                                            }}
-                                            className="text-slate-500 hover:text-rose-400 text-[10px] p-0.5 transition-colors cursor-pointer"
-                                            title="Delete Reminder"
-                                          >
-                                            🗑️
-                                          </button>
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
+                        {group.rootAssets.map((rootAsset) => renderAssetNodeCard(rootAsset))}
                       </div>
                     )}
                   </div>
