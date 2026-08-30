@@ -274,3 +274,147 @@ FROM ledger_asset_subledger ast
 LEFT JOIN ledger_asset_compliance_schedule cs ON ast.id = cs.asset_id
 LEFT JOIN ledger_asset_transaction_mapping tm ON cs.id = tm.schedule_id
 WHERE ast.asset_code = 'AST-RE-001';
+
+
+SELECT 
+    COUNT(*) AS total_sun_rows
+FROM ledger_journal_entry
+WHERE account_id = 99 
+  AND transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND UPPER(remarks) REGEXP 'S[[:space:]_/-]*U[[:space:]_/-]*N';
+
+
+SELECT 
+    id,
+    row_identifier,
+    transaction_date,
+    debit AS outflow_amount,
+    remarks
+FROM ledger_journal_entry 
+WHERE account_id = 99 
+  AND transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND UPPER(REPLACE(remarks, ' ', '')) LIKE '%SUNPROJECT%'
+ORDER BY transaction_date ASC
+
+
+SELECT 
+    COUNT(*) AS total_transactions,
+    SUM(debit) AS total_outflow_amount
+FROM ledger_journal_entry 
+WHERE account_id = 99 
+  AND transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND UPPER(REPLACE(remarks, ' ', '')) LIKE '%SUNPROJECT%';
+  
+  
+  
+  
+  SELECT 
+    e.id AS journal_id,
+    e.row_identifier,
+    e.transaction_date,
+    e.debit,
+    e.remarks,
+    m.id AS mapping_id,
+    m.asset_id AS mapped_asset_id
+FROM ledger_journal_entry e
+LEFT JOIN ledger_asset_transaction_mapping m 
+       ON e.row_identifier = m.row_identifier
+WHERE e.account_id = 99 
+  AND e.transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND UPPER(REPLACE(e.remarks, ' ', '')) LIKE '%SUNPROJECT%';
+  
+  
+  
+  SELECT 
+    e.id AS journal_id,
+    e.row_identifier,
+    e.transaction_date,
+    e.debit AS outflow_amount,
+    e.remarks,
+    IF(m.asset_id IS NOT NULL, 'BOUND', 'UNMAPPED') AS binding_status,
+    m.asset_id AS mapped_asset_id
+FROM ledger_journal_entry e
+LEFT JOIN ledger_asset_transaction_mapping m 
+       ON e.row_identifier = m.row_identifier
+WHERE e.account_id = 99 
+  AND e.transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND e.debit > 0
+  AND UPPER(REPLACE(e.remarks, ' ', '')) LIKE '%SUNPROJECT%'
+ORDER BY e.transaction_date ASC;
+
+
+
+SELECT 
+    id, 
+    row_identifier, 
+    transaction_date, 
+    debit AS outflow_amount, 
+    remarks , classification_status,
+    evaluation_matrix_snapshot
+FROM ledger_journal_entry  
+WHERE account_id = 99  
+  AND transaction_date BETWEEN '2023-01-01' AND '2023-03-31' 
+  AND UPPER(REPLACE(remarks, ' ', '')) LIKE '%0038139287676%' 
+ORDER BY transaction_date ASC;
+
+
+SELECT 
+    id,
+    transaction_date,
+    debit,
+    credit,
+    classification_status,
+    JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category')) AS taxonomy_category,
+    JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_subcategory')) AS taxonomy_subcategory
+FROM ledger_journal_entry
+WHERE id = '2b70e1b4b905420e8abab3ae74dca41c';
+
+
+SELECT 
+    id,
+    transaction_date,
+    debit,
+    classification_status,
+    JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_category')) AS cat,
+    JSON_UNQUOTE(JSON_EXTRACT(evaluation_matrix_snapshot, '$.resolved_subcategory')) AS subcat,
+    remarks
+FROM ledger_journal_entry
+WHERE remarks LIKE '%0038139%' and id = '2b70e1b4b905420e8abab3ae74dca41c'
+  AND debit > 0;
+  
+  
+SELECT 
+    e.id AS journal_id,
+    e.account_id,
+    e.transaction_date,
+    e.debit AS outflow_amount,
+    IF(m.asset_id IS NOT NULL, 'PHASE 1 (BOUND)', 'PHASE 2 (UNMAPPED)') AS matcher_phase,
+    e.remarks
+FROM ledger_journal_entry e
+LEFT JOIN ledger_asset_transaction_mapping m 
+       ON e.row_identifier = m.row_identifier
+WHERE e.debit > 0
+  AND e.transaction_date BETWEEN '2019-01-01' AND '2023-12-31'
+  AND (
+      -- Node 99 Unmapped Entries
+      (e.account_id = 99 AND UPPER(REPLACE(e.remarks, ' ', '')) LIKE '%SUNPROJECT%')
+      OR 
+      -- Phase 1 Bound Entries for this Asset
+      m.asset_id = 'd3ccf90d-f437-441f-8d1c-78500471bcf1'
+  )
+ORDER BY matcher_phase ASC, e.transaction_date ASC;
+
+
+
+DESCRIBE ledger_asset_subledger;
+select * from  ledger_vendor;
+
+SELECT 
+    a.asset_code,
+    a.name AS asset_name,
+    a.vendor_id,
+    v.name AS vendor_name
+FROM 
+    ledger_asset_subledger a
+LEFT JOIN 
+    ledger_vendor v ON a.vendor_id = v.id;

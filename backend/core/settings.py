@@ -20,7 +20,11 @@ SECRET_KEY = os.environ.get(
 DEBUG = os.environ.get("DJANGO_DEBUG", "True") == "True"
 
 # Allow local machine, local network testing, and Android/iOS Emulator bridges
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    "ingest.bluedotservices.net",
+    "localhost",
+    "127.0.0.1",
+]
 
 
 # Application definition
@@ -82,15 +86,21 @@ DATABASES = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": os.environ.get("DB_NAME", "mywealth_sync_db"),
         "USER": os.environ.get("DB_USER", "root"),
-        "PASSWORD": os.environ.get(
-            "DB_PASSWORD"
-        ),  # 🔐 Pulls cleanly from your .env file
+        "PASSWORD": os.environ.get("DB_PASSWORD"),
         "HOST": os.environ.get("DB_HOST", "127.0.0.1"),
-        "PORT": os.environ.get("DB_PORT", "3306"),
+        "PORT": os.environ.get("DB_PORT", "7979"),
         "OPTIONS": {
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
         },
-    }
+    },
+    "vector_db": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("VECTOR_DB_NAME", "mywealth_vector_db"),
+        "USER": os.environ.get("VECTOR_DB_USER", "root"),
+        "PASSWORD": os.environ.get("VECTOR_DB_PASSWORD", "rootpassword"),
+        "HOST": os.environ.get("VECTOR_DB_HOST", "vector_db"),
+        "PORT": "5432",
+    },
 }
 
 
@@ -173,3 +183,8 @@ TRANSACTION_STATUS_CHOICES = [
     ("VERIFIED", "Double-Entry Confirmed and Reconciled"),
     ("FAILED", "Failed / Cancelled Transaction"),
 ]
+
+# Bypass Django 6.0 strict MySQL version check for MySQL 8.0.x
+from django.db.backends.mysql.base import DatabaseWrapper
+
+DatabaseWrapper.check_database_version_supported = lambda self: None

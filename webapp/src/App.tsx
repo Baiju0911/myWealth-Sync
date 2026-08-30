@@ -12,7 +12,8 @@ export type AppView =
   // | 'StagingQueueEvaluator'
   // | 'LedgerDashboard' 
   | 'SubLedgerDashboard'
-  | 'unifiedPipeline';  
+  | 'unifiedPipeline'  
+  | 'EmailIngestView';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('unifiedPipeline');
