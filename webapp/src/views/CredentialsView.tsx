@@ -90,7 +90,7 @@ export default function CredentialsView() {
         </div>
 
         {/* Right Side: Read, Track, and Purge Layout Table */}
-        <div className="lg:col-span-8 p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px]">
+        <div className="lg:col-span-8 p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-110">
           <h3 className="text-base font-semibold text-white mb-6 pb-3 border-b border-zinc-800">Active Mapped Credentials Enclaves</h3>
 
           {fetchLoading ? (

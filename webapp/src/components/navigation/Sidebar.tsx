@@ -15,6 +15,7 @@ export default function Sidebar({ currentView, setCurrentView }: SidebarProps) {
     { id: 'unifiedPipeline', label: 'Statement Processor Pipeline', icon: '⚡' },
     { id: 'SubLedgerDashboard', label: 'Sub-Ledger Dashboard', icon: '�' },
     { id: 'AccountingHeaders', label: 'Accounting Headers', icon: '📋' },
+    { id: 'EmailIngestView', label: 'Email Ingest', icon: '📋' },
   ];
 
   return (

@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 import psycopg2
 from psycopg2 import pool
+import os
 
 from tracker.classification.utils.taxonomy_gate import resolve_official_taxonomy
 from .ollama_service import classify_asset_narration
@@ -24,8 +25,8 @@ DB_PARAMS = {
     "dbname": "mywealth_vector_db",
     "user": "root",
     "password": "rootpassword",
-    "host": "localhost",
-    "port": "5433",
+    "host": os.environ.get("VECTOR_DB_HOST", "vector_db"),
+    "port": int(os.environ.get("VECTOR_DB_PORT", "5432")),
     "connect_timeout": 3,
 }
 

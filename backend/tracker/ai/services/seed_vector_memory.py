@@ -1,13 +1,15 @@
 import json
 import psycopg2
+import os
 from tracker.models.models import MasterFinancialCategory, AccountingRule
 
 DB_PARAMS = {
     "dbname": "mywealth_vector_db",
     "user": "root",
     "password": "rootpassword",
-    "host": "localhost",
-    "port": "5433",
+    "host": os.environ.get("VECTOR_DB_HOST", "vector_db"),
+    "port": int(os.environ.get("VECTOR_DB_PORT", "5432")),
+    "connect_timeout": 3,
 }
 
 

@@ -4,6 +4,7 @@ import {
   AccountingHeaders, 
   UnifiedStatementPipeline,
   SubLedgerDashboard,
+  EmailIngestView,
 } from '../../views'; 
 
 interface ShellProps {
@@ -50,6 +51,8 @@ export default function DashboardShell({ currentView }: ShellProps) {
     //  case 'StagingQueueEvaluator':
     //  case 'Ledgerdashboard':
         return <UnifiedStatementPipeline />;
+      case 'EmailIngestView':
+        return <EmailIngestView/>;
 
       default:
         return <MasterInstitutionsContainer />;

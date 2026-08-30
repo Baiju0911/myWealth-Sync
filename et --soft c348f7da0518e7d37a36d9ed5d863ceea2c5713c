@@ -1,0 +1,335 @@
+[33mcommit 14b3a07730684624382871922bd609704fbde9ac[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/local-ai-split-pettycash[m[33m)[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 30 23:23:03 2026 +0530
+
+    feat(mail sync): gmail sync v2.0
+
+[33mcommit 6523b3173b76d610d88d46826fa4194857f2c11a[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 30 23:22:10 2026 +0530
+
+    feat(mail sync): gmail sync v2.0
+
+[33mcommit 07433d74a5303f11b0aab3bb2b7da47372ed1697[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 30 23:21:54 2026 +0530
+
+    feat(mail sync): gmail sync v2.0
+
+[33mcommit ac221cc581cb84ee78c883007ec2465bfa1108d0[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 30 23:19:14 2026 +0530
+
+    feat(ingest): add staging pipeline and email parsing improvements
+
+[33mcommit c348f7da0518e7d37a36d9ed5d863ceea2c5713c[m[33m ([m[1;31morigin/feature/local-ai-split-pettycash[m[33m)[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Fri Aug 21 12:33:28 2026 +0530
+
+    feat(subledger): isolate capital acquisition cost, add valuation sync, and update AI trainer services
+
+[33mcommit 2ec84082a488fcd77ac1de581e6e2ca181db18bf[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Aug 18 23:03:01 2026 +0530
+
+    chore: Sub Ledger v5.0
+
+[33mcommit 1a20d0288db7c4db71a559b38f48e26ff4923e3a[m[33m ([m[1;31morigin/main[m[33m, [m[1;32mmain[m[33m)[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 16 22:34:41 2026 +0530
+
+    chore: Sub Ledger v4.0
+
+[33mcommit d1b791ebef8dbaf92166e825b229b61d3e16f984[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Aug 15 21:27:48 2026 +0530
+
+    chore: Sub Ledger v3.0
+
+[33mcommit d76ddfd661b374d17ccd37044f95361e84dad762[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Aug 13 22:56:44 2026 +0530
+
+    chore: Sub Ledger v2.0
+
+[33mcommit ff821e946a00d87fc338e5f660ee97eef36421ae[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Aug 12 22:41:03 2026 +0530
+
+    chore: Sub Ledger v1.0
+
+[33mcommit 85bdbf300a5ca93393b0501055bd070ee6c37616[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Aug 12 22:40:26 2026 +0530
+
+    chore: Sub Ledger v1.0
+
+[33mcommit a4a210b208ff4f93213bcc794b8a3fc047244b4a[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Aug 11 23:15:02 2026 +0530
+
+    chore: Suspense Sweep v1
+
+[33mcommit 3df7ffb76cde787f89d0416caca51c74a31d55ae[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 9 23:04:55 2026 +0530
+
+    chore: menus and Layout
+
+[33mcommit b2aa542970162eed16a6e61fdf087009ba10d892[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Aug 8 22:56:33 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep UPI normalization v10
+
+[33mcommit 4293f394a194722fafea78dd37059e4c74ccd784[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Fri Aug 7 22:42:43 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep UPI normalization v9
+
+[33mcommit f2a8ce4dd043065659ea3936496b5dc72531f563[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Aug 6 22:41:13 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep v8
+
+[33mcommit c5d4a0168b9b0ad65f6751935189409eca31cfb2[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Aug 5 23:02:12 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep v7
+
+[33mcommit af36749d7b230de71fd1d041d5adbf1233f4309c[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Aug 4 23:22:18 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep v6
+
+[33mcommit c36dfce44e5788d0ada204b5463855f881ab44db[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Mon Aug 3 23:47:37 2026 +0530
+
+    chore: Classification and account node99 Bulk Sweep v5
+
+[33mcommit a5d0449d7c6c821c38205328c7d238732f6cc843[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Aug 2 22:27:43 2026 +0530
+
+    chore: Classification and account node99 v4
+
+[33mcommit b21884f22a0368d07b3a09b87727c23d1c160629[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Aug 1 21:21:04 2026 +0530
+
+    chore: Classification and account node99 v3
+
+[33mcommit 1db64a243da40ae2e435647f058ff0810abdd35a[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Jul 29 22:07:33 2026 +0530
+
+    chore: Classification and account node99 v2
+
+[33mcommit e1f6c063e0d699daa6e6b1dca8d6f58e4971a803[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jul 28 21:41:51 2026 +0530
+
+    chore: Fixing search query in Modal and notes v1
+
+[33mcommit e6dca0e8c25e571e817a684b6a589b7c20301ed9[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Jul 26 19:58:07 2026 +0530
+
+    chore: Dashboard ,  graph and remarks v5
+
+[33mcommit d9a8162e68cee4bec1173491294b0c0c1755a8b7[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Jul 25 21:36:42 2026 +0530
+
+    chore: Dashboard and graph v4
+
+[33mcommit ca5d91c95d8c5207d0bf6a2df6cccebcb621dcd7[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Fri Jul 24 22:45:42 2026 +0530
+
+    chore: Dashboard and graph v3
+
+[33mcommit 0d5707b8a8d2b66bb61db0fed4d3fb0fee1802f2[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jul 23 21:57:16 2026 +0530
+
+    chore: started Dashboard v2
+
+[33mcommit 87504afcb61e513b34299162137fcca9f77d061c[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jul 23 21:14:01 2026 +0530
+
+    chore: started Dashboard v1
+
+[33mcommit b96781033e0bbb72073f4f910145d4912dcda791[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Mon Jul 13 22:19:40 2026 +0530
+
+    chore: SoT and SoC mappings started updated Journal and double entry v1
+
+[33mcommit 089bf9310247a3ea6b2988afa783b4dc364ae258[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Jul 12 23:08:14 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v7 and Comitt in Journal
+
+[33mcommit 88072761e791e371c4841c56ecfdbe1b174f80f4[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Jul 11 22:44:56 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v6
+
+[33mcommit 1126f515fb52b04dca74b138820a5d57ecc15c8d[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Jul 8 23:00:00 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v5
+
+[33mcommit ea3d90402d43249fb529ef63471c095e57121173[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jul 7 22:16:03 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v4
+
+[33mcommit e11e0608216af1b5967113ad08152058fd800ef6[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Mon Jul 6 22:22:03 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v3
+
+[33mcommit 14ff648e2b58e1bdecdc08b163146adc3dbdcc94[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Jul 5 22:06:14 2026 +0530
+
+    chore: SoT and SoC mappings started updated our flags in categories v2
+
+[33mcommit fa09022ef16d14dfe3a3c481926e123d87d96348[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Jul 5 10:57:36 2026 +0530
+
+    chore: SoT and SoC mappings started v1
+
+[33mcommit b81120f618b0a29f15867ada00e631e9e912f1a6[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Fri Jul 3 21:41:57 2026 +0530
+
+    chore: SoT and SoC mappings started
+
+[33mcommit 414ebe010f5f95b61b4a05bfa8380611c1f0f3c3[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jul 2 22:49:56 2026 +0530
+
+    chore: Started working on Headers CRUD
+
+[33mcommit 1e6aaf21cdc7319a25233f4063c24d5fabcc9935[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jul 2 16:36:10 2026 +0530
+
+    chore: uploaded all data from from pdf xcel to table. cleaned staggingIngest vview dash
+
+[33mcommit 958d49ca2dd2f72070324c0b6f806cf66a0a2a97[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 30 22:16:08 2026 +0530
+
+    chore: Testing few changes on Strict Matrix and Confidence evalvuator
+
+[33mcommit 738c02aa9349d2730c6a546297a9b61e8d877e42[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Mon Jun 29 21:21:04 2026 +0530
+
+    chore: Done PDF and Excel and OCR upload and extract to DF to table and excel and reuploading narration enriched etc..
+
+[33mcommit c56172a580d58fdd05df92eef9eb520038fe3196[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Jun 24 22:45:06 2026 +0530
+
+    chore: cleaning code to be more standardized adnd fixed Hexa
+
+[33mcommit 04276e84c747fe719826273323828d40a81afe1d[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 23 14:42:13 2026 +0530
+
+    chore: DF to CSV
+
+[33mcommit 5940447cd2c35f12c9a8f3e6f7dd338e14775cfe[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Mon Jun 22 22:08:53 2026 +0530
+
+    chore: Paddle OCR going on
+
+[33mcommit 9ef2327c89bd8aa6562a5ac516732ef86171d048[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sun Jun 21 21:17:52 2026 +0530
+
+    chore: Completed all 3 banks parser and older legacy SIB
+
+[33mcommit 0130d70d4fc0fe0341499c9a3fa454d6b9ef6527[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Jun 20 21:03:38 2026 +0530
+
+    chore: Strict Matrix V2
+
+[33mcommit 85a58eded0d5e2acbecbf732047268e73405e8b2[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Sat Jun 20 14:25:37 2026 +0530
+
+    chore: Relative and Strict Matrix going on
+
+[33mcommit 44b595968d35b0b93ef9dea7806f557d8d912ce6[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 16 21:53:01 2026 +0530
+
+    chore: remove binary dependencies from tracking and update gitignore
+
+[33mcommit 6ac88da67e33481044d0b80f37c3abc162b462e0[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 16 21:52:22 2026 +0530
+
+    chore: add requirements.txt for dependency management
+
+[33mcommit e2b1d8d52c127d88aae241e0840b8e0db3e896f9[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 16 21:51:48 2026 +0530
+
+    chore: remove binary libraries and site-packages from git tracking
+
+[33mcommit 0d2287f797103f61b2addfab2ed859756b51141e[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Tue Jun 16 21:49:58 2026 +0530
+
+    feat: Universal Format Dynamic Ingest fixed few issues v-1
+
+[33mcommit e749fab48227d3d2b6a0837f6ed0139a67da75c2[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Fri Jun 12 22:45:08 2026 +0530
+
+    feat: Dynamic Ingest fixed few issues v-3
+
+[33mcommit 2785bab09824da62cfa38171b6d000a10123a10b[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jun 11 22:02:47 2026 +0530
+
+    feat: Dynamic Ingest fixed few issues v-2
+
+[33mcommit d3bd358751a841fd81409215f8715f655b454bd2[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Thu Jun 11 12:24:56 2026 +0530
+
+    feat: Dynamic Ingest fixed few issues v-1
+
+[33mcommit 02be727ad87c7f3f979ab30e8135265e47fb6c05[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Jun 10 22:44:43 2026 +0530
+
+    feat: Dynamic Ingest and new Menus..
+
+[33mcommit 1fb6978a8d8971534a61e4a8b52ea44c5e5aa9b6[m
+Author: Baiju0911 <baiju.s.nair@outlook.com>
+Date:   Wed Jun 10 07:46:16 2026 +0530
+
+    chore: initial commit tracking backend engines and expo mobile application

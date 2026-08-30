@@ -1,0 +1,83 @@
+networks:
+  mywealth_net:
+    driver: bridge
+
+services:
+  # 🧠 Local SLM Engine
+  ollama:
+    image: ollama/ollama:latest
+    container_name: local_ai_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - S:/AI_Workspace/ollama_models:/root/.ollama
+    networks:
+      - mywealth_net
+    restart: unless-stopped
+
+  # 🔍 Local Vector Database for Fast Narration Matching
+  vector_db:
+    image: pgvector/pgvector:pg16
+    container_name: local_vector_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - S:/AI_Workspace/vector_db_data:/var/lib/postgresql/data
+    networks:
+      - mywealth_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # 🐍 MyWealth Django Backend
+  backend:
+    build: .
+    container_name: mywealth_backend
+    working_dir: /app/backend
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
+      - PYTHONPATH=${PYTHONPATH}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - VECTOR_DB_HOST=${VECTOR_DB_HOST}
+      - VECTOR_DB_PORT=${VECTOR_DB_PORT}
+      - EMAIL_INGEST_SECRET=${EMAIL_INGEST_SECRET}
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - CLOUDFLARE_TUNNEL_PUBLIC_URL=${CLOUDFLARE_TUNNEL_PUBLIC_URL}
+      - CLOUDFLARE_TUNNEL_METRICS_URL=${CLOUDFLARE_TUNNEL_METRICS_URL}
+      - CLOUDFLARE_EDGE_LOCATION=${CLOUDFLARE_EDGE_LOCATION}
+      - CLOUDFLARE_TUNNEL_PROTOCOL=${CLOUDFLARE_TUNNEL_PROTOCOL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/app
+    networks:
+      - mywealth_net
+    depends_on:
+      vector_db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  # 🌐 Cloudflare Named Tunnel (ingest.bluedotservices.net)
+  quick_tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: mywealth_named_tunnel
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:20000 run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - mywealth_net
+    depends_on:
+      - backend
+    restart: unless-stopped

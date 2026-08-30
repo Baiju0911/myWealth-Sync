@@ -89,3 +89,20 @@ web-build/
 *.njsproj
 *.sln
 *.swp
+# Virtual Environments (Local sandbox code containment setups)
+.env
+.venv
+.vscode
+
+# Google OAuth secrets
+token.json
+credentials.json
+backend/tracker/emailIngest/token.json
+backend/tracker/emailIngest/tokentodel.json1
+backend/tracker/emailIngest/credentials.json
+staged_previews.json
+token.json
+credentials.json
+*.json1
+tokentodel.json1
+staged_previews.json
