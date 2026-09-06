@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { emailIngestApi, type EmailPayload } from '../api/emailIngestApi';
 
-interface TunnelInfo {
+export interface TunnelInfo {
   status: 'ONLINE' | 'OFFLINE';
   tunnel_url: string | null;
   ingest_endpoint: string | null;
@@ -9,10 +9,23 @@ interface TunnelInfo {
   edge_location: string | null;
 }
 
+export type IngestStatusType =
+  | 'PARSED'
+  | 'UNPARSED'
+  | 'DUPLICATE'
+  | 'MATCHED_2_WAY'
+  | 'RECONCILED_3_WAY';
+
+export type StreamSourceType =
+  | 'IOS_SMS'
+  | 'GMAIL_API'
+  | 'BANK_STATEMENT'
+  | 'MERGED_STREAM';
+
 export const useLiveIngestStream = (
   activeTab: string,
   isLivePollingEnabled: boolean,
-  syncing: boolean,
+  _syncing: boolean,
   committing: boolean
 ) => {
   const [tunnel, setTunnel] = useState<TunnelInfo>({
@@ -42,38 +55,45 @@ export const useLiveIngestStream = (
     try {
       const data = await emailIngestApi.getTunnelStatus();
       setTunnel(data);
-    } catch (err) {
+    } catch {
       setTunnel((prev) => ({ ...prev, status: 'OFFLINE' }));
     }
   }, []);
 
   const fetchLiveStagingStream = useCallback(async () => {
-    if (isSyncingRef.current || syncing || committing) return;
+    if (committing) return;
 
     setIsLiveFetching(true);
     try {
       const res = await emailIngestApi.getPendingStagingPayloads();
-      if (
-        res?.previews &&
-        Array.isArray(res.previews) &&
-        res.previews.length > 0
-      ) {
+      if (res?.previews && Array.isArray(res.previews)) {
         const liveItems: EmailPayload[] = res.previews.map(
           (item: any, index: number) => {
             const parsed = item.parsed_transaction || {};
             const raw = item.raw_payload || {};
             const headers = raw.headers_json || {};
             const summary = headers.parsed_summary || {};
-            const isDup = parsed.is_duplicate || item.is_duplicate;
+            const isDup = Boolean(parsed.is_duplicate || item.is_duplicate);
 
             const uniqueId =
               item.payload_hash ||
               parsed.txn_fingerprint ||
               `live-${raw.email_date || Date.now()}-${index}`;
 
+            const resolvedSource: StreamSourceType =
+              raw.source || (headers.is_merged ? 'MERGED_STREAM' : 'IOS_SMS');
+
+            const resolvedStatus: IngestStatusType = isDup
+              ? 'DUPLICATE'
+              : parsed.is_merged
+                ? 'MATCHED_2_WAY'
+                : parsed.is_parsed
+                  ? 'PARSED'
+                  : 'UNPARSED';
+
             return {
               id: uniqueId,
-              source: raw.source || 'IOS_SMS',
+              source: resolvedSource,
               bank_name:
                 parsed.bank_name || summary.bank || 'SOUTH INDIAN BANK',
               account_last4: parsed.account_last4 || summary.account || null,
@@ -85,11 +105,9 @@ export const useLiveIngestStream = (
               balance: parsed.balance || summary.balance || null,
               upi_ref: parsed.upi_ref || summary.upi_ref || null,
               txn_type: parsed.txn_type || 'DEBIT',
-              status: isDup
-                ? 'DUPLICATE'
-                : parsed.is_parsed
-                  ? 'PARSED'
-                  : 'UNPARSED',
+              payment_rail: parsed.payment_rail || 'UNKNOWN',
+              is_self_transfer: Boolean(parsed.is_self_transfer),
+              status: resolvedStatus,
               subject: raw.subject || raw.decrypted_body || 'Incoming SMS',
               email_from: raw.email_from || raw.sender || 'UNKNOWN_SENDER',
               email_date: raw.email_date || new Date().toISOString(),
@@ -101,24 +119,22 @@ export const useLiveIngestStream = (
         );
 
         setStagingPayloads(liveItems);
-      } else {
-        setStagingPayloads([]);
+        updateLastSyncedTimestamp();
       }
-      updateLastSyncedTimestamp();
     } catch (err) {
       console.error('Staging stream polling error:', err);
     } finally {
       setIsLiveFetching(false);
     }
-  }, [syncing, committing]);
+  }, [committing]);
 
   useEffect(() => {
-    if (activeTab === 'INGEST' && isLivePollingEnabled) {
+    if (activeTab === 'INGEST' && isLivePollingEnabled && !committing) {
       fetchTunnelStatus();
       fetchLiveStagingStream();
 
       const tunnelInterval = setInterval(fetchTunnelStatus, 10000);
-      const streamInterval = setInterval(fetchLiveStagingStream, 5000);
+      const streamInterval = setInterval(fetchLiveStagingStream, 4000);
 
       return () => {
         clearInterval(tunnelInterval);
@@ -128,6 +144,7 @@ export const useLiveIngestStream = (
   }, [
     activeTab,
     isLivePollingEnabled,
+    committing,
     fetchTunnelStatus,
     fetchLiveStagingStream,
   ]);

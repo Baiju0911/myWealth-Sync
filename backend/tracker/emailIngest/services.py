@@ -105,3 +105,47 @@ def decrypt_aes_payload(encrypted_b64_str: str) -> dict:
     cipher = AES.new(key, AES.MODE_CBC, iv)
     pt = unpad(cipher.decrypt(ct), AES.block_size)
     return json.loads(pt.decode("utf-8"))
+
+
+def build_staging_payload(record) -> dict:
+    """
+    Constructs a clean, normalized JSON input payload for statement matching.
+    """
+    headers = record.headers_json or {}
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except Exception:
+            headers = {}
+
+    parsed_summary = headers.get("parsed_summary", {})
+    taxonomy = record.taxonomy_payload or {}
+    if isinstance(taxonomy, str):
+        try:
+            taxonomy = json.loads(taxonomy)
+        except Exception:
+            taxonomy = {}
+
+    return {
+        "payload_id": str(record.id),
+        "txn_fingerprint": record.txn_fingerprint,
+        "payload_hash": record.payload_hash,
+        "source": record.source,
+        "bank_name": record.bank_name
+        or parsed_summary.get("bank")
+        or "SOUTH INDIAN BANK",
+        "account_last4": record.account_last4
+        or parsed_summary.get("account")
+        or "0060",
+        "amount": str(record.amount or parsed_summary.get("amount") or "0.00"),
+        "txn_type": (record.txn_type or "DEBIT").upper(),
+        "upi_ref": record.upi_ref or parsed_summary.get("upi_ref"),
+        "merchant": record.merchant or record.subject or "UPI Transfer",
+        "email_date": record.email_date.isoformat() if record.email_date else None,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "sender": record.sender or record.email_from,
+        "subject": record.subject,
+        "decrypted_body": record.decrypted_body,
+        "taxonomy": taxonomy.get("taxonomy", {}),
+        "match_status": "UNMATCHED",  # Initial state prior to PDF/CSV statement upload
+    }

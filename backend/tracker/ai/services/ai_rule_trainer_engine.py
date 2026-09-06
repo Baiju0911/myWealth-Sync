@@ -2,16 +2,13 @@ import json
 import logging
 import time
 from typing import Any, Dict, Optional, Tuple
-import psycopg2
-from psycopg2 import pool
-import os
 
 from tracker.classification.utils.taxonomy_gate import resolve_official_taxonomy
 from .ollama_service import classify_asset_narration
+from ..db_pool import get_db_connection, release_db_connection
 
 logger = logging.getLogger(__name__)
 
-# Invalid tokens guarded against vector auto-seeding
 INVALID_SUB_TOKENS = {
     "suspense account",
     "none",
@@ -21,58 +18,27 @@ INVALID_SUB_TOKENS = {
     "ai unclassified",
 }
 
-DB_PARAMS = {
-    "dbname": "mywealth_vector_db",
-    "user": "root",
-    "password": "rootpassword",
-    "host": os.environ.get("VECTOR_DB_HOST", "vector_db"),
-    "port": int(os.environ.get("VECTOR_DB_PORT", "5432")),
-    "connect_timeout": 3,
-}
-
-try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(2, 20, **DB_PARAMS)
-except Exception as e:
-    logger.error(f"Failed to initialize PostgreSQL connection pool: {e}")
-    db_pool = None
-
 
 class AIRuleTrainerEngine:
     """Unified AI Engine for Transaction Classification, Vector Cache
 
     Management, and Online Learning.
-
-    Acts as the single-source wrapper across Ollama SLM and PostgreSQL Vector
-    Memory.
     """
 
-    # =========================================================================
-    # DB POOL MANAGEMENT
-    # =========================================================================
     @classmethod
     def _get_connection(cls):
-        if db_pool:
-            return db_pool.getconn()
-        return psycopg2.connect(**DB_PARAMS)
+        return get_db_connection()
 
     @classmethod
     def _release_connection(cls, conn):
-        if db_pool and conn:
-            db_pool.putconn(conn)
-        elif conn:
-            conn.close()
+        release_db_connection(conn)
 
-    # =========================================================================
-    # 1. CORE UNIFIED CLASSIFIER (Fast Path + Slow Path Fallback)
-    # =========================================================================
     @classmethod
     def classify(cls, narration: str) -> Dict[str, Any]:
         """Classifies a raw transaction narration using Hybrid Strategy:
 
-        1. Fast Path: PostgreSQL Vector Cache / Vendor Memory (O(1)) 2. Slow
-        Path: Fallback to Local Ollama SLM if cache misses.
-
-        Returns a standardized JSON dict.
+        1. Fast Path: PostgreSQL Vector Cache / Vendor Memory (O(1))
+        2. Slow Path: Fallback to Local Ollama SLM if cache misses.
         """
         if not narration or not str(narration).strip():
             return cls._empty_classification_payload("Empty narration")
@@ -106,7 +72,7 @@ class AIRuleTrainerEngine:
                 "_execution_time_seconds": round(time.time() - start_time, 4),
             }
 
-            # Auto-learn high confidence SLM hits
+            # Auto-learn high-confidence SLM hits
             if confidence >= 0.85 and cls.is_valid_subcategory(official_sub):
                 cls.save_vendor_to_cache(
                     vendor_name=official_sub,
@@ -122,9 +88,6 @@ class AIRuleTrainerEngine:
             logger.error(f"Ollama SLM classification failed: {err}")
             return cls._empty_classification_payload(f"SLM Error: {err}")
 
-    # =========================================================================
-    # 2. AUTO-SEEDING FROM DETERMINISTIC RULES (T1-T4 Engine Integration)
-    # =========================================================================
     @classmethod
     def auto_seed_deterministic_hit(
         cls,
@@ -133,12 +96,7 @@ class AIRuleTrainerEngine:
         raw_resolved_sub: str,
         rule_source: str = "AUTO",
     ) -> Tuple[str, str, str, bool]:
-        """Validates and seeds a deterministic T1-T4 rule hit into vector
-
-        memory.
-
-        Returns (final_cat, final_sub, t5_source, is_valid).
-        """
+        """Validates and seeds a deterministic rule hit into vector memory."""
         final_cat, final_sub = resolve_official_taxonomy(
             raw_resolved_cat, raw_resolved_sub
         )
@@ -158,9 +116,6 @@ class AIRuleTrainerEngine:
         )
         return final_cat, final_sub, "auto_trained_from_t1_t4", True
 
-    # =========================================================================
-    # 3. ONLINE LEARNING FROM BINDING (Reconciler Hook)
-    # =========================================================================
     @classmethod
     def learn_from_binding(
         cls,
@@ -170,18 +125,8 @@ class AIRuleTrainerEngine:
         user_note: Optional[str] = None,
         rule_code: str = "MANUAL_BIND",
     ) -> bool:
-        """Captures ground-truth confirmation from UI 'Bind' action and updates
-
-        Vector Memory.
-        """
-        print(
-            f"🔍 [AI ENGINE DEBUG] Training Input -> Narration: '{narration}' | Category: '{category}' | Subcategory: '{subcategory}'"
-        )
-
+        """Captures ground-truth confirmation from UI 'Bind' action and updates Vector Memory."""
         if not cls.is_valid_subcategory(subcategory):
-            print(
-                f"🔴 [AI ENGINE TRAIN SKIPPED] Invalid subcategory token: '{subcategory}'"
-            )
             logger.warning(
                 f"[AI ENGINE] Skipped learning for invalid subcategory: {subcategory}"
             )
@@ -189,7 +134,7 @@ class AIRuleTrainerEngine:
 
         official_cat, official_sub = resolve_official_taxonomy(category, subcategory)
 
-        # 🟢 OVERRIDE: Trust explicit user bindings if taxonomy gate fell back to Suspense Account
+        # Trust explicit user bindings if taxonomy gate fell back to Suspense Account
         if official_sub == "Suspense Account" and cls.is_valid_subcategory(subcategory):
             official_cat, official_sub = category, subcategory
 
@@ -201,33 +146,15 @@ class AIRuleTrainerEngine:
             "sample_narration": str(narration).strip()[:100],
         }
 
-        success = cls.save_vendor_to_cache(
+        return cls.save_vendor_to_cache(
             vendor_name=official_sub,
             category=official_cat,
             schema=schema_payload,
             bypass_taxonomy_fallback=True,
         )
 
-        if success:
-            print(
-                f"🟢 [AI ENGINE TRAIN SUCCESS] Saved to Vector Memory -> Vendor/Subcategory: '{official_sub}' | Category: '{official_cat}'"
-            )
-        else:
-            print(
-                f"🔴 [AI ENGINE TRAIN FAILED] Database write failed for Vendor: '{official_sub}'"
-            )
-
-        return success
-
-    # =========================================================================
-    # 4. HELPER & PERSISTENCE METHODS
-    # =========================================================================
     @classmethod
     def is_valid_subcategory(cls, subcategory: Optional[str]) -> bool:
-        """Strict guard against invalid tokens, suspense placeholders, or bank
-
-        system noise.
-        """
         if not subcategory or not str(subcategory).strip():
             return False
 
@@ -279,14 +206,10 @@ class AIRuleTrainerEngine:
         bypass_taxonomy_fallback: bool = False,
     ) -> bool:
         if not cls.is_valid_subcategory(vendor_name):
-            print(
-                f"🔴 [CACHE WRITE BLOCKED] Invalid vendor_name guard triggered: '{vendor_name}'"
-            )
             return False
 
         official_cat, official_sub = resolve_official_taxonomy(category, vendor_name)
 
-        # 🟢 OVERRIDE: If taxonomy gate resolved to Suspense Account but bypass flag is active, trust explicit vendor_name
         if (
             official_sub == "Suspense Account"
             and bypass_taxonomy_fallback
@@ -295,9 +218,6 @@ class AIRuleTrainerEngine:
             official_cat, official_sub = category, vendor_name
 
         if not cls.is_valid_subcategory(official_sub):
-            print(
-                f"🔴 [CACHE WRITE BLOCKED] Taxonomy resolved to invalid subcategory: '{official_sub}'"
-            )
             return False
 
         conn = None
@@ -321,7 +241,6 @@ class AIRuleTrainerEngine:
             cur.close()
             return True
         except Exception as e:
-            print(f"🔴 [CACHE WRITE ERROR] Database Exception: {e}")
             logger.error(f"Failed to save vendor to vector cache: {e}")
             return False
         finally:
@@ -334,10 +253,16 @@ class AIRuleTrainerEngine:
             conn = cls._get_connection()
             cur = conn.cursor()
 
-            cur.execute(
-                "SELECT vendor_name, default_category, dynamic_schema FROM vendor_memory WHERE %s ILIKE '%%' || vendor_name || '%%';",
-                (narration,),
-            )
+            # Word boundary regex matching with length sorting: longest match wins
+            query = """
+                SELECT vendor_name, default_category, dynamic_schema 
+                FROM vendor_memory 
+                WHERE length(vendor_name) >= 3 
+                  AND %s ~* ('\\m' || regexp_replace(vendor_name, '([[\\]().*+?^$|{}])', '\\\\\\1', 'g') || '\\M')
+                ORDER BY length(vendor_name) DESC 
+                LIMIT 1;
+            """
+            cur.execute(query, (narration,))
             match = cur.fetchone()
             cur.close()
 
@@ -384,7 +309,7 @@ class AIRuleTrainerEngine:
         }
 
 
-# Legacy interface functions mapped directly to the unified class for backward compatibility
+# Legacy interface functions mapped directly for backward compatibility
 classify_transaction = AIRuleTrainerEngine.classify
 query_local_vector_cache = AIRuleTrainerEngine._query_vector_memory
 check_vector_exists = AIRuleTrainerEngine.check_vector_exists

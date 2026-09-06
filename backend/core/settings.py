@@ -26,6 +26,7 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
 ]
 
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
 
 # Application definition
 

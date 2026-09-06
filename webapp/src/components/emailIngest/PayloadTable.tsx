@@ -5,6 +5,7 @@ interface Props {
   payloads: EmailPayload[];
   selectedIds: string[];
   taxonomyTree?: TaxonomyOption[];
+  hideTaxonomy?: boolean;
   onSelectPayload: (payload: EmailPayload) => void;
   onToggleSelectAll: () => void;
   onToggleSelectOne: (id: string) => void;
@@ -22,6 +23,7 @@ export const PayloadTable: React.FC<Props> = ({
   payloads,
   selectedIds,
   taxonomyTree = [],
+  hideTaxonomy = false,
   onSelectPayload,
   onToggleSelectAll,
   onToggleSelectOne,
@@ -93,9 +95,56 @@ export const PayloadTable: React.FC<Props> = ({
     }
   };
 
+  // 🎯 Centralized Status Badge Renderer
+  const renderStatusBadge = (statusStr: string, isSyntheticGap: boolean, isStaged: boolean) => {
+    if (isSyntheticGap) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-amber-950 text-amber-400 border border-amber-800/80 inline-flex items-center gap-1 shadow-sm">
+          <span>⚠️</span> SUSPENSE
+        </span>
+      );
+    }
+
+    if (isStaged) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-amber-950/80 text-amber-300 border border-amber-600/80 inline-flex items-center gap-1 shadow-sm">
+          <span>🎯</span> STAGED
+        </span>
+      );
+    }
+
+    switch (statusStr) {
+      case 'DUPLICATE':
+        return (
+          <span className="px-2 py-0.5 text-[10px] font-bold font-mono rounded bg-amber-950/80 text-amber-400 border border-amber-700/80 flex items-center gap-1 w-fit shadow-sm">
+            <span>⚠️</span> DUPLICATE
+          </span>
+        );
+      case 'PARSED':
+      case 'PREVIEW_ONLY':
+        return (
+          <span className="px-2 py-0.5 text-[10px] font-bold font-mono rounded bg-emerald-950/80 text-emerald-400 border border-emerald-700/80 flex items-center gap-1 w-fit shadow-sm">
+            <span>✓</span> PARSED
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span className="px-2 py-0.5 text-[10px] font-bold font-mono rounded bg-indigo-950/80 text-indigo-400 border border-indigo-700/80 flex items-center gap-1 w-fit shadow-sm">
+            <span>✅</span> COMPLETED
+          </span>
+        );
+      default:
+        return (
+          <span className="px-2 py-0.5 text-[10px] font-bold font-mono rounded bg-zinc-800 text-zinc-400 border border-zinc-700 flex items-center gap-1 w-fit">
+            <span>⚙️</span> {statusStr}
+          </span>
+        );
+    }
+  };
+
   return (
     <div className="space-y-3">
-      {pendingCount > 0 && onBatchSaveTaxonomy && (
+      {pendingCount > 0 && onBatchSaveTaxonomy && !hideTaxonomy && (
         <div className="flex items-center justify-between bg-indigo-950/90 border border-indigo-700 px-4 py-2.5 rounded-lg text-xs font-mono shadow-lg">
           <span className="text-indigo-300 font-medium">
             ⚠️ You have <strong className="text-white font-bold">{pendingCount}</strong> unsaved taxonomy classification(s).
@@ -129,7 +178,9 @@ export const PayloadTable: React.FC<Props> = ({
               <th className="p-3 text-right text-emerald-400/90 whitespace-nowrap">CREDIT (CR)</th>
               <th className="p-3 text-right">Avail. Balance</th>
               <th className="p-3 font-mono">UPI Ref / RRN</th>
-              <th className="p-3 text-indigo-400">Taxonomy Classification</th>
+              
+              {!hideTaxonomy && <th className="p-3 text-indigo-400">Taxonomy Classification</th>}
+              
               <th className="p-3 text-center">Ingest Status</th>
               <th className="p-3">Received At</th>
             </tr>
@@ -137,7 +188,7 @@ export const PayloadTable: React.FC<Props> = ({
           <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
             {payloads.length === 0 ? (
               <tr>
-                <td colSpan={11} className="p-6 text-center text-zinc-500">
+                <td colSpan={hideTaxonomy ? 10 : 11} className="p-6 text-center text-zinc-500">
                   No payload streams available.
                 </td>
               </tr>
@@ -150,9 +201,10 @@ export const PayloadTable: React.FC<Props> = ({
                 const isStaged = Boolean(payload.is_staged_for_matching || statusStr === 'STAGED');
 
                 const rawItem = payload.raw_item || {};
-                const parsedTxn = rawItem.parsed_transaction || {};
+                const rawPayload = payload.raw_payload || rawItem.raw_payload || {};
+                const parsedTxn = payload.parsed_transaction || rawItem.parsed_transaction || {};
 
-                let headers = payload.headers_json || rawItem.raw_payload?.headers_json || {};
+                let headers = payload.headers_json || rawPayload.headers_json || {};
                 if (typeof headers === 'string') {
                   try {
                     headers = JSON.parse(headers);
@@ -163,13 +215,26 @@ export const PayloadTable: React.FC<Props> = ({
 
                 const summary = headers.parsed_summary || {};
 
+                const sourceName = payload.source || rawPayload.source || 'IOS_SMS';
                 const bankName = payload.bank_name || parsedTxn.bank_name || summary.bank || 'SOUTH INDIAN BANK';
                 const accountLast4 = payload.account_last4 || parsedTxn.account_last4 || summary.account;
                 const upiRef = payload.upi_ref || parsedTxn.upi_ref || summary.upi_ref || '—';
                 const amount = payload.amount !== undefined && payload.amount !== null ? payload.amount : parsedTxn.amount;
-                const merchant = payload.merchant || parsedTxn.merchant || payload.subject || '—';
+                const merchant = payload.merchant || parsedTxn.merchant || payload.subject || rawPayload.subject || '—';
 
-                const isCredit = payload.txn_type === 'CREDIT';
+                const rawTxnType = (
+                  payload.txn_type ||
+                  parsedTxn.txn_type ||
+                  summary.txn_type ||
+                  'DEBIT'
+                ).toUpperCase();
+                const isCredit = rawTxnType === 'CREDIT';
+
+                const receivedAt =
+                  payload.email_date ||
+                  parsedTxn.full_datetime ||
+                  parsedTxn.date ||
+                  rawPayload.email_date;
 
                 let dbTaxonomy = payload.taxonomy_payload || {};
                 if (typeof dbTaxonomy === 'string') {
@@ -203,6 +268,8 @@ export const PayloadTable: React.FC<Props> = ({
                         ? 'bg-amber-950/30 hover:bg-amber-950/50 border-l-amber-500'
                         : isStaged
                         ? 'bg-amber-950/20 hover:bg-amber-950/30 border-l-amber-600'
+                        : statusStr === 'DUPLICATE'
+                        ? 'bg-amber-950/20 hover:bg-amber-950/30 border-l-amber-700/80'
                         : pending
                         ? 'bg-indigo-950/30 hover:bg-indigo-950/40 border-l-indigo-500'
                         : 'hover:bg-zinc-800/30 border-l-transparent'
@@ -224,7 +291,9 @@ export const PayloadTable: React.FC<Props> = ({
                           ⚠️ AUDIT_GAP
                         </span>
                       ) : (
-                        <span className="text-indigo-400">{payload.source || 'IOS_SMS'}</span>
+                        <span className={sourceName === 'IOS_SMS' ? 'text-amber-400' : 'text-indigo-400'}>
+                          {sourceName}
+                        </span>
                       )}
                     </td>
 
@@ -269,7 +338,7 @@ export const PayloadTable: React.FC<Props> = ({
                     {/* CREDIT (CR) */}
                     <td className="p-3 text-right font-bold whitespace-nowrap font-mono">
                       {isCredit && amount !== null && amount !== undefined && amount !== '' ? (
-                        <span className={isSyntheticGap ? 'text-amber-400 font-bold' : 'text-emerald-400'}>
+                        <span className={isSyntheticGap ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
                           +₹{Number(amount).toLocaleString('en-IN', {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
@@ -313,95 +382,68 @@ export const PayloadTable: React.FC<Props> = ({
                       )}
                     </td>
 
-                    {/* Taxonomy Classification Dropdowns */}
-                    <td className="p-3">
-                      {isSyntheticGap ? (
-                        <span className="text-zinc-600 italic text-[11px]">Auto-Assigned on Statement</span>
-                      ) : (
-                        <div className="flex flex-col gap-1 min-w-42.5">
-                          <select
-                            value={currentCatName}
-                            onChange={(e) => handleCategoryChange(rowId, e.target.value)}
-                            className={`bg-zinc-950 border text-[11px] rounded px-2 py-1 focus:outline-none cursor-pointer transition-colors ${
-                              pending ? 'border-indigo-500 text-indigo-200 font-bold' : 'border-zinc-800 text-zinc-300'
-                            }`}
-                          >
-                            <option value="">Select Category...</option>
-                            {uniqueCategoryNames.map((catName) => (
-                              <option key={`cat-${catName}`} value={catName}>
-                                {catName}
-                              </option>
-                            ))}
-                          </select>
-
-                          <select
-                            value={currentSubName}
-                            disabled={!currentCatName || availableSubcategories.length === 0}
-                            onChange={(e) => handleSubcategoryChange(rowId, currentCatName, e.target.value)}
-                            className={`bg-zinc-950 border text-[11px] rounded px-2 py-1 focus:outline-none cursor-pointer disabled:text-zinc-600 disabled:bg-zinc-900 transition-colors ${
-                              pending ? 'border-indigo-500 text-indigo-200 font-bold' : 'border-zinc-800 text-zinc-400'
-                            }`}
-                          >
-                            <option value="">Select Subcategory...</option>
-                            {availableSubcategories.map((subItem: any, index: number) => {
-                              const subName =
-                                typeof subItem === 'string'
-                                  ? subItem
-                                  : subItem?.subcategory || subItem?.name || subItem?.label || '';
-                              const subKey =
-                                typeof subItem === 'object' && subItem?.id
-                                  ? subItem.id
-                                  : `sub-${subName}-${index}`;
-
-                              return (
-                                <option key={subKey} value={subName}>
-                                  {subName}
+                    {/* Taxonomy Classification */}
+                    {!hideTaxonomy && (
+                      <td className="p-3">
+                        {isSyntheticGap ? (
+                          <span className="text-zinc-600 italic text-[11px]">Auto-Assigned on Statement</span>
+                        ) : (
+                          <div className="flex flex-col gap-1 min-w-42.5">
+                            <select
+                              value={currentCatName}
+                              onChange={(e) => handleCategoryChange(rowId, e.target.value)}
+                              className={`bg-zinc-950 border text-[11px] rounded px-2 py-1 focus:outline-none cursor-pointer transition-colors ${
+                                pending ? 'border-indigo-500 text-indigo-200 font-bold' : 'border-zinc-800 text-zinc-300'
+                              }`}
+                            >
+                              <option value="">Select Category...</option>
+                              {uniqueCategoryNames.map((catName) => (
+                                <option key={`cat-${catName}`} value={catName}>
+                                  {catName}
                                 </option>
-                              );
-                            })}
-                          </select>
-                        </div>
-                      )}
-                    </td>
+                              ))}
+                            </select>
+
+                            <select
+                              value={currentSubName}
+                              disabled={!currentCatName || availableSubcategories.length === 0}
+                              onChange={(e) => handleSubcategoryChange(rowId, currentCatName, e.target.value)}
+                              className={`bg-zinc-950 border text-[11px] rounded px-2 py-1 focus:outline-none cursor-pointer disabled:text-zinc-600 disabled:bg-zinc-900 transition-colors ${
+                                pending ? 'border-indigo-500 text-indigo-200 font-bold' : 'border-zinc-800 text-zinc-400'
+                              }`}
+                            >
+                              <option value="">Select Subcategory...</option>
+                              {availableSubcategories.map((subItem: any, index: number) => {
+                                const subName =
+                                  typeof subItem === 'string'
+                                    ? subItem
+                                    : subItem?.subcategory || subItem?.name || subItem?.label || '';
+                                const subKey =
+                                  typeof subItem === 'object' && subItem?.id
+                                    ? subItem.id
+                                    : `sub-${subName}-${index}`;
+
+                                return (
+                                  <option key={subKey} value={subName}>
+                                    {subName}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        )}
+                      </td>
+                    )}
 
                     {/* Status Badge */}
                     <td className="p-3 text-center whitespace-nowrap">
-                      {isSyntheticGap ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800/80 inline-flex items-center gap-1">
-                          <span>⚠️</span> SUSPENSE
-                        </span>
-                      ) : isStaged ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800/80 inline-flex items-center gap-1">
-                          <span>🎯</span> STAGED
-                        </span>
-                      ) : (
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 ${
-                            statusStr === 'PARSED'
-                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
-                              : statusStr === 'DUPLICATE'
-                              ? 'bg-amber-950 text-amber-400 border border-amber-800/60'
-                              : statusStr === 'COMPLETED'
-                              ? 'bg-indigo-950 text-indigo-400 border border-indigo-800/60'
-                              : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-                          }`}
-                        >
-                          <span>
-                            {statusStr === 'DUPLICATE'
-                              ? '⚠️'
-                              : statusStr === 'PARSED' || statusStr === 'COMPLETED'
-                              ? '✅'
-                              : '⚙️'}
-                          </span>
-                          {statusStr}
-                        </span>
-                      )}
+                      {renderStatusBadge(statusStr, isSyntheticGap, isStaged)}
                     </td>
 
                     {/* Received At */}
-                    <td className="p-3 text-zinc-400 whitespace-nowrap">
-                      {payload.email_date
-                        ? new Date(payload.email_date).toLocaleString('en-IN', {
+                    <td className="p-3 text-zinc-400 whitespace-nowrap font-mono text-[11px]">
+                      {receivedAt
+                        ? new Date(receivedAt).toLocaleString('en-IN', {
                             day: '2-digit',
                             month: 'short',
                             year: '2-digit',
