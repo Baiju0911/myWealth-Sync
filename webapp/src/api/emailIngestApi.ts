@@ -1,50 +1,79 @@
 import api from './client';
 import { accountApi, getTaxonomyTree, type TaxonomyOption } from './api';
 
+// export interface EmailPayload {
+//   id: string;
+//   source: string;
+//   bank_name?: string;
+//   account_last4?: string;
+//   merchant?: string;
+//   subject?: string;
+//   sender?: string;
+//   email_from: string;
+//   amount?: number | null;
+//   balance?: number | null;
+//   upi_ref?: string | null;
+//   txn_type?: 'DEBIT' | 'CREDIT';
+//   status:
+//     | 'PARSED'
+//     | 'DUPLICATE'
+//     | 'FAILED'
+//     | 'UNPARSED'
+//     | 'DECRYPTED'
+//     | 'COMPLETED'
+//     | 'STAGED'; // 👈 Added STAGED to union
+//   email_date?: string;
+//   created_at: string;
+//   body?: string;
+//   decrypted_body?: string;
+//   is_synthetic_gap?: boolean;
+//   is_staged_for_matching?: boolean; // 👈 Added staging flag
+//   staged_at?: string; // 👈 Added staging timestamp
+//   raw_item?: any;
+//   taxonomy_payload?: {
+//     account_match?: Record<string, any>;
+//     taxonomy?: {
+//       category_id?: string;
+//       category_name?: string;
+//       subcategory_id?: string;
+//       subcategory_name?: string;
+//     };
+//     normalized_txn?: Record<string, any>;
+//     audit_trail?: Record<string, any>;
+//   };
+//   is_completed?: boolean;
+//   completed_at?: string;
+// }
 export interface EmailPayload {
   id: string;
   source: string;
   bank_name?: string;
   account_last4?: string;
   merchant?: string;
-  subject?: string;
-  sender?: string;
-  email_from: string;
   amount?: number | null;
   balance?: number | null;
-  upi_ref?: string | null;
-  txn_type?: 'DEBIT' | 'CREDIT';
+  txn_type?: 'DEBIT' | 'CREDIT' | 'NOISE' | string;
+  upi_ref?: string;
   status:
     | 'PARSED'
+    | 'PREVIEW_ONLY'
     | 'DUPLICATE'
-    | 'FAILED'
-    | 'UNPARSED'
-    | 'DECRYPTED'
+    | 'STAGED'
     | 'COMPLETED'
-    | 'STAGED'; // 👈 Added STAGED to union
+    | string;
+  is_duplicate?: boolean;
+  created_at?: string;
   email_date?: string;
-  created_at: string;
-  body?: string;
   decrypted_body?: string;
-  is_synthetic_gap?: boolean;
-  is_staged_for_matching?: boolean; // 👈 Added staging flag
-  staged_at?: string; // 👈 Added staging timestamp
+  body?: string;
+  subject?: string;
+  email_from?: string;
+  headers_json?: any;
+  taxonomy_payload?: any;
   raw_item?: any;
-  taxonomy_payload?: {
-    account_match?: Record<string, any>;
-    taxonomy?: {
-      category_id?: string;
-      category_name?: string;
-      subcategory_id?: string;
-      subcategory_name?: string;
-    };
-    normalized_txn?: Record<string, any>;
-    audit_trail?: Record<string, any>;
-  };
-  is_completed?: boolean;
-  completed_at?: string;
+  parsed_transaction?: any;
+  raw_payload?: any;
 }
-
 export type { TaxonomyOption };
 
 export interface IngestStats {
@@ -58,13 +87,7 @@ export interface GetPayloadsParams {
   search?: string;
   status?: string;
   page?: number;
-  date_preset?:
-    | 'ALL'
-    | 'THIS_WEEK'
-    | 'THIS_MONTH'
-    | 'LAST_MONTH'
-    | 'LAST_6_MONTHS'
-    | 'CUSTOM';
+  date_preset?: DatePresetType;
   start_date?: string;
   end_date?: string;
   account?: string;
@@ -129,6 +152,15 @@ export const DATE_PRESET_OPTIONS = [
   { label: 'All Time', value: 'ALL' },
   { label: 'Custom Date Range', value: 'CUSTOM' },
 ] as const;
+//export type DatePresetType = (typeof DATE_PRESET_OPTIONS)[number]['value'];
+export type DatePresetType =
+  | 'ALL'
+  | 'ALL_TIME'
+  | 'THIS_WEEK'
+  | 'THIS_MONTH'
+  | 'LAST_MONTH'
+  | 'LAST_6_MONTHS'
+  | 'CUSTOM';
 
 export interface BalanceAuditResponse {
   account: string;
@@ -180,8 +212,29 @@ export const emailIngestApi = {
   },
 
   commitSelectedPayloads: async (items: any[]) => {
+    // Strip heavy redundant fields (like full HTML bodies/bloat) before posting to backend
+    const sanitizedItems = items.map((item) => {
+      const raw = item.raw_payload || item.raw_item?.raw_payload || {};
+      const parsed =
+        item.parsed_transaction || item.raw_item?.parsed_transaction || {};
+
+      return {
+        payload_hash:
+          item.id || item.payload_hash || item.raw_item?.payload_hash,
+        source: item.source || raw.source || 'GMAIL_API',
+        raw_payload: {
+          email_date: item.email_date || raw.email_date || item.created_at,
+          email_from: item.email_from || raw.email_from,
+          subject: item.subject || raw.subject,
+          // Use clean body or trimmed body if available to avoid sending giant HTML templates
+          decrypted_body: item.body || raw.decrypted_body || '',
+        },
+        parsed_transaction: parsed,
+      };
+    });
+
     const response = await api.post(`${STAGING_URL}/commit-selected/`, {
-      items,
+      items: sanitizedItems,
     });
     return response.data;
   },
@@ -242,10 +295,14 @@ export const emailIngestApi = {
   },
 
   // STAGE FOR RECONCILIATION MATCHING
-  stageForMatching: async (payloadIds: string[]) => {
-    const response = await api.post(`${VAULT_URL}/stage-for-matching/`, {
-      payload_ids: payloadIds,
-    });
+  stageForMatching: async (payloadIds: string[], syntheticGaps: any[] = []) => {
+    const response = await api.post(
+      '/ingest/email/payloads/stage-for-matching/',
+      {
+        payload_ids: payloadIds,
+        synthetic_gaps: syntheticGaps,
+      }
+    );
     return response.data;
   },
 
@@ -257,6 +314,21 @@ export const emailIngestApi = {
         params: { account },
       }
     );
+    return response.data;
+  },
+  unstageFromMatching: async (payloadIds: string[]) => {
+    const response = await api.post(
+      '/ingest/email/payloads/unstage-from-matching/',
+      {
+        payload_ids: payloadIds,
+      }
+    );
+    return response.data;
+  },
+  discardStagingPayloads: async (
+    ids: string[]
+  ): Promise<{ status: string; removed_count: number }> => {
+    const response = await api.post(`${STAGING_URL}/discard/`, { ids });
     return response.data;
   },
 };

@@ -1,5 +1,8 @@
-import React from 'react';
-import { type AccountOption } from '../../api/emailIngestApi';
+// webapp/src/components/emailIngest/IngestToolbar.tsx
+
+import React, { useMemo } from 'react';
+import { type AccountOption, DATE_PRESET_OPTIONS } from '../../api/emailIngestApi';
+import { Trash2 } from 'lucide-react';
 
 interface Props {
   mode: 'INGEST' | 'VAULT';
@@ -17,16 +20,19 @@ interface Props {
   onCommitSelected?: () => void;
   committing?: boolean;
   stagingSelectedCount?: number;
-  onRunAudit?: () => void;
-  isAuditing?: boolean;
-  auditStats?: { count: number } | null;
   onStageSelected?: () => void;
   stagingForMatching?: boolean;
+  onUnstageSelected?: () => void;
+  unstagingForMatching?: boolean;
   dbSelectedCount?: number;
   totalCount?: number;
-  // 🎯 New Staging Filter Toggle Props
   showStagedOnly?: boolean;
   onToggleStagedOnly?: (val: boolean) => void;
+  stagingPayloads?: any[];
+  hideDuplicates?: boolean;
+  onToggleHideDuplicates?: () => void;
+  onDiscardSelected?: () => void;
+  isDiscarding?: boolean;
 }
 
 export const IngestToolbar: React.FC<Props> = ({
@@ -45,16 +51,44 @@ export const IngestToolbar: React.FC<Props> = ({
   onCommitSelected,
   committing,
   stagingSelectedCount = 0,
-  onRunAudit,
-  isAuditing,
-  auditStats,
   onStageSelected,
   stagingForMatching,
+  onUnstageSelected,
+  unstagingForMatching,
   dbSelectedCount = 0,
   totalCount = 0,
   showStagedOnly = false,
   onToggleStagedOnly,
+  stagingPayloads = [],
+  hideDuplicates = false,
+  onToggleHideDuplicates,
+  onDiscardSelected,
+  isDiscarding = false,
 }) => {
+  const readyToCommitCount = useMemo(() => {
+    return stagingPayloads.filter(
+      (p) => p.status === 'PARSED' || p.status === 'PREVIEW_ONLY'
+    ).length;
+  }, [stagingPayloads]);
+
+  const duplicateCount = useMemo(() => {
+    return stagingPayloads.filter(
+      (p) => p.status === 'DUPLICATE' || p.is_duplicate
+    ).length;
+  }, [stagingPayloads]);
+
+  const handleSyncClick = async () => {
+    if (!onTriggerSync) return;
+    onTriggerSync();
+  };
+
+  const handleDiscardClick = () => {
+    if (!onDiscardSelected || stagingSelectedCount === 0) return;
+    if (window.confirm(`Discard ${stagingSelectedCount} selected item(s) from staging buffer?`)) {
+      onDiscardSelected();
+    }
+  };
+
   return (
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-zinc-900/60 border border-zinc-800 p-3 rounded-xl gap-3 text-xs font-mono">
       {/* Date & Account Filters */}
@@ -64,12 +98,11 @@ export const IngestToolbar: React.FC<Props> = ({
           onChange={(e) => onDatePresetChange(e.target.value)}
           className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2.5 py-1.5 focus:border-indigo-500 focus:outline-none cursor-pointer"
         >
-          <option value="THIS_WEEK">This Week</option>
-          <option value="THIS_MONTH">This Month</option>
-          <option value="LAST_MONTH">Last Month</option>
-          <option value="LAST_6_MONTHS">Last 6 Months</option>
-          <option value="ALL">All Time</option>
-          <option value="CUSTOM">Custom Range...</option>
+          {DATE_PRESET_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
 
         {datePreset === 'CUSTOM' && (
@@ -104,7 +137,7 @@ export const IngestToolbar: React.FC<Props> = ({
           </select>
         )}
 
-        {/* 🎯 View Toggle: Unstaged vs Staged Queue */}
+        {/* View Toggle: Vault Records vs Staged Queue */}
         {mode === 'VAULT' && onToggleStagedOnly && (
           <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded p-0.5 ml-1">
             <button
@@ -131,9 +164,36 @@ export const IngestToolbar: React.FC<Props> = ({
         )}
 
         {totalCount > 0 && (
-          <span className="text-zinc-500 text-[11px] self-center ml-1">
-            ({totalCount} items)
-          </span>
+          <div className="flex items-center gap-2 ml-1">
+            <span className="text-zinc-500 text-[11px] self-center">
+              ({totalCount} items)
+            </span>
+
+            {/* Interactive Filter Badges */}
+            {mode === 'INGEST' && (
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <span className="bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 px-2 py-0.5 rounded font-bold shadow-sm">
+                  📥 Ready: {readyToCommitCount}
+                </span>
+
+                {duplicateCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={onToggleHideDuplicates}
+                    className={`px-2 py-0.5 rounded font-bold border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
+                      hideDuplicates
+                        ? 'bg-zinc-900 text-zinc-500 border-zinc-800 line-through opacity-70 hover:opacity-100'
+                        : 'bg-amber-950/80 border-amber-800/80 text-amber-400 hover:bg-amber-900'
+                    }`}
+                    title={hideDuplicates ? 'Click to show duplicates' : 'Click to hide duplicates'}
+                  >
+                    <span>⚠️ Duplicates: {duplicateCount}</span>
+                    <span className="text-[10px] ml-0.5">{hideDuplicates ? '🙈' : '👁️'}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -141,9 +201,22 @@ export const IngestToolbar: React.FC<Props> = ({
       <div className="flex items-center gap-2">
         {mode === 'INGEST' && (
           <>
+            {/* 🗑️ Discard / Remove Selected Button */}
+            {stagingSelectedCount > 0 && onDiscardSelected && (
+              <button
+                type="button"
+                onClick={handleDiscardClick}
+                disabled={isDiscarding}
+                className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 disabled:bg-zinc-800 text-rose-300 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-950"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {isDiscarding ? 'Discarding...' : `Discard (${stagingSelectedCount})`}
+              </button>
+            )}
+
             {onTriggerSync && (
               <button
-                onClick={onTriggerSync}
+                onClick={handleSyncClick}
                 disabled={syncing}
                 className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-950"
               >
@@ -167,25 +240,7 @@ export const IngestToolbar: React.FC<Props> = ({
 
         {mode === 'VAULT' && (
           <>
-            {onRunAudit && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={onRunAudit}
-                  disabled={isAuditing}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 text-zinc-950 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-amber-950"
-                >
-                  <span>{isAuditing ? '⏳' : '🔍'}</span>
-                  {isAuditing ? 'Auditing...' : 'Run Balance Audit'}
-                </button>
-                {auditStats && (
-                  <span className="px-2 py-1 rounded bg-amber-950/80 text-amber-400 border border-amber-800/80 font-bold">
-                    {auditStats.count} gaps
-                  </span>
-                )}
-              </div>
-            )}
-
-            {!showStagedOnly && dbSelectedCount > 0 && onStageSelected && (
+            {!showStagedOnly && dbSelectedCount > 0 && !!onStageSelected && (
               <button
                 onClick={onStageSelected}
                 disabled={stagingForMatching}
@@ -193,6 +248,17 @@ export const IngestToolbar: React.FC<Props> = ({
               >
                 <span>{stagingForMatching ? '⏳' : '🎯'}</span>
                 {stagingForMatching ? 'Staging...' : `Stage (${dbSelectedCount}) for Matching`}
+              </button>
+            )}
+
+            {showStagedOnly && dbSelectedCount > 0 && !!onUnstageSelected && (
+              <button
+                onClick={onUnstageSelected}
+                disabled={unstagingForMatching}
+                className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 text-rose-300 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950"
+              >
+                <span>{unstagingForMatching ? '⏳' : '↩️'}</span>
+                {unstagingForMatching ? 'Unstaging...' : `Unstage (${dbSelectedCount})`}
               </button>
             )}
           </>

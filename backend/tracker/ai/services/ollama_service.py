@@ -1,11 +1,16 @@
+import os
 import json
 import time
 import re
-import urllib.request
-import urllib.error
+import logging
+import requests
 from tracker.constants import NOISE_KEYWORD_BLACKLIST
 
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
+logger = logging.getLogger(__name__)
+
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "45"))
 
 TAXONOMY_PRIMARY_CLASSES = [
     "Expense",
@@ -16,6 +21,8 @@ TAXONOMY_PRIMARY_CLASSES = [
     "Current Assets",
     "Transfers",
 ]
+
+_session = requests.Session()
 
 
 def sanitize_narration(raw_text: str) -> str:
@@ -34,9 +41,7 @@ def sanitize_narration(raw_text: str) -> str:
 
 
 def classify_asset_narration(raw_text: str) -> dict:
-    """
-    Sends cleaned narration to Llama 3.2 for structured classification.
-    """
+    """Sends cleaned narration to Ollama SLM for structured classification."""
     start_time = time.time()
     clean_text = sanitize_narration(raw_text)
 
@@ -59,40 +64,41 @@ def classify_asset_narration(raw_text: str) -> dict:
     """
 
     payload = {
-        "model": "llama3.2:3b",
+        "model": OLLAMA_MODEL,
         "prompt": prompt,
         "format": "json",
         "stream": False,
     }
 
-    req = urllib.request.Request(
-        OLLAMA_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=90) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            elapsed = round(time.time() - start_time, 2)
+        response = _session.post(
+            OLLAMA_API_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=OLLAMA_TIMEOUT,
+        )
+        response.raise_for_status()
+        res_data = response.json()
+        elapsed = round(time.time() - start_time, 2)
 
-            parsed_result = json.loads(res_data.get("response", "{}"))
-            parsed_result["_execution_time_seconds"] = elapsed
-            return parsed_result
-    except urllib.error.URLError as e:
-        print(f"Ollama API Connection Error: {e}")
+        raw_response_text = res_data.get("response", "{}")
+        parsed_result = json.loads(raw_response_text)
+        parsed_result["_execution_time_seconds"] = elapsed
+        return parsed_result
+
+    except Exception as e:
+        logger.error(f"Ollama API Connection Error: {e}")
         return {
             "category": "Expense",
             "vendor_name": "Unclassified",
             "confidence_score": 0.0,
+            "_execution_time_seconds": round(time.time() - start_time, 2),
+            "extracted_metadata": {},
         }
 
 
 def classify_with_vendor_memory(raw_text: str, vendor_schema: dict = None) -> dict:
-    """
-    Classifies narration while enforcing custom dynamic JSON schemas based on learned vendor memory.
-    """
+    """Classifies narration while enforcing custom dynamic JSON schemas based on learned vendor memory."""
     base_schema_instruction = f"""
     Required JSON keys:
     - category: string (MUST BE ONE OF: {", ".join(TAXONOMY_PRIMARY_CLASSES)})
@@ -101,11 +107,11 @@ def classify_with_vendor_memory(raw_text: str, vendor_schema: dict = None) -> di
     - extracted_metadata: object
     """
 
-    if vendor_schema:
-        schema_str = json.dumps(vendor_schema, indent=2)
-        vendor_instruction = f"\nEnforce the following custom metadata fields for this vendor:\n{schema_str}\n"
-    else:
-        vendor_instruction = ""
+    vendor_instruction = (
+        f"\nEnforce the following custom metadata fields for this vendor:\n{json.dumps(vendor_schema, indent=2)}\n"
+        if vendor_schema
+        else ""
+    )
 
     prompt = f"""
     Analyze the following transaction narration and extract structured metadata.
@@ -117,22 +123,22 @@ def classify_with_vendor_memory(raw_text: str, vendor_schema: dict = None) -> di
     """
 
     payload = {
-        "model": "llama3.2:3b",
+        "model": OLLAMA_MODEL,
         "prompt": prompt,
         "format": "json",
         "stream": False,
     }
 
-    req = urllib.request.Request(
-        OLLAMA_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            return json.loads(res_data.get("response", "{}"))
+        response = _session.post(
+            OLLAMA_API_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=OLLAMA_TIMEOUT,
+        )
+        response.raise_for_status()
+        res_data = response.json()
+        return json.loads(res_data.get("response", "{}"))
     except Exception as e:
+        logger.error(f"Ollama dynamic schema classification failed: {e}")
         return {"error": str(e)}

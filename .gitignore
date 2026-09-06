@@ -101,6 +101,7 @@ backend/tracker/emailIngest/token.json
 backend/tracker/emailIngest/tokentodel.json1
 backend/tracker/emailIngest/credentials.json
 staged_previews.json
+staged_previews.*
 token.json
 credentials.json
 *.json1
