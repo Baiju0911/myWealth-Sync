@@ -33,6 +33,12 @@ interface Props {
   onToggleHideDuplicates?: () => void;
   onDiscardSelected?: () => void;
   isDiscarding?: boolean;
+  stagedStatementsCount?: number;
+  selectedStatementsCount?: number;
+  onHarvestStatements?: () => void;
+  isHarvestingStatements?: boolean;
+  onCommitStatements?: () => void;
+  isCommittingStatements?: boolean;
 }
 
 export const IngestToolbar: React.FC<Props> = ({

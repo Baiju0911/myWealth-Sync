@@ -3,7 +3,7 @@ import React from 'react';
 
 export interface ColumnConfig {
   key: string;
-  label: string;
+  label: string | React.ReactNode;
   width: string;
   align: 'left' | 'center' | 'right';
   textColor?: string;
@@ -11,7 +11,6 @@ export interface ColumnConfig {
   isCurrency?: boolean;
   headerClass?: string;
   renderFooter?: (data: any[]) => string | number;
-  // 🎯 Custom cell renderer callback for actions and badges
   renderCell?: (row: any, meta?: any) => React.ReactNode;
 }
 
@@ -47,8 +46,6 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
     textColor: 'text-sky-400',
     headerClass: 'text-sky-400',
   },
-
-  // Financial columns with strict right-alignment and fallback parameters
   {
     key: 'debit',
     label: 'Debit (-)',
@@ -79,7 +76,180 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
   { key: 'status', label: 'Status', width: '5%', align: 'center' },
 ];
 
-// Column configuration for Tab 1: Known Headers
+export const STATEMENT_STAGING_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'filename',
+    label: 'BANK & FILENAME',
+    width: '32%',
+    align: 'left',
+    renderCell: (row: any, meta?: any) => {
+      return React.createElement(
+        'div',
+        {
+          className: 'space-y-0.5 cursor-pointer group',
+          onClick: () => meta?.onOpenPreview?.(row),
+        },
+        React.createElement(
+          'div',
+          {
+            className:
+              'font-semibold text-zinc-200 group-hover:text-amber-400 flex items-center gap-1.5',
+          },
+          row.bank_name || 'UNKNOWN BANK',
+          React.createElement(
+            'span',
+            {
+              className: 'text-[10px] text-zinc-600 group-hover:text-amber-400',
+            },
+            '👁️ Preview'
+          )
+        ),
+        React.createElement(
+          'div',
+          {
+            className: 'text-[11px] text-zinc-500 truncate max-w-sm',
+            title: row.filename,
+          },
+          row.filename
+        )
+      );
+    },
+  },
+  {
+    key: 'filename',
+    label: 'BANK & FILENAME',
+    width: '32%',
+    align: 'left',
+    renderCell: (row: any) => {
+      return React.createElement(
+        'div',
+        { className: 'space-y-0.5' },
+        React.createElement(
+          'div',
+          { className: 'font-semibold text-zinc-200' },
+          row.bank_name || 'UNKNOWN BANK'
+        ),
+        React.createElement(
+          'div',
+          {
+            className: 'text-[11px] text-zinc-500 truncate max-w-sm',
+            title: row.filename,
+          },
+          row.filename
+        )
+      );
+    },
+  },
+  {
+    key: 'account_hint',
+    label: 'ACCOUNT HINT',
+    width: '20%',
+    align: 'left',
+    renderCell: (row: any, meta?: any) => {
+      const currentHint =
+        meta?.accountOverrides?.[row.stage_id] || row.account_hint;
+      const isUnrecognized = currentHint === 'UNRECOGNIZED';
+
+      if (isUnrecognized) {
+        return React.createElement(
+          'select',
+          {
+            value: meta?.accountOverrides?.[row.stage_id] || '',
+            onClick: (e: React.MouseEvent) => e.stopPropagation(),
+            onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+              if (meta?.onAccountOverrideChange) {
+                meta.onAccountOverrideChange(row.stage_id, e.target.value);
+              }
+            },
+            className:
+              'bg-amber-950/40 border border-amber-600/60 text-amber-300 text-xs px-2 py-1 rounded focus:outline-none focus:border-amber-400 cursor-pointer font-bold',
+          },
+          React.createElement('option', { value: '' }, 'Select Account...'),
+          (meta?.accountOptions || []).map((opt: any) =>
+            React.createElement(
+              'option',
+              { key: opt.value, value: opt.value },
+              `${opt.label} (${opt.value})`
+            )
+          )
+        );
+      }
+
+      return React.createElement(
+        'span',
+        {
+          className:
+            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 text-[11px] font-semibold',
+        },
+        `A/c X${currentHint}`
+      );
+    },
+  },
+  {
+    key: 'period',
+    label: 'STATEMENT PERIOD',
+    width: '18%',
+    align: 'left',
+    renderCell: (row: any) => {
+      if (row.period_start && row.period_end) {
+        return React.createElement(
+          'span',
+          { className: 'text-zinc-300 whitespace-nowrap' },
+          `${row.period_start} → ${row.period_end}`
+        );
+      }
+      return React.createElement(
+        'span',
+        { className: 'text-zinc-600 italic' },
+        'Undetected'
+      );
+    },
+  },
+  {
+    key: 'file_size',
+    label: 'SIZE',
+    width: '8%',
+    align: 'right',
+    renderCell: (row: any) => {
+      const kb = (Number(row.file_size || 0) / 1024).toFixed(0);
+      return React.createElement(
+        'span',
+        { className: 'text-zinc-400 font-mono text-[11px]' },
+        `${kb} KB`
+      );
+    },
+  },
+  {
+    key: 'received_date',
+    label: 'RECEIVED AT',
+    width: '10%',
+    align: 'left',
+    renderCell: (row: any) => {
+      return React.createElement(
+        'span',
+        { className: 'text-zinc-400 font-mono text-[11px]' },
+        row.received_date || '—'
+      );
+    },
+  },
+  {
+    key: 'doc_type',
+    label: 'DOC TYPE',
+    width: '8%',
+    align: 'center',
+    renderCell: (row: any) => {
+      return React.createElement(
+        'span',
+        {
+          className:
+            'bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded text-[10px] border border-zinc-700 font-semibold',
+        },
+        row.doc_type || 'STATEMENT'
+      );
+    },
+  },
+];
+
 export const ACCOUNTING_HEADER_COLUMNS: ColumnConfig[] = [
   {
     key: 'sno',
@@ -113,7 +283,6 @@ export const ACCOUNTING_HEADER_COLUMNS: ColumnConfig[] = [
   { key: 'actions', label: 'CRUD Actions', width: '12%', align: 'center' },
 ];
 
-// 🔄 TAB 2 COLUMNS: SELF TRANSFER SYSTEM NODES
 export const SELF_TRANSFER_COLUMNS: ColumnConfig[] = [
   {
     key: 'sno',
@@ -296,103 +465,6 @@ export const UNCATEGORIZED_VAULT_COLUMNS: ColumnConfig[] = [
   { key: 'actions', label: 'Manual Allocation', width: '10%', align: 'center' },
 ];
 
-// export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
-//   {
-//     key: 'category',
-//     label: 'Primary Class',
-//     width: '15%',
-//     align: 'left',
-//     textColor: 'text-zinc-200 font-bold',
-//   },
-//   {
-//     key: 'subcategory',
-//     label: 'Subcategory',
-//     width: '22%',
-//     align: 'left',
-//     textColor: 'text-zinc-300',
-//   },
-//   {
-//     key: 'transaction_count',
-//     label: 'Txn Count',
-//     width: '8%',
-//     align: 'center',
-//     textColor: 'text-zinc-400 font-mono text-xs',
-//   },
-//   {
-//     key: 'total_debit',
-//     label: 'Debit (DR)',
-//     width: '13%',
-//     align: 'right',
-//     isCurrency: true,
-//     textColor: 'text-amber-400 font-mono text-xs',
-//   },
-//   {
-//     key: 'total_credit',
-//     label: 'Credit (CR)',
-//     width: '13%',
-//     align: 'right',
-//     isCurrency: true,
-//     textColor: 'text-emerald-400 font-mono text-xs',
-//   },
-//   {
-//     key: 'net_balance',
-//     label: 'Net Balance',
-//     width: '17%',
-//     align: 'right',
-//     isCurrency: true,
-//     textColor: 'text-zinc-100 font-bold font-mono text-xs',
-//     renderFooter: (data: any[]) => {
-//       const net = data.reduce((acc, row) => {
-//         const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
-//         const cr = parseFloat(
-//           String(row.total_credit || '0').replace(/,/g, '')
-//         );
-//         return acc + (dr - cr);
-//       }, 0);
-
-//       return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
-//     },
-//   },
-//   // 🎯 Dynamic Action Button Column for Subledger-Capable Rows
-//   {
-//     key: 'actions',
-//     label: 'Actions',
-//     width: '12%',
-//     align: 'center',
-//     renderCell: (row: any, meta?: any) => {
-//       const subcategory = row.subcategory;
-//       const isSubledgerCapable = meta?.subledgerCapableSet?.has(subcategory);
-
-//       if (!isSubledgerCapable) return null;
-
-//       return React.createElement(
-//         'button',
-//         {
-//           type: 'button',
-//           onClick: (e: React.MouseEvent) => {
-//             e.stopPropagation();
-//             console.log(
-//               '📦 [Subledger Hub Button Clicked for]:',
-//               subcategory,
-//               'Row Data:',
-//               row
-//             );
-//             if (meta?.onOpenSubledgerDrawer) {
-//               meta.onOpenSubledgerDrawer(subcategory);
-//             }
-//           },
-//           className:
-//             'px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800/80 text-cyan-300 font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto',
-//           title: `Open Subledger Hub for ${subcategory}`,
-//         },
-//         '📦 Subledger Hub'
-//       );
-//     },
-//   },
-// ];
-
-// Ledger Dashboard
-
 export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
   {
     key: 'category',
@@ -461,10 +533,7 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
         .trim()
         .toLowerCase();
 
-      // 🎯 1. Fetch capability set passed directly from backend metadata
       const capableSet: Set<string> = meta?.subledgerCapableSet || new Set();
-
-      // 🎯 2. Strict Check: Only render button if backend confirmed subledger existence
       const isSubledgerCapable = Array.from(capableSet).some(
         (item) =>
           String(item).trim().toLowerCase() === subcategory.toLowerCase()
@@ -472,7 +541,6 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
 
       if (!isSubledgerCapable || !subcategory) return null;
 
-      // 🎯 3. Style button dynamically based on row class
       let buttonLabel = '📦 Subledger';
       let colorStyles =
         'bg-teal-950/80 hover:bg-teal-900 border-teal-800/80 text-teal-300';
@@ -509,6 +577,7 @@ export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
     },
   },
 ];
+
 export const KPI_SUMMARY_COLUMNS: ColumnConfig[] = [
   {
     key: 'kpi_name',

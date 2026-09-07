@@ -1,49 +1,6 @@
 import api from './client';
 import { accountApi, getTaxonomyTree, type TaxonomyOption } from './api';
 
-// export interface EmailPayload {
-//   id: string;
-//   source: string;
-//   bank_name?: string;
-//   account_last4?: string;
-//   merchant?: string;
-//   subject?: string;
-//   sender?: string;
-//   email_from: string;
-//   amount?: number | null;
-//   balance?: number | null;
-//   upi_ref?: string | null;
-//   txn_type?: 'DEBIT' | 'CREDIT';
-//   status:
-//     | 'PARSED'
-//     | 'DUPLICATE'
-//     | 'FAILED'
-//     | 'UNPARSED'
-//     | 'DECRYPTED'
-//     | 'COMPLETED'
-//     | 'STAGED'; // 👈 Added STAGED to union
-//   email_date?: string;
-//   created_at: string;
-//   body?: string;
-//   decrypted_body?: string;
-//   is_synthetic_gap?: boolean;
-//   is_staged_for_matching?: boolean; // 👈 Added staging flag
-//   staged_at?: string; // 👈 Added staging timestamp
-//   raw_item?: any;
-//   taxonomy_payload?: {
-//     account_match?: Record<string, any>;
-//     taxonomy?: {
-//       category_id?: string;
-//       category_name?: string;
-//       subcategory_id?: string;
-//       subcategory_name?: string;
-//     };
-//     normalized_txn?: Record<string, any>;
-//     audit_trail?: Record<string, any>;
-//   };
-//   is_completed?: boolean;
-//   completed_at?: string;
-// }
 export interface EmailPayload {
   id: string;
   source: string;
@@ -94,10 +51,62 @@ export interface GetPayloadsParams {
   staged_only?: boolean;
 }
 
+// =========================================================================
+// PDF Bank Statement Staging Types
+// =========================================================================
+export interface StagedStatementItem {
+  stage_id: string;
+  message_id: string;
+  attachment_id?: string;
+  attachment_hash?: string;
+  filename: string;
+  file_path: string;
+  file_size: number;
+  doc_type: string;
+  status: string;
+  sender: string;
+  subject: string;
+  received_date: string;
+  account_hint: string;
+  bank_name: string;
+  period_start: string | null;
+  period_end: string | null;
+  selected: boolean;
+  created_at: string;
+}
+
+export interface StagedStatementsResponse {
+  status: string;
+  count: number;
+  results: StagedStatementItem[];
+}
+
+export interface HarvestStatementsResponse {
+  status: string;
+  message: string;
+  staged_count: number;
+  items: StagedStatementItem[];
+}
+
+export interface CommitStatementsPayload {
+  selected_ids: string[];
+  overrides?: Record<
+    string,
+    { account_hint?: string; bank_name?: string; doc_type?: string }
+  >;
+}
+
+export interface CommitStatementsResponse {
+  status: string;
+  message: string;
+  committed_items: any[];
+}
+
 const STAGING_URL = '/ingest/email/staging';
 const VAULT_URL = '/ingest/email/payloads';
 const TUNNEL_URL = '/ingest/email/tunnel';
 const BALDISC_URL = '/ingest/email/balance-check';
+const DOCUMENTS_INBOX_URL = '/ingest/email/documents/inbox';
 
 export interface AccountOption {
   label: string;
@@ -152,7 +161,7 @@ export const DATE_PRESET_OPTIONS = [
   { label: 'All Time', value: 'ALL' },
   { label: 'Custom Date Range', value: 'CUSTOM' },
 ] as const;
-//export type DatePresetType = (typeof DATE_PRESET_OPTIONS)[number]['value'];
+
 export type DatePresetType =
   | 'ALL'
   | 'ALL_TIME'
@@ -197,7 +206,9 @@ export const emailIngestApi = {
     return response.data;
   },
 
+  // =========================================================================
   // TAB 1: STAGING & STREAM ACTIONS
+  // =========================================================================
   receiveEmail: async (payload: any, confirm = false) => {
     const response = await api.post(
       `${STAGING_URL}/ingest/?confirm=${confirm}`,
@@ -212,7 +223,6 @@ export const emailIngestApi = {
   },
 
   commitSelectedPayloads: async (items: any[]) => {
-    // Strip heavy redundant fields (like full HTML bodies/bloat) before posting to backend
     const sanitizedItems = items.map((item) => {
       const raw = item.raw_payload || item.raw_item?.raw_payload || {};
       const parsed =
@@ -226,7 +236,6 @@ export const emailIngestApi = {
           email_date: item.email_date || raw.email_date || item.created_at,
           email_from: item.email_from || raw.email_from,
           subject: item.subject || raw.subject,
-          // Use clean body or trimmed body if available to avoid sending giant HTML templates
           decrypted_body: item.body || raw.decrypted_body || '',
         },
         parsed_transaction: parsed,
@@ -239,7 +248,16 @@ export const emailIngestApi = {
     return response.data;
   },
 
+  discardStagingPayloads: async (
+    ids: string[]
+  ): Promise<{ status: string; removed_count: number }> => {
+    const response = await api.post(`${STAGING_URL}/discard/`, { ids });
+    return response.data;
+  },
+
+  // =========================================================================
   // TAB 2: VAULT & DATABASE ACTIONS
+  // =========================================================================
   getPayloads: async (params: GetPayloadsParams = {}) => {
     const response = await api.get(`${VAULT_URL}/`, { params });
     return response.data;
@@ -264,7 +282,6 @@ export const emailIngestApi = {
     return response.data;
   },
 
-  // TAXONOMY CLASSIFICATION UPDATE
   updatePayloadTaxonomy: async (
     payloadId: string,
     categoryId?: string,
@@ -294,19 +311,21 @@ export const emailIngestApi = {
     return response.data;
   },
 
-  // STAGE FOR RECONCILIATION MATCHING
   stageForMatching: async (payloadIds: string[], syntheticGaps: any[] = []) => {
-    const response = await api.post(
-      '/ingest/email/payloads/stage-for-matching/',
-      {
-        payload_ids: payloadIds,
-        synthetic_gaps: syntheticGaps,
-      }
-    );
+    const response = await api.post(`${VAULT_URL}/stage-for-matching/`, {
+      payload_ids: payloadIds,
+      synthetic_gaps: syntheticGaps,
+    });
     return response.data;
   },
 
-  // BALANCE DISCREPANCIES AUDIT
+  unstageFromMatching: async (payloadIds: string[]) => {
+    const response = await api.post(`${VAULT_URL}/unstage-from-matching/`, {
+      payload_ids: payloadIds,
+    });
+    return response.data;
+  },
+
   runBalanceAudit: async (account = '0060'): Promise<BalanceAuditResponse> => {
     const response = await api.get<BalanceAuditResponse>(
       `${BALDISC_URL}/audit/`,
@@ -316,19 +335,45 @@ export const emailIngestApi = {
     );
     return response.data;
   },
-  unstageFromMatching: async (payloadIds: string[]) => {
-    const response = await api.post(
-      '/ingest/email/payloads/unstage-from-matching/',
-      {
-        payload_ids: payloadIds,
-      }
+
+  // =========================================================================
+  // TAB 3: PDF BANK STATEMENTS STAGING & INBOX PIPELINE
+  // =========================================================================
+  getStagedStatements: async (): Promise<StagedStatementsResponse> => {
+    const response = await api.get<StagedStatementsResponse>(
+      `${DOCUMENTS_INBOX_URL}/staged/`
     );
     return response.data;
   },
-  discardStagingPayloads: async (
-    ids: string[]
-  ): Promise<{ status: string; removed_count: number }> => {
-    const response = await api.post(`${STAGING_URL}/discard/`, { ids });
+
+  harvestBankStatements: async (
+    maxResults = 25
+  ): Promise<HarvestStatementsResponse> => {
+    const response = await api.post<HarvestStatementsResponse>(
+      `${DOCUMENTS_INBOX_URL}/harvest/`,
+      { max_results: maxResults }
+    );
+    return response.data;
+  },
+
+  commitSelectedStatements: async (
+    payload: CommitStatementsPayload
+  ): Promise<CommitStatementsResponse> => {
+    const response = await api.post<CommitStatementsResponse>(
+      `${DOCUMENTS_INBOX_URL}/commit/`,
+      payload
+    );
+    return response.data;
+  },
+  previewStagedPdf: async (
+    filePath: string,
+    password?: string
+  ): Promise<Blob> => {
+    const response = await api.post(
+      `${DOCUMENTS_INBOX_URL}/preview-staged/`,
+      { file_path: filePath, password },
+      { responseType: 'blob' }
+    );
     return response.data;
   },
 };
