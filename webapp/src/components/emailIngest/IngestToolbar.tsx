@@ -1,5 +1,3 @@
-// webapp/src/components/emailIngest/IngestToolbar.tsx
-
 import React, { useMemo } from 'react';
 import { type AccountOption, DATE_PRESET_OPTIONS } from '../../api/emailIngestApi';
 import { Trash2 } from 'lucide-react';
@@ -15,6 +13,8 @@ interface Props {
   selectedAccount?: string;
   accountOptions?: AccountOption[];
   onAccountChange?: (val: string) => void;
+  hideAccountSelector?: boolean;
+  hideDateSelector?: boolean;
   onTriggerSync?: () => void;
   syncing?: boolean;
   onCommitSelected?: () => void;
@@ -52,6 +52,7 @@ export const IngestToolbar: React.FC<Props> = ({
   selectedAccount,
   accountOptions = [],
   onAccountChange,
+  hideAccountSelector = false,
   onTriggerSync,
   syncing,
   onCommitSelected,
@@ -67,6 +68,7 @@ export const IngestToolbar: React.FC<Props> = ({
   onToggleStagedOnly,
   stagingPayloads = [],
   hideDuplicates = false,
+  hideDateSelector = false,
   onToggleHideDuplicates,
   onDiscardSelected,
   isDiscarding = false,
@@ -99,37 +101,43 @@ export const IngestToolbar: React.FC<Props> = ({
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-zinc-900/60 border border-zinc-800 p-3 rounded-xl gap-3 text-xs font-mono">
       {/* Date & Account Filters */}
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={datePreset}
-          onChange={(e) => onDatePresetChange(e.target.value)}
-          className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2.5 py-1.5 focus:border-indigo-500 focus:outline-none cursor-pointer"
-        >
-          {DATE_PRESET_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+{/* Only render date select if NOT hidden by parent tab */}
+        {!hideDateSelector && (
+          <>
+            <select
+              value={datePreset}
+              onChange={(e) => onDatePresetChange(e.target.value)}
+              className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2.5 py-1.5 focus:border-indigo-500 focus:outline-none cursor-pointer"
+            >
+              {DATE_PRESET_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
 
-        {datePreset === 'CUSTOM' && (
-          <div className="flex items-center gap-1.5">
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => onStartDateChange(e.target.value)}
-              className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2 py-1"
-            />
-            <span className="text-zinc-600">to</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => onEndDateChange(e.target.value)}
-              className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2 py-1"
-            />
-          </div>
+            {datePreset === 'CUSTOM' && (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => onStartDateChange(e.target.value)}
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2 py-1"
+                />
+                <span className="text-zinc-600">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => onEndDateChange(e.target.value)}
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-2 py-1"
+                />
+              </div>
+            )}
+          </>
         )}
 
-        {mode === 'VAULT' && accountOptions.length > 0 && onAccountChange && (
+        {/* Render account selector only if NOT hidden */}
+        {!hideAccountSelector && mode === 'VAULT' && accountOptions.length > 0 && onAccountChange && (
           <select
             value={selectedAccount}
             onChange={(e) => onAccountChange(e.target.value)}
@@ -207,7 +215,6 @@ export const IngestToolbar: React.FC<Props> = ({
       <div className="flex items-center gap-2">
         {mode === 'INGEST' && (
           <>
-            {/* 🗑️ Discard / Remove Selected Button */}
             {stagingSelectedCount > 0 && onDiscardSelected && (
               <button
                 type="button"

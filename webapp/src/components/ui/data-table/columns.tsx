@@ -78,110 +78,85 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
 
 export const STATEMENT_STAGING_COLUMNS: ColumnConfig[] = [
   {
-    key: 'filename',
-    label: 'BANK & FILENAME',
-    width: '32%',
-    align: 'left',
-    renderCell: (row: any, meta?: any) => {
-      return React.createElement(
-        'div',
-        {
-          className: 'space-y-0.5 cursor-pointer group',
-          onClick: () => meta?.onOpenPreview?.(row),
-        },
-        React.createElement(
-          'div',
-          {
-            className:
-              'font-semibold text-zinc-200 group-hover:text-amber-400 flex items-center gap-1.5',
-          },
-          row.bank_name || 'UNKNOWN BANK',
-          React.createElement(
-            'span',
-            {
-              className: 'text-[10px] text-zinc-600 group-hover:text-amber-400',
-            },
-            '👁️ Preview'
-          )
-        ),
-        React.createElement(
-          'div',
-          {
-            className: 'text-[11px] text-zinc-500 truncate max-w-sm',
-            title: row.filename,
-          },
-          row.filename
-        )
-      );
-    },
-  },
+  key: 'select',
+  label: '',
+  width: '4%',
+  align: 'center',
+  renderCell: (row: any, meta: any) => {
+    const isSelected = meta?.selectedIds?.includes(row.stage_id);
+    const isDupe = row.is_duplicate || row.status === 'DUPLICATE';
+
+    return (
+      <input
+        type="checkbox"
+        checked={isSelected}
+        // Optional: Disable checkbox if duplicate and not unrecognized
+        disabled={isDupe && row.account_hint !== 'UNRECOGNIZED'}
+        onChange={(e) => {
+          e.stopPropagation();
+          meta?.onToggleSelectOne?.(row.stage_id);
+        }}
+        className="rounded border-zinc-700 bg-zinc-800 text-emerald-500 focus:ring-0 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+      />
+    );
+  }
+},
   {
-    key: 'filename',
+    key: 'bank_filename',
     label: 'BANK & FILENAME',
-    width: '32%',
+    width: '28%',
     align: 'left',
-    renderCell: (row: any) => {
-      return React.createElement(
-        'div',
-        { className: 'space-y-0.5' },
-        React.createElement(
-          'div',
-          { className: 'font-semibold text-zinc-200' },
-          row.bank_name || 'UNKNOWN BANK'
-        ),
-        React.createElement(
-          'div',
-          {
-            className: 'text-[11px] text-zinc-500 truncate max-w-sm',
-            title: row.filename,
-          },
-          row.filename
-        )
-      );
-    },
+    renderCell: (row: any, meta: any) => (
+      <div className="flex flex-col">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-zinc-200 uppercase text-xs">
+            {row.bank_name || 'UNKNOWN BANK'}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              meta?.onOpenPreview?.(row);
+            }}
+            className="text-[10px] text-amber-400 hover:text-amber-300 font-mono flex items-center gap-1 cursor-pointer"
+          >
+            <span>👁️</span> Preview
+          </button>
+        </div>
+        <span className="text-[11px] text-zinc-400 font-mono truncate max-w-sm" title={row.filename}>
+          {row.filename}
+        </span>
+      </div>
+    ),
   },
   {
     key: 'account_hint',
     label: 'ACCOUNT HINT',
-    width: '20%',
+    width: '16%',
     align: 'left',
-    renderCell: (row: any, meta?: any) => {
-      const currentHint =
-        meta?.accountOverrides?.[row.stage_id] || row.account_hint;
-      const isUnrecognized = currentHint === 'UNRECOGNIZED';
-
-      if (isUnrecognized) {
-        return React.createElement(
-          'select',
-          {
-            value: meta?.accountOverrides?.[row.stage_id] || '',
-            onClick: (e: React.MouseEvent) => e.stopPropagation(),
-            onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-              if (meta?.onAccountOverrideChange) {
-                meta.onAccountOverrideChange(row.stage_id, e.target.value);
-              }
-            },
-            className:
-              'bg-amber-950/40 border border-amber-600/60 text-amber-300 text-xs px-2 py-1 rounded focus:outline-none focus:border-amber-400 cursor-pointer font-bold',
-          },
-          React.createElement('option', { value: '' }, 'Select Account...'),
-          (meta?.accountOptions || []).map((opt: any) =>
-            React.createElement(
-              'option',
-              { key: opt.value, value: opt.value },
-              `${opt.label} (${opt.value})`
-            )
-          )
+    renderCell: (row: any, meta: any) => {
+      const selectedAcc = meta?.accountOverrides?.[row.stage_id] || row.account_hint;
+      if (row.account_hint && row.account_hint !== 'UNRECOGNIZED') {
+        return (
+          <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-950/80 border border-emerald-800 text-emerald-400">
+            A/c X{row.account_hint}
+          </span>
         );
       }
-
-      return React.createElement(
-        'span',
-        {
-          className:
-            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 text-[11px] font-semibold',
-        },
-        `A/c X${currentHint}`
+      return (
+        <select
+          value={selectedAcc === 'UNRECOGNIZED' ? '' : selectedAcc}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => meta?.onAccountOverrideChange?.(row.stage_id, e.target.value)}
+          className="bg-zinc-950 border border-amber-600/80 text-amber-300 text-xs rounded px-2 py-1 focus:outline-none cursor-pointer font-semibold"
+        >
+          <option value="">Select Account...</option>
+          {meta?.accountOptions?.map((opt: any) => (
+            <option key={opt.id} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       );
     },
   },
@@ -190,63 +165,65 @@ export const STATEMENT_STAGING_COLUMNS: ColumnConfig[] = [
     label: 'STATEMENT PERIOD',
     width: '18%',
     align: 'left',
+    renderCell: (row: any) => (
+      <span className="font-mono text-xs text-zinc-300">
+        {row.period_start || '—'} → {row.period_end || '—'}
+      </span>
+    ),
+  },
+  {
+    key: 'status',
+    label: 'INGEST STATUS',
+    width: '12%',
+    align: 'center',
     renderCell: (row: any) => {
-      if (row.period_start && row.period_end) {
-        return React.createElement(
-          'span',
-          { className: 'text-zinc-300 whitespace-nowrap' },
-          `${row.period_start} → ${row.period_end}`
+      const isDupe = row.is_duplicate || row.status === 'DUPLICATE' || row.status === 'COMMITTED';
+      if (isDupe) {
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-amber-950/80 border border-amber-800/80 text-amber-400 shadow-sm">
+            <span>⚠️</span> DUPLICATE
+          </span>
         );
       }
-      return React.createElement(
-        'span',
-        { className: 'text-zinc-600 italic' },
-        'Undetected'
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 shadow-sm">
+          <span>📥</span> READY
+        </span>
       );
     },
   },
   {
     key: 'file_size',
     label: 'SIZE',
-    width: '8%',
+    width: '7%',
     align: 'right',
-    renderCell: (row: any) => {
-      const kb = (Number(row.file_size || 0) / 1024).toFixed(0);
-      return React.createElement(
-        'span',
-        { className: 'text-zinc-400 font-mono text-[11px]' },
-        `${kb} KB`
-      );
-    },
+    renderCell: (row: any) => (
+      <span className="font-mono text-xs text-zinc-400">
+        {row.file_size ? `${Math.round(row.file_size / 1024)} KB` : '—'}
+      </span>
+    ),
   },
   {
     key: 'received_date',
     label: 'RECEIVED AT',
-    width: '10%',
+    width: '11%',
     align: 'left',
-    renderCell: (row: any) => {
-      return React.createElement(
-        'span',
-        { className: 'text-zinc-400 font-mono text-[11px]' },
-        row.received_date || '—'
-      );
-    },
+    renderCell: (row: any) => (
+      <span className="font-mono text-[11px] text-zinc-400">
+        {row.received_date || '—'}
+      </span>
+    ),
   },
   {
     key: 'doc_type',
     label: 'DOC TYPE',
     width: '8%',
     align: 'center',
-    renderCell: (row: any) => {
-      return React.createElement(
-        'span',
-        {
-          className:
-            'bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded text-[10px] border border-zinc-700 font-semibold',
-        },
-        row.doc_type || 'STATEMENT'
-      );
-    },
+    renderCell: (row: any) => (
+      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 uppercase">
+        {row.doc_type || 'STATEMENT'}
+      </span>
+    ),
   },
 ];
 

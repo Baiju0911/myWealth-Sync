@@ -12,6 +12,8 @@ from tracker.models.emailModels import RawEmailPayload
 from tracker.emailIngest.serializers import RawEmailPayloadSerializer
 from .emailViewhelper import safe_parse_datetime
 
+""" TODO: Add detailed description for function. {#_BaijSoft} """
+
 
 class RawEmailPayloadVaultViewSet(viewsets.ReadOnlyModelViewSet):
     """Manages committed records in MySQL, serving queries for Tab 2 DataTables."""

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 import pypdf
 import io
 from django.http import HttpResponse, FileResponse
+from django.conf import settings
 
 from tracker.models.emailModels import DocumentInboxItem
 from tracker.emailIngest.attachment_harvester import AttachmentHarvesterService
@@ -57,20 +58,55 @@ class DocumentInboxViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    # @action(detail=False, methods=["post"], url_path="harvest")
+    # def trigger_harvest(self, request):
+    #     """Scans Gmail API and stages attachments into staged_inbox.json without writing to DB."""
+    #     max_results = int(request.data.get("max_results", 25))
+    #     try:
+    #         service = AttachmentHarvesterService()
+    #         staged_items = service.harvest_bank_attachments(max_results=max_results)
+
+    #         return Response(
+    #             {
+    #                 "status": "SUCCESS",
+    #                 "message": f"Harvested and staged {len(staged_items)} attachment(s) to JSON manifest.",
+    #                 "staged_count": len(staged_items),
+    #                 "items": staged_items,  # 👈 Return plain list of dicts directly
+    #             },
+    #             status=status.HTTP_200_OK,
+    #         )
+    #     except Exception as e:
+    #         return Response(
+    #             {
+    #                 "status": "ERROR",
+    #                 "message": f"Attachment harvesting failed: {str(e)}",
+    #                 "error": str(e),
+    #             },
+    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #         )
+
     @action(detail=False, methods=["post"], url_path="harvest")
     def trigger_harvest(self, request):
-        """Scans Gmail API and stages attachments into staged_inbox.json without writing to DB."""
-        max_results = int(request.data.get("max_results", 25))
+        max_results = int(request.data.get("max_results", 50))
+        date_preset = request.data.get("date_preset")
+        start_date = request.data.get("start_date")
+        end_date = request.data.get("end_date")
+
         try:
             service = AttachmentHarvesterService()
-            staged_items = service.harvest_bank_attachments(max_results=max_results)
+            staged_items = service.harvest_bank_attachments(
+                max_results=max_results,
+                date_preset=date_preset,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
             return Response(
                 {
                     "status": "SUCCESS",
-                    "message": f"Harvested and staged {len(staged_items)} attachment(s) to JSON manifest.",
+                    "message": f"Harvested and staged {len(staged_items)} statement(s) to JSON manifest.",
                     "staged_count": len(staged_items),
-                    "items": staged_items,  # 👈 Return plain list of dicts directly
+                    "items": staged_items,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -84,59 +120,59 @@ class DocumentInboxViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    @action(detail=False, methods=["post"], url_path="preview-staged")
-    def preview_staged_pdf(self, request):
-        """Streams a staged PDF file for browser viewing.
+    # @action(detail=False, methods=["post"], url_path="preview-staged")
+    # def preview_staged_pdf(self, request):
+    #     """Streams a staged PDF file for browser viewing.
 
-        If the PDF is encrypted, attempts decryption with the provided password.
-        Returns 423 Locked if password is missing or incorrect.
-        """
-        file_path = request.data.get("file_path")
-        password = request.data.get("password", "")
+    #     If the PDF is encrypted, attempts decryption with the provided password.
+    #     Returns 423 Locked if password is missing or incorrect.
+    #     """
+    #     file_path = request.data.get("file_path")
+    #     password = request.data.get("password", "")
 
-        if not file_path or not os.path.exists(file_path):
-            return Response(
-                {"error": "File not found on disk"}, status=status.HTTP_404_NOT_FOUND
-            )
+    #     if not file_path or not os.path.exists(file_path):
+    #         return Response(
+    #             {"error": "File not found on disk"}, status=status.HTTP_404_NOT_FOUND
+    #         )
 
-        try:
-            reader = pypdf.PdfReader(file_path)
-            if reader.is_encrypted:
-                if not password:
-                    return Response(
-                        {
-                            "is_encrypted": True,
-                            "error": "Password required to view this statement.",
-                        },
-                        status=status.HTTP_423_LOCKED,
-                    )
+    #     try:
+    #         reader = pypdf.PdfReader(file_path)
+    #         if reader.is_encrypted:
+    #             if not password:
+    #                 return Response(
+    #                     {
+    #                         "is_encrypted": True,
+    #                         "error": "Password required to view this statement.",
+    #                     },
+    #                     status=status.HTTP_423_LOCKED,
+    #                 )
 
-                # Attempt decrypt
-                decrypt_success = reader.decrypt(password)
-                if not decrypt_success:
-                    return Response(
-                        {"is_encrypted": True, "error": "Incorrect password."},
-                        status=status.HTTP_423_LOCKED,
-                    )
+    #             # Attempt decrypt
+    #             decrypt_success = reader.decrypt(password)
+    #             if not decrypt_success:
+    #                 return Response(
+    #                     {"is_encrypted": True, "error": "Incorrect password."},
+    #                     status=status.HTTP_423_LOCKED,
+    #                 )
 
-                # Write decrypted stream into memory to serve
-                writer = pypdf.PdfWriter()
-                for page in reader.pages:
-                    writer.add_page(page)
+    #             # Write decrypted stream into memory to serve
+    #             writer = pypdf.PdfWriter()
+    #             for page in reader.pages:
+    #                 writer.add_page(page)
 
-                out_buffer = io.BytesIO()
-                writer.write(out_buffer)
-                out_buffer.seek(0)
-                return FileResponse(out_buffer, content_type="application/pdf")
+    #             out_buffer = io.BytesIO()
+    #             writer.write(out_buffer)
+    #             out_buffer.seek(0)
+    #             return FileResponse(out_buffer, content_type="application/pdf")
 
-            # Not encrypted -> stream direct file
-            return FileResponse(open(file_path, "rb"), content_type="application/pdf")
+    #         # Not encrypted -> stream direct file
+    #         return FileResponse(open(file_path, "rb"), content_type="application/pdf")
 
-        except Exception as e:
-            return Response(
-                {"error": f"Failed to read PDF: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+    #     except Exception as e:
+    #         return Response(
+    #             {"error": f"Failed to read PDF: {str(e)}"},
+    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #         )
 
     @action(detail=False, methods=["get"], url_path="staged")
     def list_staged(self, request):
@@ -217,4 +253,94 @@ class DocumentInboxViewSet(viewsets.ModelViewSet):
             return Response(
                 {"status": "ERROR", "message": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"], url_path="preview-staged")
+    def preview_staged_pdf(self, request):
+        raw_path = request.data.get("file_path")
+        document_id = request.data.get("document_id") or request.data.get("id")
+        filename = request.data.get("filename")
+        password = request.data.get("password", "")
+
+        target_path = None
+
+        # 1. Try resolving by document_id in DB
+        if document_id:
+            doc = DocumentInboxItem.objects.filter(id=document_id).first()
+            if doc:
+                if hasattr(doc, "file_path") and doc.file_path:
+                    target_path = str(doc.file_path)
+                elif hasattr(doc, "file") and doc.file:
+                    target_path = doc.file.path
+
+        # 2. Try raw_path passed from payload
+        if not target_path and raw_path:
+            target_path = raw_path
+
+        # 3. Try filename search in documents/inbox
+        if not target_path and filename:
+            candidate = os.path.join(settings.BASE_DIR, "documents", "inbox", filename)
+            if os.path.exists(candidate):
+                target_path = candidate
+
+        if not target_path:
+            return Response(
+                {"error": "No file path, document_id, or valid filename provided."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 4. Resolve relative paths
+        if not os.path.isabs(target_path):
+            candidate = os.path.join(settings.BASE_DIR, target_path)
+            if os.path.exists(candidate):
+                target_path = candidate
+
+        if not os.path.exists(target_path):
+            # Check if prefixed inside documents/inbox
+            candidate = os.path.join(
+                settings.BASE_DIR, "documents", "inbox", os.path.basename(target_path)
+            )
+            if os.path.exists(candidate):
+                target_path = candidate
+
+        if not os.path.exists(target_path):
+            return Response(
+                {"error": f"File not found on disk: {target_path}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            reader = pypdf.PdfReader(target_path)
+            if reader.is_encrypted:
+                if not password:
+                    return Response(
+                        {
+                            "is_encrypted": True,
+                            "error": "Password required to view this statement.",
+                        },
+                        status=status.HTTP_423_LOCKED,
+                    )
+
+                decrypt_success = reader.decrypt(password)
+                if not decrypt_success:
+                    return Response(
+                        {"is_encrypted": True, "error": "Incorrect password."},
+                        status=status.HTTP_423_LOCKED,
+                    )
+
+                writer = pypdf.PdfWriter()
+                for page in reader.pages:
+                    writer.add_page(page)
+
+                out_buffer = io.BytesIO()
+                writer.write(out_buffer)
+                out_buffer.seek(0)
+                return FileResponse(out_buffer, content_type="application/pdf")
+
+            return FileResponse(open(target_path, "rb"), content_type="application/pdf")
+
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to read PDF: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

@@ -15,9 +15,8 @@ import { useMultiYearSync } from '../hooks/useMultiYearSync';
 import { PayloadInspectorModal } from '../components/emailIngest/PayloadInspectorModal';
 import { LiveBufferTab } from '../components/emailIngest/LiveBufferTab';
 import { DatabaseVaultTab } from '../components/emailIngest/DatabaseVaultTab';
-import { StatementStagingTab } from '../components/emailIngest/StatementStagingTab';
 
-type ActiveTab = 'INGEST' | 'VAULT' | 'PROCESS_STAGING';
+type ActiveTab = 'INGEST' | 'VAULT';
 
 export const EmailIngestView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('INGEST');
@@ -86,7 +85,7 @@ export const EmailIngestView: React.FC = () => {
         </div>
       </div>
 
-      {/* Sync Telemetry Banner (Consumes syncProgress) */}
+      {/* Sync Telemetry Banner */}
       {syncing && (
         <div className="bg-zinc-900 border border-emerald-500/30 p-3.5 rounded-xl flex justify-between items-center text-xs font-mono">
           <div className="flex items-center gap-2.5">
@@ -102,7 +101,7 @@ export const EmailIngestView: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Primary Navigation Tabs */}
       <div className="flex border-b border-zinc-800 gap-6 font-mono text-xs">
         <button
           onClick={() => setActiveTab('INGEST')}
@@ -127,15 +126,6 @@ export const EmailIngestView: React.FC = () => {
             {stats?.total || 0}
           </span>
         </button>
-
-        <button
-          onClick={() => setActiveTab('PROCESS_STAGING')}
-          className={`pb-3 font-bold border-b-2 flex items-center gap-2 cursor-pointer ${
-            activeTab === 'PROCESS_STAGING' ? 'text-amber-400 border-amber-500' : 'text-zinc-500 border-transparent hover:text-zinc-300'
-          }`}
-        >
-          <span>📄 PDF Statements</span>
-        </button>
       </div>
 
       {notification && (
@@ -155,7 +145,7 @@ export const EmailIngestView: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 1: Live Staging Buffer */}
+      {/* Tab 1: Live Staging Buffer (Emails + PDF Statements) */}
       {activeTab === 'INGEST' && (
         <LiveBufferTab
           stagingPayloads={stagingPayloads}
@@ -168,12 +158,15 @@ export const EmailIngestView: React.FC = () => {
           setStartDate={setStartDate}
           endDate={endDate}
           setEndDate={setEndDate}
+          selectedAccount={selectedAccount}
+          setSelectedAccount={setSelectedAccount}
+          accountOptions={accountOptions}
           onSelectPayload={setSelectedPayload}
           onNotification={notify}
         />
       )}
 
-      {/* Tab 2: Database Vault */}
+      {/* Tab 2: Database Vault (Alerts + Statement Vault) */}
       {activeTab === 'VAULT' && (
         <DatabaseVaultTab
           selectedAccount={selectedAccount}
@@ -190,11 +183,6 @@ export const EmailIngestView: React.FC = () => {
           onNotification={notify}
           onStatsLoaded={setStats}
         />
-      )}
-
-      {/* Tab 3: PDF Statements Staging */}
-      {activeTab === 'PROCESS_STAGING' && (
-        <StatementStagingTab accountOptions={accountOptions} onNotification={notify} />
       )}
 
       <PayloadInspectorModal payload={selectedPayload} onClose={() => setSelectedPayload(null)} />

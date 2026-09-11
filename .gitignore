@@ -107,3 +107,25 @@ credentials.json
 *.json1
 tokentodel.json1
 staged_previews.json
+
+
+# Ignore all bank statement PDFs and downloaded documents
+backend/documents/inbox/*.pdf
+backend/documents/completed/*.pdf
+backend/media/documents/**/*.pdf
+*.pdf
+
+# Ignore the staging JSON manifest (contains transient email metadata)
+backend/documents/staged_inbox.json
+backend/media/documents/staged_inbox.json
+staged_inbox.json
+
+# OAuth tokens & secrets
+backend/tracker/emailIngest/token.json
+token.json
+credentials.json
+client_secret*.json
+
+backend/documents/
+*.pdf
+staged_inbox.json

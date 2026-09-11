@@ -3,6 +3,9 @@ import React from 'react';
 interface Props {
   stagedCount: number;
   selectedCount: number;
+  duplicateCount?: number;
+  hideDuplicates?: boolean;
+  onToggleHideDuplicates?: () => void;
   onHarvest: () => void;
   isHarvesting: boolean;
   onCommit: () => void;
@@ -12,6 +15,9 @@ interface Props {
 export const StatementToolbar: React.FC<Props> = ({
   stagedCount,
   selectedCount,
+  duplicateCount = 0,
+  hideDuplicates = false,
+  onToggleHideDuplicates,
   onHarvest,
   isHarvesting,
   onCommit,
@@ -23,17 +29,36 @@ export const StatementToolbar: React.FC<Props> = ({
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
           <span className="text-zinc-500 text-[11px]">STAGED:</span>
-          <span className="bg-amber-950/80 border border-amber-800/80 text-amber-400 px-2 py-0.5 rounded font-bold shadow-sm">
+          <span className="bg-zinc-950 border border-zinc-800 text-zinc-300 px-2 py-0.5 rounded font-bold shadow-sm">
             {stagedCount}
           </span>
         </div>
         <span className="text-zinc-700">|</span>
         <div className="flex items-center gap-1.5">
-          <span className="text-zinc-500 text-[11px]">SELECTED:</span>
+          <span className="text-zinc-500 text-[11px]">READY:</span>
           <span className="bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 px-2 py-0.5 rounded font-bold shadow-sm">
             {selectedCount}
           </span>
         </div>
+
+        {duplicateCount > 0 && onToggleHideDuplicates && (
+          <>
+            <span className="text-zinc-700">|</span>
+            <button
+              type="button"
+              onClick={onToggleHideDuplicates}
+              className={`px-2 py-0.5 rounded font-bold border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
+                hideDuplicates
+                  ? 'bg-zinc-900 text-zinc-500 border-zinc-800 line-through opacity-70 hover:opacity-100'
+                  : 'bg-amber-950/80 border-amber-800/80 text-amber-400 hover:bg-amber-900'
+              }`}
+              title={hideDuplicates ? 'Click to show duplicates' : 'Click to hide duplicates'}
+            >
+              <span>⚠️ Duplicates: {duplicateCount}</span>
+              <span className="text-[10px] ml-0.5">{hideDuplicates ? '🙈' : '👁️'}</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Action Buttons */}

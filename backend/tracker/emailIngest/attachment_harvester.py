@@ -1,10 +1,11 @@
 # tracker/services/attachment_harvester.py
 import base64
+import hashlib
 import json
 import os
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, Tuple
 
 from django.conf import settings
@@ -75,15 +76,13 @@ class AttachmentHarvesterService:
     def extract_raw_account_candidate(
         self, subject: str, filename: str, body: str = ""
     ) -> Optional[str]:
-        """Scans subject, filename, and body (in order of reliability) for account candidate digits."""
-        # Priority 1: Check subject
+        """Scans subject, filename, and body for account candidate digits."""
         for pattern in constants.ACCOUNT_HINT_PATTERNS:
             match = pattern.search(subject)
             if match:
                 raw = match.group(1)
                 return raw[-4:] if len(raw) >= 4 else raw.zfill(4)
 
-        # Priority 2: Check body snippet
         if body:
             for pattern in constants.ACCOUNT_HINT_PATTERNS:
                 match = pattern.search(body)
@@ -91,7 +90,6 @@ class AttachmentHarvesterService:
                     raw = match.group(1)
                     return raw[-4:] if len(raw) >= 4 else raw.zfill(4)
 
-        # Priority 3: Check filename
         for pattern in constants.ACCOUNT_HINT_PATTERNS:
             match = pattern.search(filename)
             if match:
@@ -103,10 +101,7 @@ class AttachmentHarvesterService:
     def resolve_account_from_db(
         self, candidate_hint: Optional[str], bank_name: Optional[str] = None
     ) -> Tuple[Optional[Account], str]:
-        """Validates candidate digits against active Account records in the database.
-
-        Returns (Account instance or None, "XXXX" or "UNRECOGNIZED").
-        """
+        """Validates candidate digits against active Account records in the database."""
         if not candidate_hint:
             return None, "UNRECOGNIZED"
 
@@ -133,10 +128,7 @@ class AttachmentHarvesterService:
     def extract_period_dates(
         self, subject: str, filename: str, body: str = ""
     ) -> Tuple[Optional[date], Optional[date]]:
-        """Extracts statement date range (from_date, to_date).
-
-        Scans subject and body text first, then falls back to filename date.
-        """
+        """Extracts statement date range (from_date, to_date)."""
         context = f"{subject} {body}"
         subj_match = constants.PERIOD_DATE_PATTERN.search(context)
         if subj_match:
@@ -150,7 +142,6 @@ class AttachmentHarvesterService:
             except ValueError:
                 pass
 
-        # Fallback: SIB filename format (RET_OG..._DDMMYYYY.pdf)
         fn_match = constants.SIB_FILENAME_DATE_PATTERN.search(filename)
         if fn_match:
             day, month, year = fn_match.groups()
@@ -190,33 +181,95 @@ class AttachmentHarvesterService:
         _walk_parts(payload.get("parts", []))
         return " ".join(collected_text)
 
+    def _build_gmail_date_query(
+        self,
+        base_query: str,
+        date_preset: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> str:
+        """Appends after: and before: filters to the Gmail query."""
+        today = timezone.localdate()
+        after_date = None
+        before_date = None
+
+        if date_preset == "THIS_WEEK":
+            after_date = today - timedelta(days=today.weekday())
+        elif date_preset == "THIS_MONTH":
+            after_date = today.replace(day=1)
+        elif date_preset == "LAST_MONTH":
+            first_of_this_month = today.replace(day=1)
+            last_month_end = first_of_this_month - timedelta(days=1)
+            after_date = last_month_end.replace(day=1)
+            before_date = first_of_this_month
+        elif date_preset == "LAST_6_MONTHS":
+            after_date = today - timedelta(days=180)
+        elif date_preset == "CUSTOM" and start_date and end_date:
+            try:
+                after_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+                before_date = datetime.strptime(
+                    end_date, "%Y-%m-%d"
+                ).date() + timedelta(days=1)
+            except ValueError:
+                pass
+
+        query_parts = [base_query]
+        if after_date:
+            query_parts.append(f"after:{after_date.strftime('%Y/%m/%d')}")
+        if before_date:
+            query_parts.append(f"before:{before_date.strftime('%Y/%m/%d')}")
+
+        return " ".join(query_parts)
+
     # ==========================================
     # Staging Harvester Core
     # ==========================================
-    def harvest_bank_attachments(self, max_results: int = 25) -> list[dict]:
-        """Scans Gmail for bank emails containing PDF attachments and stages
-
-        them into documents/staged_inbox.json without saving to the DB.
+    def harvest_bank_attachments(
+        self,
+        max_results: int = 50,
+        date_preset: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> list[dict]:
+        """Scans Gmail with date ranges, detects existing files in DB/manifest,
+        and labels duplicates instead of dropping them.
         """
+        search_query = self._build_gmail_date_query(
+            constants.GMAIL_INBOX_HARVEST_QUERY,
+            date_preset=date_preset,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
         results = (
             self.service.users()
             .messages()
-            .list(
-                userId="me",
-                q=constants.GMAIL_INBOX_HARVEST_QUERY,
-                maxResults=max_results,
-            )
+            .list(userId="me", q=search_query, maxResults=max_results)
             .execute()
         )
         messages = results.get("messages", [])
 
         manifest = self.load_staged_manifest()
-        staged_hashes = {item.get("attachment_hash") for item in manifest}
-        db_hashes = set(
-            DocumentInboxItem.objects.values_list("attachment_hash", flat=True)
+        manifest_map = {item.get("stage_id"): item for item in manifest}
+
+        # Cache existing committed DB identifiers
+        committed_hashes = set(
+            DocumentInboxItem.objects.exclude(attachment_hash__isnull=True)
+            .exclude(attachment_hash="")
+            .values_list("attachment_hash", flat=True)
+        )
+        committed_msg_files = set(
+            DocumentInboxItem.objects.values_list("message_id", "filename")
         )
 
-        newly_staged_items = []
+        staged_hashes = {
+            item.get("attachment_hash")
+            for item in manifest
+            if item.get("attachment_hash")
+        }
+        staged_msg_files = {
+            (item.get("message_id"), item.get("filename")) for item in manifest
+        }
 
         for msg_summary in messages:
             msg_id = msg_summary["id"]
@@ -244,82 +297,106 @@ class AttachmentHarvesterService:
             )
 
             doc_type = self.detect_doc_type(subject, body_text)
-
             parts = payload.get("parts", [])
+
             for part in parts:
                 filename = part.get("filename", "")
                 body = part.get("body", {})
                 attachment_id = body.get("attachmentId")
 
                 if attachment_id and filename.lower().endswith(".pdf"):
-                    att_hash = DocumentInboxItem.generate_hash(attachment_id)
+                    sanitized_name = f"{msg_id}_{filename}"
+                    disk_path = os.path.join(self.INBOX_DIR, sanitized_name)
 
-                    # Deduplication check (skip if committed to DB or already in staged JSON)
-                    if att_hash in db_hashes or att_hash in staged_hashes:
-                        continue
+                    # Read from disk if present, otherwise download
+                    if os.path.exists(disk_path):
+                        with open(disk_path, "rb") as f:
+                            file_data = f.read()
+                    else:
+                        attachment = (
+                            self.service.users()
+                            .messages()
+                            .attachments()
+                            .get(userId="me", messageId=msg_id, id=attachment_id)
+                            .execute()
+                        )
+                        file_data = base64.urlsafe_b64decode(
+                            attachment["data"].encode("UTF-8")
+                        )
+                        with open(disk_path, "wb") as f:
+                            f.write(file_data)
+
+                    content_hash = hashlib.sha256(file_data).hexdigest()
+
+                    # Deduplication check against DB and Manifest
+                    is_in_db = (
+                        content_hash in committed_hashes
+                        or (msg_id, filename) in committed_msg_files
+                    )
+                    is_in_manifest = (
+                        content_hash in staged_hashes
+                        or (msg_id, filename) in staged_msg_files
+                    )
+
+                    is_duplicate = is_in_db or is_in_manifest
+                    stage_status = "DUPLICATE" if is_duplicate else "STAGED"
 
                     bank_hint = self.detect_bank_name(sender, subject, filename)
-
                     raw_candidate = self.extract_raw_account_candidate(
                         subject, filename, body_text
                     )
                     _, verified_hint = self.resolve_account_from_db(
                         raw_candidate, bank_name=bank_hint
                     )
-
-                    start_date, end_date = self.extract_period_dates(
+                    start_date_obj, end_date_obj = self.extract_period_dates(
                         subject, filename, body_text
                     )
 
-                    # Download PDF and save physically to disk
-                    attachment = (
-                        self.service.users()
-                        .messages()
-                        .attachments()
-                        .get(userId="me", messageId=msg_id, id=attachment_id)
-                        .execute()
-                    )
+                    # Find existing stage entry or create a new one
+                    stage_id = str(uuid.uuid4())
+                    for existing_item in manifest:
+                        if existing_item.get("attachment_hash") == content_hash or (
+                            existing_item.get("message_id") == msg_id
+                            and existing_item.get("filename") == filename
+                        ):
+                            stage_id = existing_item.get("stage_id", stage_id)
+                            break
 
-                    file_data = base64.urlsafe_b64decode(
-                        attachment["data"].encode("UTF-8")
-                    )
-                    sanitized_name = f"{msg_id}_{filename}"
-                    disk_path = os.path.join(self.INBOX_DIR, sanitized_name)
-
-                    with open(disk_path, "wb") as f:
-                        f.write(file_data)
-
-                    stage_entry = {
-                        "stage_id": str(uuid.uuid4()),
+                    entry = {
+                        "stage_id": stage_id,
                         "message_id": msg_id,
                         "attachment_id": attachment_id,
-                        "attachment_hash": att_hash,
+                        "attachment_hash": content_hash,
                         "filename": filename,
                         "file_path": disk_path,
                         "file_size": len(file_data),
                         "doc_type": doc_type,
-                        "status": DocumentInboxItem.ProcessingStatus.INBOX,
+                        "status": stage_status,
+                        "is_duplicate": is_duplicate,
                         "sender": sender,
                         "subject": subject,
                         "received_date": received_dt.strftime("%Y-%m-%d %H:%M:%S"),
                         "account_hint": verified_hint,
                         "bank_name": bank_hint,
                         "period_start": (
-                            start_date.strftime("%Y-%m-%d") if start_date else None
+                            start_date_obj.strftime("%Y-%m-%d")
+                            if start_date_obj
+                            else None
                         ),
                         "period_end": (
-                            end_date.strftime("%Y-%m-%d") if end_date else None
+                            end_date_obj.strftime("%Y-%m-%d") if end_date_obj else None
                         ),
-                        "selected": True,
+                        "selected": not is_duplicate,
                         "created_at": timezone.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
 
-                    manifest.append(stage_entry)
-                    staged_hashes.add(att_hash)
-                    newly_staged_items.append(stage_entry)
+                    manifest_map[stage_id] = entry
+                    staged_hashes.add(content_hash)
+                    staged_msg_files.add((msg_id, filename))
 
-        self.save_staged_manifest(manifest)
-        return newly_staged_items
+        updated_manifest = list(manifest_map.values())
+        self.save_staged_manifest(updated_manifest)
+        return updated_manifest
 
     # ==========================================
     # Commit Staged Items to Database Table
@@ -327,7 +404,9 @@ class AttachmentHarvesterService:
     def commit_staged_items(
         self, selected_stage_ids: list[str], overrides: Optional[dict] = None
     ) -> list[DocumentInboxItem]:
-        """Commits selected staged items from JSON into the database table."""
+        """Commits selected staged items from JSON into DocumentInboxItem DB records
+        and removes them from staged_inbox.json.
+        """
         overrides = overrides or {}
         manifest = self.load_staged_manifest()
         selected_set = set(selected_stage_ids)
@@ -363,22 +442,24 @@ class AttachmentHarvesterService:
                     else None
                 )
 
-                record = DocumentInboxItem.objects.create(
+                record, _ = DocumentInboxItem.objects.update_or_create(
                     message_id=item.get("message_id"),
-                    attachment_id=item.get("attachment_id"),
-                    attachment_hash=item.get("attachment_hash"),
                     filename=item["filename"],
-                    file_path=item["file_path"],
-                    file_size=item["file_size"],
-                    doc_type=doc_type,
-                    status=DocumentInboxItem.ProcessingStatus.INBOX,
-                    sender=item.get("sender", ""),
-                    subject=item.get("subject", ""),
-                    received_date=rec_dt,
-                    account_hint=acc_hint,
-                    bank_name=bank_name,
-                    period_start=p_start,
-                    period_end=p_end,
+                    defaults={
+                        "attachment_id": item.get("attachment_id"),
+                        "attachment_hash": item.get("attachment_hash"),
+                        "file_path": item["file_path"],
+                        "file_size": item["file_size"],
+                        "doc_type": doc_type,
+                        "status": DocumentInboxItem.ProcessingStatus.INBOX,
+                        "sender": item.get("sender", ""),
+                        "subject": item.get("subject", ""),
+                        "received_date": rec_dt,
+                        "account_hint": acc_hint,
+                        "bank_name": bank_name,
+                        "period_start": p_start,
+                        "period_end": p_end,
+                    },
                 )
                 committed_records.append(record)
             else:

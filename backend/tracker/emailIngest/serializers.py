@@ -27,6 +27,7 @@ class DocumentInboxItemSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "filename",
+            "file_path",
             "doc_type",
             "status",
             "bank_name",

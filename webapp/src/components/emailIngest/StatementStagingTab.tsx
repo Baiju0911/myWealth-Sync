@@ -7,14 +7,23 @@ import {
 import { StatementToolbar } from './StatementToolbar';
 import { TableEngine } from '../ui/data-table/TableEngine';
 import { STATEMENT_STAGING_COLUMNS } from '../ui/data-table/columns';
-import { StatementPreviewModal } from './StatementPreviewmodal';
+import { StatementPreviewModal } from './StatementPreviewModal';
 
 interface Props {
   accountOptions: AccountOption[];
+  datePreset?: string;
+  startDate?: string;
+  endDate?: string;
   onNotification: (notif: { type: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
-export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotification }) => {
+export const StatementStagingTab: React.FC<Props> = ({
+  accountOptions,
+  datePreset,
+  startDate,
+  endDate,
+  onNotification,
+}) => {
   const [stagedStatements, setStagedStatements] = useState<StagedStatementItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -23,13 +32,20 @@ export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotific
   const [accountOverrides, setAccountOverrides] = useState<Record<string, string>>({});
   const [previewStatement, setPreviewStatement] = useState<StagedStatementItem | null>(null);
 
+  const [hideDuplicates, setHideDuplicates] = useState(false);
+
   const fetchStagedStatements = useCallback(async () => {
     setLoading(true);
     try {
       const res = await emailIngestApi.getStagedStatements();
       const list = res?.results || [];
       setStagedStatements(list);
-      setSelectedIds(list.map((item: any) => item.stage_id));
+      // Auto-select only uncommitted items
+      setSelectedIds(
+        list
+          .filter((item: any) => !item.is_duplicate && item.status !== 'DUPLICATE')
+          .map((item: any) => item.stage_id)
+      );
     } catch (err) {
       console.error('Failed to load staged statements:', err);
       onNotification({ type: 'error', message: 'Failed to load staged statements manifest.' });
@@ -45,12 +61,26 @@ export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotific
   const handleHarvest = async () => {
     setHarvesting(true);
     try {
-      const res = await emailIngestApi.harvestBankStatements(25);
+      const res = await emailIngestApi.harvestBankStatements({
+        maxResults: 50,
+        date_preset: datePreset,
+        start_date: startDate,
+        end_date: endDate,
+      });
+
+      const items = res?.items || [];
+      setStagedStatements(items);
+      // Auto-select ready items; exclude duplicates
+      setSelectedIds(
+        items
+          .filter((item: any) => !item.is_duplicate && item.status !== 'DUPLICATE')
+          .map((item: any) => item.stage_id)
+      );
+
       onNotification({
         type: 'success',
-        message: res.message || `Harvested ${res.staged_count} statements to manifest.`,
+        message: res.message || `Discovered ${items.length} statement(s).`,
       });
-      await fetchStagedStatements();
     } catch (err: any) {
       console.error('Statement harvest failed:', err);
       onNotification({
@@ -100,10 +130,46 @@ export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotific
   }, []);
 
   const handleToggleSelectAll = useCallback(() => {
+    const selectable = stagedStatements.filter(
+      (item: any) => !item.is_duplicate && item.status !== 'DUPLICATE'
+    );
     setSelectedIds((prev) =>
-      prev.length === stagedStatements.length ? [] : stagedStatements.map((item) => item.stage_id)
+      prev.length === selectable.length ? [] : selectable.map((item) => item.stage_id)
     );
   }, [stagedStatements]);
+
+  const duplicateCount = useMemo(() => {
+  return stagedStatements.filter((s: any) => s.is_duplicate || s.status === 'DUPLICATE').length;
+}, [stagedStatements]);
+
+  const displayedStatements = useMemo(() => {
+    if (!hideDuplicates) return stagedStatements;
+    return stagedStatements.filter((s: any) => !s.is_duplicate && s.status !== 'DUPLICATE');
+  }, [stagedStatements, hideDuplicates]);
+
+  // const statementColumns = useMemo(() => {
+  //   const selectable = stagedStatements.filter(
+  //     (item: any) => !item.is_duplicate && item.status !== 'DUPLICATE'
+  //   );
+  //   const isAllSelected = selectable.length > 0 && selectedIds.length === selectable.length;
+
+  //   return STATEMENT_STAGING_COLUMNS.map((col) => {
+  //     if (col.key === 'select') {
+  //       return {
+  //         ...col,
+  //         label: (
+  //           <input
+  //             type="checkbox"
+  //             checked={isAllSelected}
+  //             onChange={handleToggleSelectAll}
+  //             className="rounded border-zinc-700 bg-zinc-800 text-emerald-500 focus:ring-0 cursor-pointer"
+  //           />
+  //         ),
+  //       };
+  //     }
+  //     return col;
+  //   });
+  // }, [stagedStatements, selectedIds.length, handleToggleSelectAll]);
 
   const statementColumns = useMemo(() => {
     const isAllSelected =
@@ -126,12 +192,15 @@ export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotific
       return col;
     });
   }, [stagedStatements.length, selectedIds.length, handleToggleSelectAll]);
-
+  
   return (
     <div className="space-y-4">
       <StatementToolbar
         stagedCount={stagedStatements.length}
         selectedCount={selectedIds.length}
+        duplicateCount={duplicateCount}
+        hideDuplicates={hideDuplicates}
+        onToggleHideDuplicates={() => setHideDuplicates((prev) => !prev)}
         onHarvest={handleHarvest}
         isHarvesting={harvesting}
         onCommit={handleCommit}
@@ -152,19 +221,19 @@ export const StatementStagingTab: React.FC<Props> = ({ accountOptions, onNotific
         </div>
       ) : (
         <TableEngine
-          columns={statementColumns}
-          data={stagedStatements}
-          meta={{
-            selectedIds,
-            accountOptions,
-            accountOverrides,
-            onOpenPreview: (item: StagedStatementItem) => setPreviewStatement(item),
-            onToggleSelectOne: handleToggleSelectOne,
-            onAccountOverrideChange: (stageId: string, account: string) => {
-              setAccountOverrides((prev) => ({ ...prev, [stageId]: account }));
-            },
-          }}
-        />
+            columns={statementColumns}
+            data={displayedStatements}
+            meta={{
+              selectedIds,
+              accountOptions,
+              accountOverrides,
+              onOpenPreview: (item: StagedStatementItem) => setPreviewStatement(item),
+              onToggleSelectOne: handleToggleSelectOne,
+              onAccountOverrideChange: (stageId: string, account: string) => {
+                setAccountOverrides((prev) => ({ ...prev, [stageId]: account }));
+              },
+            }}
+          />
       )}
 
       <StatementPreviewModal

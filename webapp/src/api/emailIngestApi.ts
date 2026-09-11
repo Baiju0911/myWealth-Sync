@@ -55,6 +55,7 @@ export interface GetPayloadsParams {
 // PDF Bank Statement Staging Types
 // =========================================================================
 export interface StagedStatementItem {
+  id?: string;
   stage_id: string;
   message_id: string;
   attachment_id?: string;
@@ -346,12 +347,20 @@ export const emailIngestApi = {
     return response.data;
   },
 
-  harvestBankStatements: async (
-    maxResults = 25
-  ): Promise<HarvestStatementsResponse> => {
+  harvestBankStatements: async (params?: {
+    maxResults?: number;
+    date_preset?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<HarvestStatementsResponse> => {
     const response = await api.post<HarvestStatementsResponse>(
       `${DOCUMENTS_INBOX_URL}/harvest/`,
-      { max_results: maxResults }
+      {
+        max_results: params?.maxResults || 50,
+        date_preset: params?.date_preset,
+        start_date: params?.start_date,
+        end_date: params?.end_date,
+      }
     );
     return response.data;
   },
@@ -365,15 +374,36 @@ export const emailIngestApi = {
     );
     return response.data;
   },
+
   previewStagedPdf: async (
-    filePath: string,
-    password?: string
+    filePath?: string,
+    password?: string,
+    documentId?: string,
+    filename?: string
   ): Promise<Blob> => {
     const response = await api.post(
       `${DOCUMENTS_INBOX_URL}/preview-staged/`,
-      { file_path: filePath, password },
+      {
+        file_path: filePath,
+        password,
+        document_id: documentId,
+        filename,
+      },
       { responseType: 'blob' }
     );
+    return response.data;
+  },
+
+  getCommittedInboxDocuments: async (accountHint?: string) => {
+    const response = await api.get(`${DOCUMENTS_INBOX_URL}/`, {
+      params:
+        accountHint && accountHint !== 'ALL' ? { account: accountHint } : {},
+    });
+    return response.data?.results || response.data || [];
+  },
+
+  deleteCommittedDocument: async (documentId: string) => {
+    const response = await api.delete(`${DOCUMENTS_INBOX_URL}/${documentId}/`);
     return response.data;
   },
 };
