@@ -18,8 +18,10 @@ interface Props {
   onTriggerSync?: () => void;
   syncing?: boolean;
   onCommitSelected?: () => void;
+  onCommit?: () => void;
   committing?: boolean;
   stagingSelectedCount?: number;
+  selectedCount?: number;
   onStageSelected?: () => void;
   stagingForMatching?: boolean;
   onUnstageSelected?: () => void;
@@ -33,12 +35,6 @@ interface Props {
   onToggleHideDuplicates?: () => void;
   onDiscardSelected?: () => void;
   isDiscarding?: boolean;
-  stagedStatementsCount?: number;
-  selectedStatementsCount?: number;
-  onHarvestStatements?: () => void;
-  isHarvestingStatements?: boolean;
-  onCommitStatements?: () => void;
-  isCommittingStatements?: boolean;
 }
 
 export const IngestToolbar: React.FC<Props> = ({
@@ -53,11 +49,14 @@ export const IngestToolbar: React.FC<Props> = ({
   accountOptions = [],
   onAccountChange,
   hideAccountSelector = false,
+  hideDateSelector = false,
   onTriggerSync,
-  syncing,
+  syncing = false,
   onCommitSelected,
-  committing,
-  stagingSelectedCount = 0,
+  onCommit,
+  committing = false,
+  stagingSelectedCount,
+  selectedCount,
   onStageSelected,
   stagingForMatching,
   onUnstageSelected,
@@ -68,11 +67,13 @@ export const IngestToolbar: React.FC<Props> = ({
   onToggleStagedOnly,
   stagingPayloads = [],
   hideDuplicates = false,
-  hideDateSelector = false,
   onToggleHideDuplicates,
   onDiscardSelected,
   isDiscarding = false,
 }) => {
+  const activeSelectedCount = stagingSelectedCount ?? selectedCount ?? 0;
+  const commitHandler = onCommitSelected ?? onCommit;
+
   const readyToCommitCount = useMemo(() => {
     return stagingPayloads.filter(
       (p) => p.status === 'PARSED' || p.status === 'PREVIEW_ONLY'
@@ -91,17 +92,16 @@ export const IngestToolbar: React.FC<Props> = ({
   };
 
   const handleDiscardClick = () => {
-    if (!onDiscardSelected || stagingSelectedCount === 0) return;
-    if (window.confirm(`Discard ${stagingSelectedCount} selected item(s) from staging buffer?`)) {
+    if (!onDiscardSelected || activeSelectedCount === 0) return;
+    if (window.confirm(`Discard ${activeSelectedCount} selected item(s) from staging buffer?`)) {
       onDiscardSelected();
     }
   };
 
   return (
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-zinc-900/60 border border-zinc-800 p-3 rounded-xl gap-3 text-xs font-mono">
-      {/* Date & Account Filters */}
+      {/* Date & Account Filters / Status Indicators */}
       <div className="flex flex-wrap items-center gap-2">
-{/* Only render date select if NOT hidden by parent tab */}
         {!hideDateSelector && (
           <>
             <select
@@ -136,7 +136,6 @@ export const IngestToolbar: React.FC<Props> = ({
           </>
         )}
 
-        {/* Render account selector only if NOT hidden */}
         {!hideAccountSelector && mode === 'VAULT' && accountOptions.length > 0 && onAccountChange && (
           <select
             value={selectedAccount}
@@ -151,7 +150,6 @@ export const IngestToolbar: React.FC<Props> = ({
           </select>
         )}
 
-        {/* View Toggle: Vault Records vs Staged Queue */}
         {mode === 'VAULT' && onToggleStagedOnly && (
           <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded p-0.5 ml-1">
             <button
@@ -183,7 +181,6 @@ export const IngestToolbar: React.FC<Props> = ({
               ({totalCount} items)
             </span>
 
-            {/* Interactive Filter Badges */}
             {mode === 'INGEST' && (
               <div className="flex items-center gap-1.5 text-[11px]">
                 <span className="bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 px-2 py-0.5 rounded font-bold shadow-sm">
@@ -215,7 +212,7 @@ export const IngestToolbar: React.FC<Props> = ({
       <div className="flex items-center gap-2">
         {mode === 'INGEST' && (
           <>
-            {stagingSelectedCount > 0 && onDiscardSelected && (
+            {activeSelectedCount > 0 && onDiscardSelected && (
               <button
                 type="button"
                 onClick={handleDiscardClick}
@@ -223,29 +220,35 @@ export const IngestToolbar: React.FC<Props> = ({
                 className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 disabled:bg-zinc-800 text-rose-300 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-950"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                {isDiscarding ? 'Discarding...' : `Discard (${stagingSelectedCount})`}
+                {isDiscarding ? 'Discarding...' : `Discard (${activeSelectedCount})`}
               </button>
             )}
 
             {onTriggerSync && (
               <button
+                type="button"
                 onClick={handleSyncClick}
                 disabled={syncing}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-950"
+                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-900 border border-zinc-700 text-zinc-200 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md"
               >
                 <span>{syncing ? '⏳' : '⚡'}</span>
-                {syncing ? 'Syncing...' : 'Fetch Live Emails'}
+                <span>{syncing ? 'Fetching Live...' : 'Fetch Live Emails'}</span>
               </button>
             )}
 
-            {onCommitSelected && stagingSelectedCount > 0 && (
+            {commitHandler && (
               <button
-                onClick={onCommitSelected}
-                disabled={committing}
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 text-white font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-950"
+                type="button"
+                onClick={commitHandler}
+                disabled={committing || activeSelectedCount === 0}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white disabled:text-zinc-500 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-950 disabled:shadow-none"
               >
-                <span>{committing ? '⏳' : '📥'}</span>
-                {committing ? 'Committing...' : `Commit (${stagingSelectedCount}) to Vault`}
+                <span>{committing ? '⏳' : '💾'}</span>
+                <span>
+                  {committing
+                    ? 'Committing...'
+                    : `Commit Selected (${activeSelectedCount}) to Vault`}
+                </span>
               </button>
             )}
           </>
@@ -255,6 +258,7 @@ export const IngestToolbar: React.FC<Props> = ({
           <>
             {!showStagedOnly && dbSelectedCount > 0 && !!onStageSelected && (
               <button
+                type="button"
                 onClick={onStageSelected}
                 disabled={stagingForMatching}
                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 text-zinc-950 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-950"
@@ -266,6 +270,7 @@ export const IngestToolbar: React.FC<Props> = ({
 
             {showStagedOnly && dbSelectedCount > 0 && !!onUnstageSelected && (
               <button
+                type="button"
                 onClick={onUnstageSelected}
                 disabled={unstagingForMatching}
                 className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 text-rose-300 font-bold rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950"

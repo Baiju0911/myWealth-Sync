@@ -4,6 +4,7 @@ import {
   type AccountOption,
   type DatePresetType,
   DATE_PRESET_OPTIONS,
+  emailIngestApi,
 } from '../../api/emailIngestApi';
 import { IngestToolbar } from './IngestToolbar';
 import { PayloadTable } from './PayloadTable';
@@ -30,6 +31,7 @@ interface Props {
 
 export const LiveBufferTab: React.FC<Props> = ({
   stagingPayloads,
+  setStagingPayloads,
   onTriggerSync,
   syncing,
   datePreset,
@@ -45,6 +47,71 @@ export const LiveBufferTab: React.FC<Props> = ({
   const [ingestMode, setIngestMode] = useState<'ALERTS' | 'STATEMENTS'>('ALERTS');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [hideDuplicates, setHideDuplicates] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [isDiscarding, setIsDiscarding] = useState(false);
+
+  // Commit selected email alert items into the database vault
+  const handleCommitSelected = async () => {
+    if (selectedIds.length === 0) return;
+    setCommitting(true);
+    try {
+      // Find full payload objects matching the selected IDs
+      const selectedItems = stagingPayloads.filter((p) =>
+        selectedIds.includes(p.id || (p as any).payload_hash)
+      );
+
+      const res = await emailIngestApi.commitSelectedPayloads(selectedItems);
+
+      onNotification({
+        type: 'success',
+        message: res?.message || `Committed ${selectedIds.length} item(s) to Vault.`,
+      });
+
+      // Remove committed records from local staging state
+      if (setStagingPayloads) {
+        setStagingPayloads((prev) =>
+          prev.filter((p) => !selectedIds.includes(p.id || (p as any).payload_hash))
+        );
+      }
+      setSelectedIds([]);
+    } catch (err: any) {
+      console.error('Failed to commit email alerts:', err);
+      onNotification({
+        type: 'error',
+        message: err?.response?.data?.message || 'Failed to commit selected items to Vault.',
+      });
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  // Discard selected items from the staging buffer
+  const handleDiscardSelected = async () => {
+    if (selectedIds.length === 0) return;
+    setIsDiscarding(true);
+    try {
+      await emailIngestApi.discardStagingPayloads(selectedIds);
+
+      if (setStagingPayloads) {
+        setStagingPayloads((prev) =>
+          prev.filter((p) => !selectedIds.includes(p.id || (p as any).payload_hash))
+        );
+      }
+      setSelectedIds([]);
+      onNotification({
+        type: 'info',
+        message: `Discarded ${selectedIds.length} item(s) from staging buffer.`,
+      });
+    } catch (err: any) {
+      console.error('Failed to discard items:', err);
+      onNotification({
+        type: 'error',
+        message: err?.response?.data?.message || 'Failed to discard selected items.',
+      });
+    } finally {
+      setIsDiscarding(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -122,7 +189,7 @@ export const LiveBufferTab: React.FC<Props> = ({
           <IngestToolbar
             mode="INGEST"
             hideAccountSelector={true}
-            hideDateSelector={true} // 👈 hides duplicate date dropdown from inner toolbar
+            hideDateSelector={true}
             datePreset={datePreset}
             onDatePresetChange={setDatePreset}
             startDate={startDate}
@@ -131,8 +198,13 @@ export const LiveBufferTab: React.FC<Props> = ({
             onEndDateChange={setEndDate}
             onTriggerSync={onTriggerSync}
             syncing={syncing}
-            stagingSelectedCount={selectedIds.length}
+            totalCount={stagingPayloads.length}
             stagingPayloads={stagingPayloads}
+            stagingSelectedCount={selectedIds.length}
+            onCommitSelected={handleCommitSelected}
+            committing={committing}
+            onDiscardSelected={handleDiscardSelected}
+            isDiscarding={isDiscarding}
             hideDuplicates={hideDuplicates}
             onToggleHideDuplicates={() => setHideDuplicates((prev) => !prev)}
           />
