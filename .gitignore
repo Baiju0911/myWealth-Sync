@@ -129,3 +129,6 @@ client_secret*.json
 backend/documents/
 *.pdf
 staged_inbox.json
+
+backend/docs/
+*.md

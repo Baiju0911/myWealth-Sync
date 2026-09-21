@@ -431,6 +431,84 @@ class AccountingRule(models.Model):
 ########
 
 
+# class StatementStagingLine(models.Model):
+
+#     objects = BulkAuditManager()
+
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+#     # 🎯 TARGET CONNECTIONS
+#     account = models.ForeignKey(
+#         "Account", on_delete=models.CASCADE, related_name="staging_lines"
+#     )
+#     bank = models.ForeignKey(
+#         "Bank", on_delete=models.CASCADE, related_name="staging_lines"
+#     )
+
+#     # 🔗 THE AUDIT MATRIX LINK: Connects this individual row back to its master batch ingest profile run
+#     ingest_registry = models.ForeignKey(
+#         "StatementIngestRegistry",
+#         on_delete=models.CASCADE,
+#         related_name="staging_lines",
+#         null=True,  # Safe fallback for historical records
+#         blank=True,  # Allows flexible testing manipulation without validation crashes
+#         help_text="The parent file upload profile history record linked to this transaction.",
+#     )
+
+#     # 📅 METADATA TIMESTAMPS
+#     uploaded_at = models.DateTimeField(
+#         auto_now_add=True
+#     )  # When you dropped the file in
+#     raw_statement_date = (
+#         models.DateField()
+#     )  # The actual TXN date from the statement file
+
+#     # 📝 EXTRACTED LINE VALUES
+#     narration = models.TextField()
+#     cheque_ref_number = models.TextField(blank=True, null=True)
+
+#     # 💰 BALANCE TRACKING QUANTITIES
+#     # Positive values flag Money Out (Debits), Negative values flag Money In (Credits)
+#     amount = models.DecimalField(max_digits=15, decimal_places=2)
+#     running_balance = models.DecimalField(
+#         max_digits=15, decimal_places=2, blank=True, null=True
+#     )
+#     debit = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+#     credit = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+
+#     bank_transaction_id = models.CharField(
+#         max_length=100,
+#         null=True,
+#         blank=True,
+#         help_text="Core banking transaction system identifier string (e.g., S29270471, FB209745)",
+#     )
+#     transaction_type = models.CharField(
+#         max_length=50, null=True, blank=True, help_text="e.g., NFT, UPI, CHQ, TFR"
+#     )
+#     # 🤖 ENGINE CLASSIFICATION STATS
+#     # PENDING = Waiting for user approval, SUGGESTED = Auto-routed by tokens, MATCHED = Ready to commit
+#     row_identifier = models.CharField(
+#         max_length=64, db_index=True, null=True, blank=True
+#     )
+#     routing_status = models.CharField(max_length=20, default="PENDING")
+#     suggested_contra_account = models.ForeignKey(
+#         "Account",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="staging_suggestions",
+#     )
+
+#     class Meta:
+#         db_table = "ledger_statementstagingline"
+#         verbose_name = "Statement Staging Line"
+#         verbose_name_plural = "Statement Staging Lines"
+#         ordering = ["raw_statement_date", "uploaded_at"]
+
+#     def __str__(self):
+#         return f"{self.raw_statement_date} | {self.bank.code} | {self.narration[:30]} | ₹{self.amount}"
+
+
 class StatementStagingLine(models.Model):
 
     objects = BulkAuditManager()
@@ -450,8 +528,8 @@ class StatementStagingLine(models.Model):
         "StatementIngestRegistry",
         on_delete=models.CASCADE,
         related_name="staging_lines",
-        null=True,  # Safe fallback for historical records
-        blank=True,  # Allows flexible testing manipulation without validation crashes
+        null=True,
+        blank=True,
         help_text="The parent file upload profile history record linked to this transaction.",
     )
 
@@ -485,6 +563,7 @@ class StatementStagingLine(models.Model):
     transaction_type = models.CharField(
         max_length=50, null=True, blank=True, help_text="e.g., NFT, UPI, CHQ, TFR"
     )
+
     # 🤖 ENGINE CLASSIFICATION STATS
     # PENDING = Waiting for user approval, SUGGESTED = Auto-routed by tokens, MATCHED = Ready to commit
     row_identifier = models.CharField(
@@ -497,6 +576,39 @@ class StatementStagingLine(models.Model):
         null=True,
         blank=True,
         related_name="staging_suggestions",
+    )
+
+    # ========================================================
+    # ⚡ LIVE STREAM ENRICHMENT (EPHEMERAL BUFFER HANDOFF)
+    # ========================================================
+    raw_payload_id = models.UUIDField(
+        null=True,
+        blank=True,
+        help_text="ID of RawEmailPayload before it was purged from the temporary buffer.",
+    )
+    live_merchant = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Clean merchant extracted from SMS/Gmail alert (e.g. 'IRCTC TICKETING').",
+    )
+    live_upi_rrn = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Extracted 12-digit UPI reference number.",
+    )
+    live_source = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Source of the live alert: IOS_SMS, GMAIL_API, MERGED_STREAM.",
+    )
+    is_enriched_from_live = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True if enriched with merchant/RRN from live push stream.",
     )
 
     class Meta:
