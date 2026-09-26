@@ -17,7 +17,7 @@ interface VerificationDeckProps {
   calculatedClosingValue: number | null;
   isDoubleTrustOk: boolean;
   isBalanceVerified: boolean;
-  isFileFullyStale: boolean;
+  isFileFullyStale: boolean | false;
   isRowCountVerified: boolean;
   strategyExecuted: string;
   confidenceScore: number | null;
@@ -34,7 +34,7 @@ export function VerificationDeck({
   calculatedClosingValue,
   isDoubleTrustOk,
   isBalanceVerified,
-  isFileFullyStale,
+  //_isFileFullyStale, 
   isRowCountVerified,
   strategyExecuted,
   confidenceScore,
@@ -198,7 +198,7 @@ export function VerificationDeck({
     >
       
       {/* HUD BLOCK 0: Core Identifier Block */}
-      <div className="shrink-0 min-w-[200px]" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderRight: '1px solid rgba(63, 63, 70, 0.6)', paddingRight: '24px' }}>
+      <div className="shrink-0 min-w-200px" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderRight: '1px solid rgba(63, 63, 70, 0.6)', paddingRight: '24px' }}>
         <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 select-none shrink-0">
           🔒
         </div>

@@ -1,5 +1,11 @@
 # S:\_BaijSoft\myWealth-Sync\backend\tracker\urls.py
 from django.urls import path, include
+
+from tracker.backendViewModel.inbox_view import (
+    EnrichedReconciliationAuditView,
+    LiveStreamPayloadsView,
+    LiveStreamCommitEnrichmentView,
+)
 from .backendViewModel.views import (
     SystemConfigView,
     AccountListCreateView,
@@ -192,5 +198,34 @@ urlpatterns += [
         "suggest_rule_for_cluster/",
         classificationViews.suggest_rule_for_cluster,
         name="suggest_rule_for_cluster",
+    ),
+]
+
+# urlpatterns += [
+#     path("tracker/inbox/", include("tracker.parsers.parsers_v1.inbox.urls")),
+#     path(
+#         "inbox/live-payloads/audit/",
+#         EnrichedReconciliationAuditView.as_view(),
+#         name="live-payloads-audit",
+#     ),
+# ]
+
+urlpatterns += [
+    path("tracker/inbox/", include("tracker.parsers.parsers_v1.inbox.urls")),
+    # ⚡ Real-Time Live Notification Stream Routes (iOS SMS & Gmail API)
+    path(
+        "inbox/live-payloads/",
+        LiveStreamPayloadsView.as_view(),
+        name="live-payloads-backlog",
+    ),
+    path(
+        "inbox/live-payloads/enrich/",
+        LiveStreamCommitEnrichmentView.as_view(),
+        name="live-payloads-enrich-commit",
+    ),
+    path(
+        "inbox/live-payloads/audit/",
+        EnrichedReconciliationAuditView.as_view(),
+        name="live-payloads-audit",
     ),
 ]

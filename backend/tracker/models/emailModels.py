@@ -80,7 +80,7 @@ class RawEmailPayload(models.Model):
 
     # Status & Timestamps
     status = models.CharField(
-        max_length=20,
+        max_length=50,
         choices=ProcessingStatus.choices,
         default=ProcessingStatus.RECEIVED,
     )

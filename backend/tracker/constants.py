@@ -6,6 +6,7 @@ and narrative system strings into structured classes with typed accessors.
 """
 
 import re
+from decimal import Decimal
 from enum import StrEnum
 from typing import Dict, List, Pattern, Set, Tuple
 
@@ -800,617 +801,73 @@ ACCOUNT_HINT_PATTERNS = list(DocumentInboxConstants.ACCOUNT_HINT_PATTERNS)
 PERIOD_DATE_PATTERN = DocumentInboxConstants.PERIOD_DATE_PATTERN
 SIB_FILENAME_DATE_PATTERN = DocumentInboxConstants.SIB_FILENAME_DATE_PATTERN
 
-# # tracker/constants.py
 
-# # 🛡️ Centralized Banking, UPI Intent & System Noise Keyword Blacklist
-# NOISE_KEYWORD_BLACKLIST = {
-#     # Core Banking & Transaction Types
-#     "UPI",
-#     "NEFT",
-#     "RTGS",
-#     "IMPS",
-#     "POS",
-#     "ACH",
-#     "NFT",
-#     "TFR",
-#     "TRANSFER",
-#     "PAYMENT",
-#     "DR",
-#     "CR",
-#     "BANK",
-#     "INB",
-#     "INF",
-#     "BIL",
-#     "CLG",
-#     "CHQ",
-#     "CHEQUE",
-#     "CASH",
-#     "ATM",
-#     "DEBIT",
-#     "CREDIT",
-#     "NONE",
-#     "UNDEFINED",
-#     "GENERAL_OPERATING_EXPENSES",
-#     "UNCLASSIFIED",
-#     "SUSPENSE_ACCOUNT",
-#     # UPI Flow & Payment Gateway Tokens
-#     "INTENT",
-#     "INTEN",
-#     "UPIINTENT",
-#     "MERCHANT",
-#     "YESPAY",
-#     "RAZORPAY",
-#     "PAYU",
-#     "RZP",
-#     "COLLECT",
-#     "EXPRESS",
-#     "LIMITED",
-#     "LTD",
-#     "PVTLTD",
-#     "PRIVATE",
-#     "PAY",
-#     "PAYING",
-#     "PAYVIA",
-#     "PAYFOR",
-#     "PAYMENTFOR",
-#     "INTENTPAY",
-#     "SWIGGYPAY",
-#     "SETTLEMENT",
-#     "REFUND",
-#     "BILL",
-#     "FUND",
-#     "DICT",
-#     "ACCOUNT",
-#     "CENTRE",
-#     # Bank Identifier Tokens (IFSC Prefixes)
-#     "UTIB",
-#     "YESB",
-#     "BARB",
-#     "IBKL",
-#     "PUNB",
-#     "MAHB",
-#     "IDIB",
-#     "IOBA",
-#     "UBIN",
-#     "KKBK",
-#     "RATN",
-#     "PYTM",
-#     "PAYTM",
-#     # UPI Handles & PSP Suffixes
-#     "YBL",
-#     "PTYBL",
-#     "IBL",
-#     "AXL",
-#     "APL",
-#     "IPL",
-#     "OBL",
-#     "OKHDFCB",
-#     "OKSBI",
-#     "OKAXIS",
-#     "OKICICI",
-#     "BARODAMPAY",
-#     "ALLBANK",
-#     "MAHBANK",
-#     "IDFCBANK",
-#     "IDBI",
-#     "INDUS",
-#     "RBL",
-#     "UCO",
-#     "UNIONBANK",
-#     # UPI Memo & System Remarks
-#     "REMARKS",
-#     "REMARK",
-#     "NOREMARKS",
-#     "NOREMARK",
-#     "NO_REMARKS",
-#     "NO_REMARK",
-#     "PAYMENT_FOR",
-#     "YOU_ARE_PAYING",
-#     "INGESTED_VIA_STAGING",
-#     "PAYTMQR",
-#     "PI",
-#     "CMN",
-#     "PRCR",
-#     "POSTRN",
-#     "TRN",
-#     "TXN",
-#     "REF",
-#     "NO",
-#     "ID",
-#     "ORDER",
-#     # System Noise
-#     "BRANCH",
-#     "TVM",
-# }
-
-# GENERIC_IGNORE_PATTERNS = {
-#     "MOB",
-#     "UPI",
-#     "PYTM",
-#     "IMPS",
-#     "NEFT",
-#     "RTGS",
-#     "TRANSFER",
-#     "BY",
-#     "TO",
-#     "PAID",
-#     "RECEIVED",
-#     "INB",
-#     "INB/IMPS",
-#     "OTHERS",
-# }
-
-# GENERIC_PATTERNS = {
-#     "#GENERAL_OPERATING_EXPENSES",
-#     "#GENERAL_OPERATING_EXPENSE",
-#     "#SUSPENSE_ACCOUNT",
-#     "#UNCLASSIFIED_OTHER",
-#     "#SUSPENSE",
-#     "#TRANSFER_NACH",
-#     "GENERAL_OPERATING_EXPENSES",
-#     "UNCLASSIFIED",
-#     "TRANSFER_NACH",
-#     "UNCLASSIFIED_OTHER",
-#     "SUSPENSE_ACCOUNT",
-#     "IMPS",
-#     "POSTRN",
-# }
-
-# KNOWN_MERCHANTS = {
-#     "ZOMATO",
-#     "SWIGGY",
-#     "BLINKIT",
-#     "ZEPTO",
-#     "INSTAMART",
-#     "POTHY",
-#     "LULU",
-#     "PVR",
-#     "INOX",
-#     "CINEPOLIS",
-#     "BHIMA",
-#     "KALYAN",
-#     "JOYALUKKAS",
-#     "THANGAMAYIL",
-#     "SKECHERS",
-# }
-
-# RULE_SAFETY_BLACKLIST = {
-#     # UPI Suffixes & Handles
-#     "YBL",
-#     "PTYBL",
-#     "IBL",
-#     "AXL",
-#     "APL",
-#     "IPL",
-#     "OBL",
-#     "OKICICI",
-#     "OKHDFCBANK",
-#     "OKAXIS",
-#     "OKSBI",
-#     "BARODAMPAY",
-#     "ALLBANK",
-#     "MAHBANK",
-#     "IDFCBANK",
-#     "YESB",
-#     # Generic Actions & Prepositions
-#     "PAYMENT",
-#     "ORDER",
-#     "TRANSFER",
-#     "UPI",
-#     "INTENT",
-#     "FOR",
-#     "THE",
-#     "BY",
-#     "TO",
-#     "PAID",
-#     "RECEIVED",
-#     "BRANCH",
-# }
-
-# ABSOLUTE_GREEDY_BLACKLIST = {
-#     "UPI",
-#     "TRANSFER",
-#     "PAYMENT",
-#     "BANK",
-#     "PAID",
-#     "RECEIVED",
-#     "CARD",
-# }
-
-# CATASTROPHIC_KEYWORDS = {
-#     "UPI",
-#     "PAYMENT",
-#     "TRANSFER",
-#     "BANK",
-#     "PAID",
-#     "RECEIVED",
-#     "CARD",
-#     "CASH",
-#     "DEBIT",
-#     "CREDIT",
-#     "REMARKS",
-#     "INTENT",
-# }
-
-# OK_WORD_LIST = {
-#     "LIC",
-#     "SIP",
-#     "EMI",
-#     "ATM",
-#     "TAX",
-#     "GST",
-#     "POS",
-#     "PF",
-#     "FD",
-#     "RD",
-#     "NEFT",
-#     "RTGS",
-#     "UPI",
-#     "AMAZON",
-#     "SIBL",
-#     "KSEB",
-#     "KSFE",
-#     "MILK",
-#     "TEA",
-#     "SBI",
-#     "SIB",
-#     "TO SBI",
-#     "TO SIB",
-#     "FED",
-#     "TO FED",
-#     "NACH CR",
-#     "NACH",
-# }
+# =============================================================================
+# 8. LIVE STREAM COMMIT & ENRICHMENT PIPELINE CONSTANTS
+# =============================================================================
 
 
-# TAXONOMY_NOISE_KEYWORDS = (
-#     "TRANSFER",
-#     "TRANSFERS",
-#     "MB FT",
-#     "MB FTO",
-#     "MB FTB",
-#     "SBI",
-#     "SIB",
-#     "SIBL",
-#     "SBONR",
-#     "FED-NRO",
-#     "FED-NRO-1050",
-#     "FED-NRE",
-# )
+class PayloadStatus(StrEnum):
+    """Lifecycle statuses for raw stream alert records (RawEmailPayload)."""
 
-# TRANSFER_BANK_NOISE = {
-#     "TRANSFER",
-#     "TRANSFERS",
-#     "MB FT",
-#     "MB FTO",
-#     "MB FTB",
-#     "SBI",
-#     "SIB",
-#     "SIBL",
-#     "SBONR",
-#     "FED-NRO",
-#     "FED-NRE",
-# }
+    STAGED = "STAGED"
+    PENDING = "PENDING"
+    ENRICHED = "ENRICHED"
+    ENRICHED_WITH_WARNING = "ENRICHED_WITH_WARNING"
+    DUPLICATE_RETIRED = "DUPLICATE_RETIRED"
+    PARSED = "PARSED"
+    FAILED = "FAILED"
 
-# ALL_SYSTEM_BLACKLIST = (
-#     RULE_SAFETY_BLACKLIST.union(NOISE_KEYWORD_BLACKLIST).union(CATASTROPHIC_KEYWORDS)
-#     - OK_WORD_LIST
-# )
-
-# # # tracker/constants.py
-
-# # # For Classification View
-# # # 🛡️ Centralized Banking, UPI Intent & System Noise Keyword Blacklist
-# # NOISE_KEYWORD_BLACKLIST = {
-# #     # Core Banking & Transaction Types
-# #     "UPI",
-# #     "NEFT",
-# #     "RTGS",
-# #     "IMPS",
-# #     "POS",
-# #     "ACH",
-# #     "NFT",
-# #     "TFR",
-# #     "TRANSFER",
-# #     "PAYMENT",
-# #     "DR",
-# #     "CR",
-# #     "BANK",
-# #     "INB",
-# #     "INF",
-# #     "BIL",
-# #     "CLG",
-# #     "CHQ",
-# #     "CHEQUE",
-# #     "CASH",
-# #     "ATM",
-# #     "DEBIT",
-# #     "CREDIT",
-# #     "NONE",
-# #     "UNDEFINED",
-# #     "GENERAL_OPERATING_EXPENSES",
-# #     "UNCLASSIFIED",
-# #     "SUSPENSE_ACCOUNT",
-# #     # UPI Flow & Payment Gateway Tokens
-# #     "INTENT",
-# #     "INTEN",
-# #     "UPIINTENT",
-# #     "MERCHANT",
-# #     "YESPAY",
-# #     "RAZORPAY",
-# #     "PAYU",
-# #     "RZP",
-# #     "COLLECT",
-# #     "EXPRESS",
-# #     "LIMITED",
-# #     "LTD",
-# #     "PVTLTD",
-# #     "PRIVATE",
-# #     "PAY",
-# #     "PAYING",
-# #     "PAYVIA",
-# #     "PAYFOR",
-# #     "PAYMENTFOR",
-# #     "INTENTPAY",
-# #     "SWIGGYPAY",
-# #     "SETTLEMENT",
-# #     "REFUND",
-# #     "BILL",
-# #     # "INFO",
-# #     "FUND",
-# #     # "BHIM",
-# #     "DICT",
-# #     # "COMMUNICATIONS",
-# #     # "COMMUNICATION",
-# #     "ACCOUNT",
-# #     "CENTRE",
-# #     # Bank Identifier Tokens
-# #     "UTIB",
-# #     "YESB",
-# #     # "FDRL",
-# #     # "ICIC",
-# #     # "HDFC",
-# #     # "SBIN",
-# #     "BARB",
-# #     # "SIBL",
-# #     # "CNRB",
-# #     "IBKL",
-# #     "PUNB",
-# #     "MAHB",
-# #     "IDIB",
-# #     "IOBA",
-# #     "UBIN",
-# #     "KKBK",
-# #     "RATN",
-# #     "PYTM",
-# #     "PAYTM",
-# #     # UPI Handles & PSP Suffixes (CRITICAL ADDITIONS)
-# #     "YBL",
-# #     "PTYBL",
-# #     "IBL",
-# #     "AXL",
-# #     "APL",
-# #     "IPL",
-# #     # "OKICICI",
-# #     # "OKHDFCBANK",
-# #     # "OKAXIS",
-# #     # "OKSBI",
-# #     "BARODAMPAY",
-# #     "ALLBANK",
-# #     "MAHBANK",
-# #     "IDFCBANK",
-# #     "IDBI",
-# #     "INDUS",
-# #     # "KOTAK",
-# #     # "FEDERAL",
-# #     "RBL",
-# #     "UCO",
-# #     "UNIONBANK",
-# #     # UPI Memo & System Remarks
-# #     "REMARKS",
-# #     "REMARK",
-# #     "NOREMARKS",
-# #     "NOREMARK",
-# #     "NO_REMARKS",
-# #     "NO_REMARK",
-# #     "PAYMENT_FOR",
-# #     "YOU_ARE_PAYING",
-# #     "INGESTED_VIA_STAGING",
-# #     "PAYTMQR",
-# #     "PI",
-# #     "CMN",
-# #     "PRCR",
-# #     "POSTRN",
-# #     "TRN",
-# #     "TXN",
-# #     "REF",
-# #     "NO",
-# #     "ID",
-# #     "ORDER",
-# #     # Location Noise
-# #     "TECHNOPARK",
-# #     "TRIVANDRUM",
-# #     #  "KERALA",
-# #     #  "INDIA",
-# #     "BRANCH",
-# #     "KALLAMBALAM",
-# #     "KALLAMBALA",
-# #     "VARKALA",
-# #     "ULLOOR",
-# #     "TVM",
-# #     "BOMBAY",
-# #     "BANGALORE",
-# #     "DELHI",
-# # }
+    @classmethod
+    def active_staged_statuses(cls) -> List[str]:
+        return [cls.STAGED.value, cls.PENDING.value]
 
 
-# # GENERIC_IGNORE_PATTERNS = {
-# #     "MOB",
-# #     "UPI",
-# #     "PYTM",
-# #     "IMPS",
-# #     "NEFT",
-# #     "RTGS",
-# #     "TRANSFER",
-# #     "BY",
-# #     "TO",
-# #     "PAID",
-# #     "RECEIVED",
-# #     "INB",
-# #     "INB/IMPS",
-# #     "OTHERS",
-# # }
+class StagingMatchStatus(StrEnum):
+    """Match state recorded within staging_payload JSON and audit metadata."""
 
-# # GENERIC_PATTERNS = {
-# #     "#GENERAL_OPERATING_EXPENSES",
-# #     "#GENERAL_OPERATING_EXPENSE",
-# #     "#SUSPENSE_ACCOUNT",
-# #     "#UNCLASSIFIED_OTHER",
-# #     "#SUSPENSE",
-# #     "#TRANSFER_NACH",
-# #     "GENERAL_OPERATING_EXPENSES",
-# #     "UNCLASSIFIED",
-# #     "TRANSFER_NACH",
-# #     "UNCLASSIFIED_OTHER",
-# #     "SUSPENSE_ACCOUNT",
-# #     # "NACH",
-# #     "IMPS",
-# #     "KALLAMBALAM",
-# #     "POSTRN",
-# # }
+    COMPLETED = "Completed"
+    COMPLETED_WITH_WARNING = "Completed With Warning"
+    DUPLICATE_COMPANION_RETIRED = "Duplicate Companion Retired"
+    STAGED = "STAGED"
+    PENDING = "PENDING"
 
 
-# # KNOWN_MERCHANTS = {
-# #     "ZOMATO",
-# #     "SWIGGY",
-# #     "BLINKIT",
-# #     "ZEPTO",
-# #     "INSTAMART",
-# #     "POTHY",
-# #     "LULU",
-# #     "PVR",
-# #     "INOX",
-# #     "CINEPOLIS",
-# #     "BHIMA",
-# #     "KALYAN",
-# #     "JOYALUKKAS",
-# #     "THANGAMAYIL",
-# #     "SKECHERS",
-# # }
+class MatchingRules:
+    """Master numerical thresholds, batch boundaries, and heuristic windows."""
 
-# # RULE_SAFETY_BLACKLIST = {
-# #     # UPI Suffixes & Handles
-# #     "YBL",
-# #     "PTYBL",
-# #     "IBL",
-# #     "AXL",
-# #     "APL",
-# #     "IPL",
-# #     "OKICICI",
-# #     "OKHDFCBANK",
-# #     "OKAXIS",
-# #     "OKSBI",
-# #     "BARODAMPAY",
-# #     "ALLBANK",
-# #     "MAHBANK",
-# #     "IDFCBANK",
-# #     # Geography & Locations
-# #     "TRIVANDRU",
-# #     "TRIVANDRUM",
-# #     "TVM",
-# #     "KALLAMBALAM",
-# #     "BOMBAY",
-# #     "BANGALORE",
-# #     "DELHI",
-# #     # Generic Commerce & Action Words
-# #     "MALL",
-# #     "STORE",
-# #     "STORES",
-# #     "SHOP",
-# #     "SHOPPING",
-# #     "PAYMENT",
-# #     "ORDER",
-# #     "TRANSFER",
-# #     "PARK",
-# #     "PARKING",
-# #     "UPI",
-# #     "INTENT",
-# #     "FOR",
-# #     "THE",
-# #     "BY",
-# #     "TO",
-# #     "PAID",
-# #     "RECEIVED",
-# #     # Personal Names & Non-Merchant Tokens
-# #     # "SUMEE",
-# #     # "BAIJU",
-# #     # "SUSEELAN",
-# #     # "NAIR",
-# #     "YESB",
-# #     "YBL",
-# #     "UPI",
-# #     "SHOP",
-# #     "STORE",
-# #     # "LIMITED",
-# #     # "PVT",
-# #     # "LTD",
-# #     # "KERALA",
-# #     # "INDIA",
-# #     "BRANCH",
-# # }
+    PAISE_TOLERANCE_THRESHOLD: Decimal = Decimal("1.00")
+    HOLIDAY_BUFFER_DAYS: int = 3
+    HOLIDAY_DAY_OFFSETS: Tuple[int, ...] = (0, -1, 1, -2, 2, -3, 3)
+    MIN_RRN_ANCHOR_LENGTH: int = 6
+    BULK_UPDATE_BATCH_SIZE: int = 500
 
 
-# # ABSOLUTE_GREEDY_BLACKLIST = {
-# #     "UPI",
-# #     "TRANSFER",
-# #     "PAYMENT",
-# #     "BANK",
-# #     "PAID",
-# #     "RECEIVED",
-# #     "CARD",
-# # }
-# # CATASTROPHIC_KEYWORDS = {
-# #     "UPI",
-# #     "PAYMENT",
-# #     "TRANSFER",
-# #     "BANK",
-# #     "PAID",
-# #     "RECEIVED",
-# #     "CARD",
-# #     "CASH",
-# #     "DEBIT",
-# #     "CREDIT",
-# #     "REMARKS",
-# #     "INTENT",
-# # }
+class EnrichmentMetadata:
+    """Central registry of payload metadata strings, reasons, and reflection keys."""
+
+    WARNING_TYPE_PAISE_DELTA: str = "PAISE_TRUNCATION_DELTA"
+    DEFAULT_MERCHANT: str = "DIRECT_PAYMENT"
+    DEFAULT_SOURCE: str = "STREAM"
+    DEFAULT_BANK_NAME: str = SystemDefaults.BANK.value
+
+    COMPANION_RETIREMENT_REASON: str = (
+        "Twin alert already enriched statement line via identical RRN"
+    )
+
+    # Dynamic attribute fallback order for bank ID / name resolution
+    BANK_LOOKUP_ATTRIBUTES: Tuple[str, ...] = (
+        "display_name",
+        "bank_name",
+        "name",
+        "title",
+        "code",
+        "slug",
+    )
 
 
-# # OK_WORD_LIST = {
-# #     "LIC",
-# #     "SIP",
-# #     "EMI",
-# #     "ATM",
-# #     "TAX",
-# #     "GST",
-# #     "POS",
-# #     "PF",
-# #     "FD",
-# #     "RD",
-# #     "NEFT",
-# #     "RTGS",
-# #     "UPI",
-# #     "AMAZON",
-# #     "SIBL",
-# #     "KSEB",
-# #     "KSFE",
-# #     "MILK",
-# #     "TEA",
-# #     "SBI",
-# #     "SIB",
-# #     "TO SBI",
-# #     "TO SIB",
-# #     "FED",
-# #     "TO FED",
-# #     "NACH CR",
-# #     "NACH",
-# # }
+# Exported Pipeline Aliases
+ACTIVE_STAGED_PAYLOAD_STATUSES: List[str] = PayloadStatus.active_staged_statuses()
+PAISE_TOLERANCE_THRESHOLD: Decimal = MatchingRules.PAISE_TOLERANCE_THRESHOLD
+HOLIDAY_DAY_OFFSETS: Tuple[int, ...] = MatchingRules.HOLIDAY_DAY_OFFSETS
+BULK_UPDATE_BATCH_SIZE: int = MatchingRules.BULK_UPDATE_BATCH_SIZE

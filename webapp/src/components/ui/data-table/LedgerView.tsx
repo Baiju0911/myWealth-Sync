@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { TableEngine } from './TableEngine';
 import { VerificationDeck } from './VerificationDeck';
 import { LEDGER_COLUMNS } from './columns';
@@ -25,6 +25,15 @@ export default function LedgerView() {
   const [accounts] = useState<any[]>([]);
   const [availableTemplates] = useState<any[]>([]);
 
+  // 🧮 Derived Verification Calculations
+  const isBalanceVerified = responseMeta && calculatedClosingValue !== null && statementClosing !== null
+    ? Math.abs(calculatedClosingValue - statementClosing) < 0.05
+    : false;
+  const frontendRenderCount = previewLines.length;
+  const isRowCountVerified = responseMeta ? responseMeta.count === frontendRenderCount : false;
+  const isFileFullyStale = responseMeta ? responseMeta.count === 0 : false;
+  const isDoubleTrustOk = isBalanceVerified && isRowCountVerified && !isFileFullyStale;
+
   // --- ACTIONS SYSTEM INTERFACE BOUNDARIES ---
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
   const handleDragLeave = () => setIsDragging(false);
@@ -46,11 +55,9 @@ export default function LedgerView() {
         </div>
       )}
 
-      <br/>
-
       {/* 🚀 Dynamic Telemetry Deck Block Extraction Hook */}
       {responseMeta && (
-        <VerificationDeck 
+        <VerificationDeck
           responseMeta={responseMeta}
           previewLines={previewLines}
           opening={opening}
@@ -58,14 +65,15 @@ export default function LedgerView() {
           totalCredit={totalCredit}
           statementClosing={statementClosing}
           calculatedClosingValue={calculatedClosingValue}
-          isDoubleTrustOk={responseMeta?.isDoubleTrustOk ?? true}
-          isBalanceVerified={responseMeta?.isBalanceVerified ?? true}
-          isFileFullyStale={responseMeta?.isFileFullyStale ?? false}
-          isRowCountVerified={responseMeta?.isRowCountVerified ?? true}
+          isDoubleTrustOk={isDoubleTrustOk}
+          isBalanceVerified={isBalanceVerified}
+          isFileFullyStale={isFileFullyStale}
+          isRowCountVerified={isRowCountVerified}
+          strategyExecuted={responseMeta?.strategy_executed || 'MANUAL'}
+          confidenceScore={responseMeta?.confidence_score ?? null}
+          frontendRenderCount={frontendRenderCount}
         />
       )}
-
-      <br/>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
         {/* RUNSET CONTROLS FRAME */}
@@ -106,7 +114,7 @@ export default function LedgerView() {
         </div>
 
         {/* WORKSPACE DATA STAGING TABULATION FLOOR */}
-        <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
+        <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-110 flex flex-col">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
             <div><h3 className="text-base font-semibold text-white">Persistent Workspace Staging Floor (9-Column Review Deck)</h3></div>
             {previewLines.length > 0 && (

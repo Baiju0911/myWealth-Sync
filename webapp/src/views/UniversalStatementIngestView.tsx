@@ -1,103 +1,139 @@
-import React, { useState, useEffect } from 'react';
+// src/views/UniversalStatementIngestView.tsx
+import { useState, useEffect } from 'react';
 import { accountApi } from '../api/api.ts';
-import api from '../api/client';
-import { type AccountEntity, type StagingPreviewLine, type TemplateMetadata, type ApiResponseMeta } from '../types/ledger';
+import {
+  statementInboxApi,
+  fetchLiveStreamAudit,
+  type InboxItem,
+  type EnrichedAuditRecord,
+} from '../api/statementInboxApi';
+import {
+  type AccountEntity,
+  type StagingPreviewLine,
+  type TemplateMetadata,
+  type ApiResponseMeta,
+} from '../types/ledger';
 
-// 🚀 Dynamic Pipeline Engines Linked
 import { TableEngine } from '../components/ui/data-table/TableEngine';
 import { VerificationDeck } from '../components/ui/data-table/VerificationDeck';
-import { LEDGER_COLUMNS } from '../components/ui/data-table/columns';
+import { LEDGER_COLUMNS, type LiveStreamPayloadItem } from '../components/ui/data-table/columns';
+
+// 📦 Clean InboxMsg Modular Components
+import { AttachmentInboxTab, LiveStreamTab } from '../components/InboxMsg';
 
 export interface UniversalStatementIngestViewProps {
   onIngestionComplete?: () => void;
 }
 
 export function UniversalStatementIngestView({ onIngestionComplete }: UniversalStatementIngestViewProps) {
+  const [activeTab, setActiveTab] = useState<'MANUAL' | 'INBOX' | 'LIVE'>('MANUAL');
+
+  // Attachment Inbox Data
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [activeInboxItemId, setActiveInboxItemId] = useState<string | null>(null);
+
+  // Live Stream & Audit Data
+  const [liveStreamItems, setLiveStreamItems] = useState<LiveStreamPayloadItem[]>([]);
+  const [liveStreamLoading, setLiveStreamLoading] = useState(false);
+  const [liveStreamTotalCount, setLiveStreamTotalCount] = useState(0);
+
+  const [auditItems, setAuditItems] = useState<EnrichedAuditRecord[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditTotalCount, setAuditTotalCount] = useState(0);
+
+  // Manual Upload & Staging Floor States
+  const [stagingPage, setStagingPage] = useState(1);
+  const STAGING_PAGE_SIZE = 8;
   const [accounts, setAccounts] = useState<AccountEntity[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  
   const [loading, setLoading] = useState(false);
   const [commitLoading, setCommitLoading] = useState(false);
-  
   const [previewLines, setPreviewLines] = useState<StagingPreviewLine[]>([]);
-  const [responseMeta, setResponseMeta] = useState<ApiResponseMeta | null>(null); 
-  
-  // 🎯 STRATEGY & CONFIDENCE TRACKING STATES
+  const [responseMeta, setResponseMeta] = useState<ApiResponseMeta | null>(null);
   const [strategyExecuted, setStrategyExecuted] = useState<string>('');
   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
-  
   const [errorMsg, setErrorMsg] = useState('');
   const [commitSuccessMsg, setCommitSuccessMsg] = useState('');
-
   const [availableTemplates, setAvailableTemplates] = useState<TemplateMetadata[]>([]);
   const [forcedTemplateId, setForcedTemplateId] = useState<string>('');
 
-  const downloadWorkableCSV = (rawStreamText: string) => {
-    if (!rawStreamText) return;
-    
-    let cleanContent = rawStreamText;
-    let exportFilename = "statement_export.csv";
-    
-    if (rawStreamText.startsWith("#FILENAME:")) {
-      const lines = rawStreamText.split("\n");
-      const metaLine = lines[0]; 
-      
-      exportFilename = metaLine.replace("#FILENAME:", "").trim() || "statement_export.csv";      
-      cleanContent = lines.slice(1).join("\n");
+  const fetchInboxItems = async () => {
+    setInboxLoading(true);
+    try {
+      const items = await statementInboxApi.getPendingInboxItems();
+      setInboxItems(items);
+    } catch (err) {
+      console.error('Failed fetching pending inbox items:', err);
+    } finally {
+      setInboxLoading(false);
     }
-    
-    const csvContent = cleanContent.replace(/ ~ /g, ",");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    
-    link.setAttribute("href", url);
-    link.setAttribute("download", exportFilename);
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  };
+
+  const fetchLiveStreamItems = async () => {
+    setLiveStreamLoading(true);
+    try {
+      const data = await statementInboxApi.getLiveStreamPayloads();
+      setLiveStreamItems(data.results);
+      setLiveStreamTotalCount(data.total_count);
+    } catch (err) {
+      console.error('Failed fetching live stream payloads:', err);
+    } finally {
+      setLiveStreamLoading(false);
+    }
+  };
+
+  const loadAuditItems = async () => {
+    setAuditLoading(true);
+    try {
+      const data = await fetchLiveStreamAudit(200);
+      setAuditItems(data.results);
+      setAuditTotalCount(data.total_count);
+    } catch (err) {
+      console.error('Failed loading live stream audit:', err);
+    } finally {
+      setAuditLoading(false);
+    }
   };
 
   useEffect(() => {
-    accountApi.getAccounts()
-      .then(res => setAccounts(Array.isArray(res) ? res : res.results || []))
+    accountApi
+      .getAccounts()
+      .then((res) => setAccounts(Array.isArray(res) ? res : res.results || []))
       .catch(() => setErrorMsg('Failed loading ledger workspace nodes.'));
 
-    api.get('/statements/available/')
-      .then((res) => setAvailableTemplates(res.data || []))
-      .catch((err) => console.error("Failed loading configuration maps:", err));
+    statementInboxApi
+      .getAvailableTemplates()
+      .then((templates) => setAvailableTemplates(templates))
+      .catch((err) => console.error('Failed loading configuration maps:', err));
+
+    fetchInboxItems();
+    fetchLiveStreamItems();
+    loadAuditItems();
   }, []);
 
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
-  const handleDragLeave = () => setIsDragging(false);
-  
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      setFile(droppedFile);
-      if (selectedAccountId) {
-        executeUploadDirectly(droppedFile, selectedAccountId);
-      } else {
-        setErrorMsg("Please select a target bank account channel first.");
-      }
+  const downloadWorkableCSV = (rawStreamText: string) => {
+    if (!rawStreamText) return;
+    let cleanContent = rawStreamText;
+    let exportFilename = 'statement_export.csv';
+
+    if (rawStreamText.startsWith('#FILENAME:')) {
+      const lines = rawStreamText.split('\n');
+      exportFilename = lines[0].replace('#FILENAME:', '').trim() || 'statement_export.csv';
+      cleanContent = lines.slice(1).join('\n');
     }
-  };
-    
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      setFile(selectedFile);
-      if (selectedAccountId) {
-        executeUploadDirectly(selectedFile, selectedAccountId);
-      } else {
-        setErrorMsg("Please select a target bank account channel first.");
-      }
-    }
+
+    const csvContent = cleanContent.replace(/ ~ /g, ',');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', exportFilename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const executeUploadDirectly = async (targetFile: File, accountId: string) => {
@@ -105,9 +141,11 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
     setErrorMsg('');
     setCommitSuccessMsg('');
     setPreviewLines([]);
+    setStagingPage(1);
     setResponseMeta(null);
     setStrategyExecuted('');
     setConfidenceScore(null);
+    setActiveInboxItemId(null);
 
     const formData = new FormData();
     formData.append('statement_file', targetFile);
@@ -117,50 +155,93 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
     }
 
     try {
-      const res = await api.post('/statement/ingestbulk/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      if (res.data.status === 'SUCCESS') {
-        console.log("🚀 FULL BACKEND INGESTION RESPONSE PAYLOAD:", res.data);
-        
-        const dataset = res.data.preview_dataset || res.data.data?.preview_dataset || [];
+      const data = await statementInboxApi.ingestBulkStatement(formData);
+      if (data.status === 'SUCCESS') {
+        const dataset = data.preview_dataset || data.data?.preview_dataset || [];
         setPreviewLines(dataset);
+        setStagingPage(1);
 
-        // 🎯 CALCULATE FILE CLASSIFICATION TYPE FROM THE EXPORT_FILENAME EXTENSION
         let detectedType = 'UNKNOWN';
-        const filename = res.data.export_filename || '';
-        if (filename.toLowerCase().endsWith('.csv')) {
-          detectedType = 'CSV';
-        } else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) {
-          detectedType = 'EXCEL';
-        } else if (filename.toLowerCase().endsWith('.pdf')) {
-          detectedType = 'PDF';
-        }
+        const filename = data.export_filename || '';
+        if (filename.toLowerCase().endsWith('.csv')) detectedType = 'CSV';
+        else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) detectedType = 'EXCEL';
+        else if (filename.toLowerCase().endsWith('.pdf')) detectedType = 'PDF';
 
-        setStrategyExecuted(res.data.strategy_processed || res.data.engine_strategy_executed || 'STRICT_MATRIX');
-        setConfidenceScore(typeof res.data.confidence_score !== 'undefined' ? res.data.confidence_score : null);
-        
+        setStrategyExecuted(data.strategy_processed || data.engine_strategy_executed || 'STRICT_MATRIX');
+        setConfidenceScore(typeof data.confidence_score !== 'undefined' ? data.confidence_score : null);
+
         setResponseMeta({
-          fileType: detectedType, 
-          decrypted: res.data.decrypted || res.data.data?.decrypted || false,
-          count: typeof res.data.count !== 'undefined' ? res.data.count : (dataset.length || 0),
-          openingBalance: res.data.opening_balance || 0,
-          closingBalance: res.data.closing_balance || 0,
-          totalDebit: res.data.total_debit || 0,
-          totalCredit: res.data.total_credit || 0,
-          rawMatchCount: res.data.count || 0,
-          debitLineCount: res.data.debit_line_count || 0,
-          creditLineCount: res.data.credit_line_count || 0,
-          emptyMemoLineCount: res.data.empty_memo_line_count || res.data.system_noise_records_cleared || 0,
-          duplicateCount: res.data.duplicate_count || 0, 
+          fileType: detectedType,
+          decrypted: data.decrypted || data.data?.decrypted || false,
+          count: typeof data.count !== 'undefined' ? data.count : dataset.length || 0,
+          openingBalance: data.opening_balance || 0,
+          closingBalance: data.closing_balance || 0,
+          totalDebit: data.total_debit || 0,
+          totalCredit: data.total_credit || 0,
+          rawMatchCount: data.count || 0,
+          debitLineCount: data.debit_line_count || 0,
+          creditLineCount: data.credit_line_count || 0,
+          emptyMemoLineCount: data.empty_memo_line_count || data.system_noise_records_cleared || 0,
+          duplicateCount: data.duplicate_count || 0,
         });
-        
-        (window as any).__lastRawStream = res.data.raw_csv_stream || res.data.generated_raw_csv_stream || "";
+
+        (window as any).__lastRawStream = data.raw_csv_stream || data.generated_raw_csv_stream || '';
       }
     } catch (err: any) {
-      console.error(err);
       setErrorMsg(err.response?.data?.message || 'Staging engine processing failure.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePreviewInboxItem = async (itemId: string) => {
+    setLoading(true);
+    setErrorMsg('');
+    setCommitSuccessMsg('');
+    setPreviewLines([]);
+    setStagingPage(1);
+    setResponseMeta(null);
+    setStrategyExecuted('');
+    setConfidenceScore(null);
+    setActiveInboxItemId(itemId);
+
+    try {
+      const data = await statementInboxApi.previewInboxItem(itemId);
+      if (data.status === 'ACCOUNT_REGISTRATION_REQUIRED') {
+        setErrorMsg(
+          `Account Registration Required: Document references account suffix '${data.account_hint || ''}' from ${data.bank_name || 'Bank'}. Please register this account.`
+        );
+        return;
+      }
+
+      if (data.status === 'SUCCESS') {
+        const dataset = data.preview_dataset || [];
+        setPreviewLines(dataset);
+        setStagingPage(1);
+        if (data.account_id) setSelectedAccountId(String(data.account_id));
+        setStrategyExecuted(data.strategy_processed || 'GRID_COLUMN_FLOW_V2');
+        setConfidenceScore(1.0);
+
+        setResponseMeta({
+          fileType: 'PDF',
+          decrypted: true,
+          count: typeof data.count !== 'undefined' ? data.count : dataset.length,
+          openingBalance: data.opening_balance || 0,
+          closingBalance: data.closing_balance || 0,
+          totalDebit: data.total_debit || 0,
+          totalCredit: data.total_credit || 0,
+          rawMatchCount: data.count || 0,
+          debitLineCount: dataset.filter((r: any) => parseFloat(r.debit || 0) > 0).length,
+          creditLineCount: dataset.filter((r: any) => parseFloat(r.credit || 0) > 0).length,
+          emptyMemoLineCount: 0,
+          duplicateCount: dataset.filter((r: any) => r.status === 'DUPLICATE').length,
+        });
+
+        const stagingEl = document.getElementById('staging-floor-anchor');
+        if (stagingEl) stagingEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.message || err.response?.data?.error || 'Inbox item preview failed.');
     } finally {
       setLoading(false);
     }
@@ -169,58 +250,137 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
   const handleCommitStaging = async () => {
     if (!selectedAccountId || !previewLines || previewLines.length === 0) return;
     setCommitLoading(true);
+    setErrorMsg('');
+
     try {
-      await api.post('/statement/commit-staging/', {
-        account_id: selectedAccountId,
-        preview_dataset: previewLines,
-        file_name: file ? file.name : "9COL_STATEMENT.PDF", 
-        strategy_used: strategyExecuted,
-        meta_summary: {
-          ...responseMeta,
-          strategy_used: strategyExecuted
-        }, 
-      });
-      setCommitSuccessMsg("Pipeline run committed to core ledger successfully.");
-      setPreviewLines([]); 
-      setResponseMeta(null); 
+      const metaPayload = { ...responseMeta, strategy_used: strategyExecuted };
+      if (activeInboxItemId) {
+        await statementInboxApi.commitInboxItem(activeInboxItemId, previewLines, metaPayload);
+        setCommitSuccessMsg('Inbox statement successfully committed.');
+        fetchInboxItems();
+      } else {
+        await statementInboxApi.commitStagingLedger({
+          account_id: selectedAccountId,
+          preview_dataset: previewLines,
+          file_name: file ? file.name : '9COL_STATEMENT.PDF',
+          strategy_used: strategyExecuted,
+          meta_summary: metaPayload,
+        });
+        setCommitSuccessMsg('Pipeline run committed to core ledger successfully.');
+      }
+
+      setPreviewLines([]);
+      setStagingPage(1);
+      setResponseMeta(null);
       setFile(null);
+      setActiveInboxItemId(null);
       setStrategyExecuted('');
       setConfidenceScore(null);
+      if (onIngestionComplete) onIngestionComplete();
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.message || err.response?.data?.error || 'Database commit error.');
+    } finally {
+      setCommitLoading(false);
+    }
+  };
 
-      // 💡 AUTO-ADVANCE PIPELINE STEP CALL
-      if (onIngestionComplete) {
-        onIngestionComplete();
+  const handleCommitLiveEnrichment = async () => {
+    setLiveStreamLoading(true);
+    setErrorMsg('');
+    setCommitSuccessMsg('');
+    try {
+      const data = await statementInboxApi.commitLiveStreamEnrichment();
+      const durationText = data.duration_ms ? ` in ${data.duration_ms} ms` : '';
+      if (data.status === 'SUCCESS') {
+        setCommitSuccessMsg(
+          `Enrichment Complete: ${data.enriched_count} line(s) enriched in staging floor${durationText}. ${data.waiting_count} line(s) remain staged awaiting future statement uploads.`
+        );
+        await fetchLiveStreamItems();
+        await loadAuditItems();
       }
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.message || 'Database commit error.');
-    } finally { setCommitLoading(false); }
+      setErrorMsg(err.response?.data?.message || err.response?.data?.error || 'Failed executing auto-enrichment.');
+    } finally {
+      setLiveStreamLoading(false);
+    }
   };
+
+  const totalStagingPages = Math.max(1, Math.ceil(previewLines.length / STAGING_PAGE_SIZE));
+  const paginatedPreviewLines = previewLines.slice((stagingPage - 1) * STAGING_PAGE_SIZE, stagingPage * STAGING_PAGE_SIZE);
 
   const opening = responseMeta?.openingBalance || 0;
   const totalCredit = responseMeta?.totalCredit || 0;
   const totalDebit = responseMeta?.totalDebit || 0;
   const statementClosing = responseMeta?.closingBalance || 0;
   const calculatedClosingValue = opening + totalCredit - totalDebit;
-  
   const isBalanceVerified = responseMeta ? Math.abs(calculatedClosingValue - statementClosing) < 0.05 : false;
-  const frontendRenderCount = previewLines.length;
-  const isRowCountVerified = responseMeta ? responseMeta.count === frontendRenderCount : false;
-  const isFileFullyStale = responseMeta ? responseMeta.count === 0 : false;
-  const isDoubleTrustOk = isBalanceVerified && isRowCountVerified && !isFileFullyStale;
-
-  const getStrategyBadgeStyles = (strat: string) => {
-    if (strat.includes("PADDLE_OCR")) return "bg-amber-500/10 text-amber-400 border-amber-500/20";
-    if (strat.includes("UNIVERSAL_CSV")) return "bg-blue-500/10 text-blue-400 border-blue-500/20";
-    return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-  };
+  const isRowCountVerified = responseMeta ? responseMeta.count === previewLines.length : false;
+  const isDoubleTrustOk = isBalanceVerified && isRowCountVerified && responseMeta?.count !== 0;
 
   return (
-    <div className="space-y-6 text-white p-2 text-left">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div></div>
-        
+    <div className="space-y-4 text-white p-2 text-left">
+      {/* 🧭 INGESTION MODE TAB HEADER (3 PRIMARY CHANNELS) */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-3 gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('MANUAL')}
+            className={`px-4 py-2 rounded-lg font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'MANUAL'
+                ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-md'
+                : 'bg-zinc-950/60 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
+            }`}
+          >
+            <span>📁</span>
+            <span>Manual Upload</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('INBOX');
+              fetchInboxItems();
+            }}
+            className={`px-4 py-2 rounded-lg font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer relative ${
+              activeTab === 'INBOX'
+                ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-md'
+                : 'bg-zinc-950/60 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
+            }`}
+          >
+            <span>📥</span>
+            <span>Attachment Inbox</span>
+            {inboxItems.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                {inboxItems.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('LIVE');
+              fetchLiveStreamItems();
+              loadAuditItems();
+            }}
+            className={`px-4 py-2 rounded-lg font-mono text-xs font-bold transition-all flex items-center gap-2 cursor-pointer relative ${
+              activeTab === 'LIVE'
+                ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-md'
+                : 'bg-zinc-950/60 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
+            }`}
+          >
+            <span>⚡</span>
+            <span>Live Stream</span>
+            {liveStreamTotalCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                {liveStreamTotalCount}
+              </span>
+            )}
+          </button>
+        </div>
+
         {strategyExecuted && (
-          <div className={`px-4 py-2 rounded-xl text-xs font-mono font-bold border flex items-center gap-2 tracking-wide shadow-md transition-all ${getStrategyBadgeStyles(strategyExecuted)}`}>
+          <div className="px-4 py-1.5 rounded-xl text-xs font-mono font-bold border flex items-center gap-2 tracking-wide shadow-md bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-current"></span>
@@ -231,58 +391,42 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
       </div>
 
       {commitSuccessMsg && (
-        <div className="p-4 bg-emerald-500/10 text-emerald-400 text-sm border border-emerald-500/20 rounded-xl font-medium shadow-lg">
+        <div className="p-3 bg-emerald-500/10 text-emerald-400 text-xs border border-emerald-500/20 rounded-xl font-medium shadow-lg font-mono">
           {commitSuccessMsg}
         </div>
       )}
 
-      <br/>
-
-      {/* 📊 Summary Reconciliation Deck */}
+      {/* 📊 Summary Verification Deck */}
       {responseMeta && (
-        <div className="space-y-4">
-          <VerificationDeck 
-            responseMeta={responseMeta}
-            previewLines={previewLines}
-            opening={opening}
-            totalDebit={totalDebit}
-            totalCredit={totalCredit}
-            statementClosing={statementClosing}
-            calculatedClosingValue={calculatedClosingValue}
-            isDoubleTrustOk={isDoubleTrustOk}
-            isBalanceVerified={isBalanceVerified}
-            isFileFullyStale={isFileFullyStale}
-            isRowCountVerified={isRowCountVerified}
-            strategyExecuted={strategyExecuted}
-            confidenceScore={confidenceScore}
-            frontendRenderCount={frontendRenderCount}
-          />
-        </div>
+        <VerificationDeck
+          responseMeta={responseMeta}
+          previewLines={previewLines}
+          opening={opening}
+          totalDebit={totalDebit}
+          totalCredit={totalCredit}
+          statementClosing={statementClosing}
+          calculatedClosingValue={calculatedClosingValue}
+          isDoubleTrustOk={isDoubleTrustOk}
+          isBalanceVerified={isBalanceVerified}
+          isFileFullyStale={responseMeta.count === 0}
+          isRowCountVerified={isRowCountVerified}
+          strategyExecuted={strategyExecuted}
+          confidenceScore={confidenceScore}
+          frontendRenderCount={previewLines.length}
+        />
       )}
 
-      <br/>
-      
-      {/* 🎛️ HORIZONTAL INGESTION PIPELINE CONTROL BAR */}
-      <div className="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl mb-6">
-        <div 
-          style={{ 
-            display: 'flex', 
-            flexDirection: 'row', 
-            alignItems: 'flex-start', 
-            justifyContent: 'space-between', 
-            gap: '16px',
-            flexWrap: 'wrap'
-          }}
-        >
-          {/* CONTROL FIELD 1: Target Bank Account Dropdown */}
-          <div className="flex-1 min-w-[240px]">
+      {/* TAB 1: MANUAL UPLOAD WORKSPACE */}
+      {activeTab === 'MANUAL' && (
+        <div className="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl flex flex-wrap gap-4 items-start justify-between">
+          <div className="flex-1 min-w-60">
             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
               Target Bank Account
             </label>
-            <select 
-              value={selectedAccountId} 
-              onChange={(e) => setSelectedAccountId(e.target.value)} 
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500 h-10 transition-colors"
+            <select
+              value={selectedAccountId}
+              onChange={(e) => setSelectedAccountId(e.target.value)}
+              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500 h-10"
             >
               <option value="">-- Select Channel --</option>
               {accounts.map((acc) => (
@@ -293,18 +437,17 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
             </select>
           </div>
 
-          {/* CONTROL FIELD 2: Execution Engine Dropdown */}
-          <div className="flex-1 min-w-[260px]">
+          <div className="flex-1 min-w-65">
             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
-              Parsing Engine Execution Blueprint
+              Execution Blueprint
             </label>
-            <select 
-              value={forcedTemplateId} 
+            <select
+              value={forcedTemplateId}
               onChange={(e) => setForcedTemplateId(e.target.value)}
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500 h-10 transition-colors"
+              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500 h-10"
             >
               <option value="">⚡ [AUTOMATED ENGINE ROUTING MODE]</option>
-              {availableTemplates && availableTemplates.map((t: any) => (
+              {availableTemplates.map((t: any) => (
                 <option key={t.id} value={t.id}>
                   ⚙️ {t.template_name || t.name}
                 </option>
@@ -312,125 +455,157 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
             </select>
           </div>
 
-          {/* CONTROL FIELD 3: Compact File Drop Strip Container */}
-          <div className="flex-1 min-w-[280px]">
+          <div className="flex-1 min-w-70">
             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
               Statement Document (PDF or CSV)
             </label>
-            <div 
-              onDragOver={handleDragOver} 
-              onDragLeave={handleDragLeave} 
-              onDrop={handleDrop} 
-              className={`border border-dashed rounded-lg px-3 flex items-center justify-between transition-all h-10 ${
-                isDragging 
-                  ? 'border-emerald-500 bg-emerald-500/5' 
-                  : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-700'
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                if (e.dataTransfer.files?.[0]) {
+                  setFile(e.dataTransfer.files[0]);
+                  if (selectedAccountId) executeUploadDirectly(e.dataTransfer.files[0], selectedAccountId);
+                }
+              }}
+              className={`border border-dashed rounded-lg px-3 flex items-center justify-between h-10 transition-all ${
+                isDragging ? 'border-emerald-500 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-950/40'
               }`}
             >
-              <input 
-                type="file" 
-                id="uniFileInput" 
-                className="w-full text-[11px] text-zinc-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-mono file:font-bold file:bg-zinc-800 file:text-emerald-400 hover:file:bg-zinc-700 cursor-pointer" 
-                accept=".csv,.pdf" 
-                onChange={handleFileChange} 
+              <input
+                type="file"
+                className="w-full text-[11px] text-zinc-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-mono file:font-bold file:bg-zinc-800 file:text-emerald-400 cursor-pointer"
+                accept=".csv,.pdf"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    setFile(e.target.files[0]);
+                    if (selectedAccountId) executeUploadDirectly(e.target.files[0], selectedAccountId);
+                  }
+                }}
               />
-              <span className="text-[9px] text-zinc-600 font-mono hidden xl:inline whitespace-nowrap select-none pl-2 border-l border-zinc-800/80">
-                Drop here
-              </span>
             </div>
           </div>
         </div>
+      )}
 
-        {/* ⚠️ SYSTEM ERROR AND WAITING STATES CONSOLE FOOTERS */}
-        {(errorMsg || loading) && (
-          <div className="w-full pt-3 mt-3 border-t border-zinc-800/60 flex flex-col gap-2">
-            {errorMsg && (
-              <div className="p-2.5 bg-red-500/10 text-red-400 text-xs border border-red-500/20 rounded-lg font-mono">
-                ⚠️ {errorMsg}
-              </div>
-            )}
-            
-            {loading && (
-              <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-mono font-bold animate-pulse text-center tracking-wide">
-                ⏳ Processing Multi-Page Matrix Stream Data Array...
-              </div>
-            )}
-          </div>
-        )}
+      {/* TAB 2: ATTACHMENT INBOX (Extracted Component) */}
+      {activeTab === 'INBOX' && (
+        <AttachmentInboxTab
+          inboxItems={inboxItems}
+          inboxLoading={inboxLoading}
+          activeInboxItemId={activeInboxItemId}
+          loading={loading}
+          onRefresh={fetchInboxItems}
+          onPreviewItem={handlePreviewInboxItem}
+        />
+      )}
 
-        {/* 🚀 PERSISTENT WORKSPACE STAGING FLOOR */}
-        <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col mt-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
-            <div>
-              <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-mono">
-                Staging Floor
-              </h3>
+      {/* TAB 3: LIVE STREAM & AUDIT (Extracted Component with Inspector Modals) */}
+      {activeTab === 'LIVE' && (
+        <LiveStreamTab
+          liveStreamItems={liveStreamItems}
+          liveStreamLoading={liveStreamLoading}
+          liveStreamTotalCount={liveStreamTotalCount}
+          auditItems={auditItems}
+          auditLoading={auditLoading}
+          auditTotalCount={auditTotalCount}
+          onRefreshLive={fetchLiveStreamItems}
+          onRefreshAudit={loadAuditItems}
+          onCommitLiveEnrichment={handleCommitLiveEnrichment}
+        />
+      )}
+
+      {/* ⚠️ SYSTEM ERROR AND WAITING STATES */}
+      {(errorMsg || loading) && (
+        <div className="w-full pt-1 flex flex-col gap-2">
+          {errorMsg && (
+            <div className="p-2.5 bg-red-500/10 text-red-400 text-xs border border-red-500/20 rounded-lg font-mono">
+              ⚠️ {errorMsg}
             </div>
-            
+          )}
+          {loading && (
+            <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-mono font-bold animate-pulse text-center">
+              ⏳ Processing Statement Stream Data Array...
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 🚀 PERSISTENT WORKSPACE STAGING FLOOR */}
+      <div id="staging-floor-anchor" className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-110 flex flex-col">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-mono">Staging Floor</h3>
             {previewLines.length > 0 && (
-              <div 
-                className="self-end sm:self-auto"
-                style={{ 
-                  display: 'flex', 
-                  flexDirection: 'row', 
-                  alignItems: 'center', 
-                  gap: '12px' 
-                }}
-              >
-                {/* 📊 ACTION 1: EXPORT CSV */}
-                <button 
-                  type="button" 
-                  onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")}
-                  className="px-4 flex flex-row items-center justify-center gap-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-emerald-600/40 text-emerald-400 font-mono rounded-lg transition-all shadow-inner cursor-pointer"
-                  style={{ height: '36px', minHeight: '36px' }}
-                  title="Export Ingested Dataset as Flat CSV"
-                >
-                  <span style={{ fontSize: '12px' }}>📥</span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
-                    Export CSV
-                  </span>
-                </button>
-
-                {/* 🔒 ACTION 2: ATOMIC COMMIT */}
-                <button 
-                  type="button" 
-                  onClick={handleCommitStaging} 
-                  disabled={commitLoading} 
-                  className={`px-4 flex flex-row items-center justify-center gap-2 border rounded-lg transition-all shadow-md select-none font-mono ${
-                    commitLoading 
-                      ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed' 
-                      : 'bg-emerald-600/10 hover:bg-emerald-600 border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white cursor-pointer'
-                  }`}
-                  style={{ height: '36px', minHeight: '36px' }}
-                  title={commitLoading ? 'Saving Ledger Run...' : 'Save Reconciled Statement to Ledger'}
-                >
-                  <span 
-                    className={`${commitLoading ? 'animate-spin' : ''}`}
-                    style={{ display: 'inline-flex', alignItems: 'center', fontSize: '13px', lineHeight: '1' }}
-                  >
-                    {commitLoading ? '⏳' : '🛡️'}
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
-                    {commitLoading ? 'Saving...' : 'Commit Run'}
-                  </span>
-                </button>
-              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-zinc-800 text-emerald-400 border border-zinc-700">
+                {previewLines.length} Rows Extracted
+              </span>
             )}
           </div>
 
-          {/* 📊 DYNAMIC REVIEW PANEL TARGET AGGREGATION VIEWPORTS */}
-          {previewLines.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center p-12 text-center text-xs font-mono text-zinc-600 border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20">
-              No active 9-column entries extracted into staging floor yet.
+          {previewLines.length > 0 && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => downloadWorkableCSV((window as any).__lastRawStream || '')}
+                className="px-4 h-9 flex items-center justify-center gap-2 bg-zinc-950 border border-zinc-800 text-emerald-400 font-mono rounded-lg text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+              >
+                📥 Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleCommitStaging}
+                disabled={commitLoading}
+                className="px-4 h-9 flex items-center justify-center gap-2 border rounded-lg text-[10px] font-bold uppercase tracking-wider font-mono bg-emerald-600/10 hover:bg-emerald-600 border-emerald-500/30 text-emerald-400 hover:text-white cursor-pointer"
+              >
+                {commitLoading ? '⏳ Saving...' : '🛡️ Commit Run'}
+              </button>
             </div>
-          ) : (
-            <TableEngine 
-              columns={LEDGER_COLUMNS} 
-              data={previewLines} 
+          )}
+        </div>
+
+        {previewLines.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center p-12 text-center text-xs font-mono text-zinc-600 border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20">
+            No active 9-column entries extracted into staging floor yet. Select an attachment from the inbox or drop a file to preview.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <TableEngine
+              columns={LEDGER_COLUMNS}
+              data={paginatedPreviewLines}
               isDuplicateRow={(row) => row.status === 'DUPLICATE'}
             />
-          )}
-        </div> 
+            <div className="flex items-center justify-between pt-2 px-1 text-[11px] font-mono text-zinc-400 border-t border-zinc-800">
+              <div>
+                Showing {(stagingPage - 1) * STAGING_PAGE_SIZE + 1} to{' '}
+                {Math.min(stagingPage * STAGING_PAGE_SIZE, previewLines.length)} of {previewLines.length} entries
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={stagingPage <= 1}
+                  onClick={() => setStagingPage((p) => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-300 disabled:opacity-30 cursor-pointer"
+                >
+                  Previous
+                </button>
+                <span className="px-3 py-1 rounded bg-zinc-950 border border-zinc-800 text-emerald-400 font-bold">
+                  Page {stagingPage} of {totalStagingPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={stagingPage >= totalStagingPages}
+                  onClick={() => setStagingPage((p) => Math.min(totalStagingPages, p + 1))}
+                  className="px-2.5 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-300 disabled:opacity-30 cursor-pointer"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -439,8 +614,12 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
 export default UniversalStatementIngestView;
 
 
+
+
+
+
 // import React, { useState, useEffect } from 'react';
-// import { accountApi } from '../api.ts';
+// import { accountApi } from '../api/api.ts';
 // import api from '../api/client';
 // import { type AccountEntity, type StagingPreviewLine, type TemplateMetadata, type ApiResponseMeta } from '../types/ledger';
 
@@ -449,7 +628,11 @@ export default UniversalStatementIngestView;
 // import { VerificationDeck } from '../components/ui/data-table/VerificationDeck';
 // import { LEDGER_COLUMNS } from '../components/ui/data-table/columns';
 
-// export default function UniversalStatementIngestView() {
+// export interface UniversalStatementIngestViewProps {
+//   onIngestionComplete?: () => void;
+// }
+
+// export function UniversalStatementIngestView({ onIngestionComplete }: UniversalStatementIngestViewProps) {
 //   const [accounts, setAccounts] = useState<AccountEntity[]>([]);
 //   const [selectedAccountId, setSelectedAccountId] = useState('');
 //   const [file, setFile] = useState<File | null>(null);
@@ -559,44 +742,42 @@ export default UniversalStatementIngestView;
 //       });
 
 //       if (res.data.status === 'SUCCESS') {
-//             console.log("🚀 FULL BACKEND INGESTION RESPONSE PAYLOAD:", res.data);
-            
-//             const dataset = res.data.preview_dataset || res.data.data?.preview_dataset || [];
-//             setPreviewLines(dataset);
+//         console.log("🚀 FULL BACKEND INGESTION RESPONSE PAYLOAD:", res.data);
+        
+//         const dataset = res.data.preview_dataset || res.data.data?.preview_dataset || [];
+//         setPreviewLines(dataset);
 
-//             // 🎯 CALCULATE FILE CLASSIFICATION TYPE FROM THE EXPORT_FILENAME EXTENSION
-//             let detectedType = 'UNKNOWN';
-//             const filename = res.data.export_filename || '';
-//             if (filename.toLowerCase().endsWith('.csv')) {
-//               detectedType = 'CSV';
-//             } else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) {
-//               detectedType = 'EXCEL';
-//             } else if (filename.toLowerCase().endsWith('.pdf')) {
-//               detectedType = 'PDF';
-//             }
+//         // 🎯 CALCULATE FILE CLASSIFICATION TYPE FROM THE EXPORT_FILENAME EXTENSION
+//         let detectedType = 'UNKNOWN';
+//         const filename = res.data.export_filename || '';
+//         if (filename.toLowerCase().endsWith('.csv')) {
+//           detectedType = 'CSV';
+//         } else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) {
+//           detectedType = 'EXCEL';
+//         } else if (filename.toLowerCase().endsWith('.pdf')) {
+//           detectedType = 'PDF';
+//         }
 
-//             setStrategyExecuted(res.data.strategy_processed || res.data.engine_strategy_executed || 'STRICT_MATRIX');
-//             setConfidenceScore(typeof res.data.confidence_score !== 'undefined' ? res.data.confidence_score : null);
-            
-//             setResponseMeta({
-//               // 🔥 FIX: Assigns the dynamic parsed string instead of hitting the hardcoded fallback
-//               fileType: detectedType, 
-              
-//               decrypted: res.data.decrypted || res.data.data?.decrypted || false,
-//               count: typeof res.data.count !== 'undefined' ? res.data.count : (dataset.length || 0),
-//               openingBalance: res.data.opening_balance || 0,
-//               closingBalance: res.data.closing_balance || 0,
-//               totalDebit: res.data.total_debit || 0,
-//               totalCredit: res.data.total_credit || 0,
-//               rawMatchCount: res.data.count || 0,
-//               debitLineCount: res.data.debit_line_count || 0,
-//               creditLineCount: res.data.credit_line_count || 0,
-//               emptyMemoLineCount: res.data.empty_memo_line_count || res.data.system_noise_records_cleared || 0,
-//               duplicateCount: res.data.duplicate_count || 0, 
-//             });
-            
-//             (window as any).__lastRawStream = res.data.raw_csv_stream || res.data.generated_raw_csv_stream || "";
-//           }
+//         setStrategyExecuted(res.data.strategy_processed || res.data.engine_strategy_executed || 'STRICT_MATRIX');
+//         setConfidenceScore(typeof res.data.confidence_score !== 'undefined' ? res.data.confidence_score : null);
+        
+//         setResponseMeta({
+//           fileType: detectedType, 
+//           decrypted: res.data.decrypted || res.data.data?.decrypted || false,
+//           count: typeof res.data.count !== 'undefined' ? res.data.count : (dataset.length || 0),
+//           openingBalance: res.data.opening_balance || 0,
+//           closingBalance: res.data.closing_balance || 0,
+//           totalDebit: res.data.total_debit || 0,
+//           totalCredit: res.data.total_credit || 0,
+//           rawMatchCount: res.data.count || 0,
+//           debitLineCount: res.data.debit_line_count || 0,
+//           creditLineCount: res.data.credit_line_count || 0,
+//           emptyMemoLineCount: res.data.empty_memo_line_count || res.data.system_noise_records_cleared || 0,
+//           duplicateCount: res.data.duplicate_count || 0, 
+//         });
+        
+//         (window as any).__lastRawStream = res.data.raw_csv_stream || res.data.generated_raw_csv_stream || "";
+//       }
 //     } catch (err: any) {
 //       console.error(err);
 //       setErrorMsg(err.response?.data?.message || 'Staging engine processing failure.');
@@ -625,6 +806,11 @@ export default UniversalStatementIngestView;
 //       setFile(null);
 //       setStrategyExecuted('');
 //       setConfidenceScore(null);
+
+//       // 💡 AUTO-ADVANCE PIPELINE STEP CALL
+//       if (onIngestionComplete) {
+//         onIngestionComplete();
+//       }
 //     } catch (err: any) {
 //       setErrorMsg(err.response?.data?.message || 'Database commit error.');
 //     } finally { setCommitLoading(false); }
@@ -651,10 +837,7 @@ export default UniversalStatementIngestView;
 //   return (
 //     <div className="space-y-6 text-white p-2 text-left">
 //       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-//         <div>
-//           {/* <h2 className="text-2xl font-bold tracking-tight text-emerald-400">Universal 9-Column Ingestion Pipeline</h2>
-//           <p className="text-sm text-zinc-400 mt-1">Dynamic coordinate tracking processor capturing 100% of rows from multi-page JPEGs/PDFs.</p> */}
-//         </div>
+//         <div></div>
         
 //         {strategyExecuted && (
 //           <div className={`px-4 py-2 rounded-xl text-xs font-mono font-bold border flex items-center gap-2 tracking-wide shadow-md transition-all ${getStrategyBadgeStyles(strategyExecuted)}`}>
@@ -694,201 +877,638 @@ export default UniversalStatementIngestView;
 //             confidenceScore={confidenceScore}
 //             frontendRenderCount={frontendRenderCount}
 //           />
-     
 //         </div>
 //       )}
-
-
-
-
-
 
 //       <br/>
       
 //       {/* 🎛️ HORIZONTAL INGESTION PIPELINE CONTROL BAR */}
-//           <div className="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl mb-6">
-//             <div 
-//               style={{ 
-//                 display: 'flex', 
-//                 flexDirection: 'row', 
-//                 alignItems: 'flex-start', 
-//                 justifyContent: 'space-between', 
-//                 gap: '16px',
-//                 flexWrap: 'wrap' // Gracefully drops to a double row on small tablet displays
-//               }}
+//       <div className="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl mb-6">
+//         <div 
+//           style={{ 
+//             display: 'flex', 
+//             flexDirection: 'row', 
+//             alignItems: 'flex-start', 
+//             justifyContent: 'space-between', 
+//             gap: '16px',
+//             flexWrap: 'wrap'
+//           }}
+//         >
+//           {/* CONTROL FIELD 1: Target Bank Account Dropdown */}
+//           <div className="flex-1 min-w-[240px]">
+//             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+//               Target Bank Account
+//             </label>
+//             <select 
+//               value={selectedAccountId} 
+//               onChange={(e) => setSelectedAccountId(e.target.value)} 
+//               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500 h-10 transition-colors"
 //             >
-              
-//               {/* CONTROL FIELD 1: Target Bank Account Dropdown */}
-//                 <div className="flex-1 min-w-[240px]">
-//                   <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
-//                     Target Bank Account
-//                   </label>
-//                   <select 
-//                     value={selectedAccountId} 
-//                     onChange={(e) => setSelectedAccountId(e.target.value)} 
-//                     className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500 h-10 transition-colors"
-//                   >
-//                     <option value="">-- Select Channel --</option>
-//                     {accounts.map((acc) => (
-//                       <option key={acc.id} value={acc.id}>
-//                         💳 {acc.name} {acc.account_number ? `(•••• ${acc.account_number})` : ''}
-//                       </option>
-//                     ))}
-//                   </select>
-//                 </div>
-//               </div>
-
-
-           
+//               <option value="">-- Select Channel --</option>
+//               {accounts.map((acc) => (
+//                 <option key={acc.id} value={acc.id}>
+//                   💳 {acc.name} {acc.account_number ? `(•••• ${acc.account_number})` : ''}
+//                 </option>
+//               ))}
+//             </select>
 //           </div>
 
-//             {/* CONTROL FIELD 2: Execution Engine Dropdown (Preserved for Mapper Integration) */}
-//               <div className="flex-1 min-w-[260px]">
-//                 <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
-//                   Parsing Engine Execution Blueprint
-//                 </label>
-//                 <select 
-//                   value={forcedTemplateId} 
-//                   onChange={(e) => setForcedTemplateId(e.target.value)} // 🎯 Read/Write hooks used here!
-//                   className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500 h-10 transition-colors"
-//                 >
-//                   <option value="">⚡ [AUTOMATED ENGINE ROUTING MODE]</option>
-//                   {/* 🎯 availableTemplates array mapped here! */}
-//                   {availableTemplates && availableTemplates.map((t: any) => (
-//                     <option key={t.id} value={t.id}>
-//                       ⚙️ {t.template_name || t.name}
-//                     </option>
-//                   ))}
-//                 </select>
-//               </div>
-
+//           {/* CONTROL FIELD 2: Execution Engine Dropdown */}
+//           <div className="flex-1 min-w-[260px]">
+//             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+//               Parsing Engine Execution Blueprint
+//             </label>
+//             <select 
+//               value={forcedTemplateId} 
+//               onChange={(e) => setForcedTemplateId(e.target.value)}
+//               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500 h-10 transition-colors"
+//             >
+//               <option value="">⚡ [AUTOMATED ENGINE ROUTING MODE]</option>
+//               {availableTemplates && availableTemplates.map((t: any) => (
+//                 <option key={t.id} value={t.id}>
+//                   ⚙️ {t.template_name || t.name}
+//                 </option>
+//               ))}
+//             </select>
+//           </div>
 
 //           {/* CONTROL FIELD 3: Compact File Drop Strip Container */}
-//               <div className="flex-1 min-w-[280px]">
-//                 <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
-//                   Statement Document (PDF or CSV)
-//                 </label>
-//                 <div 
-//                   onDragOver={handleDragOver} 
-//                   onDragLeave={handleDragLeave} 
-//                   onDrop={handleDrop} 
-//                   className={`border border-dashed rounded-lg px-3 flex items-center justify-between transition-all h-10 ${
-//                     isDragging 
-//                       ? 'border-emerald-500 bg-emerald-500/5' 
-//                       : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-700'
-//                   }`}
-//                 >
-//                   <input 
-//                     type="file" 
-//                     id="uniFileInput" 
-//                     className="w-full text-[11px] text-zinc-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-mono file:font-bold file:bg-zinc-800 file:text-emerald-400 hover:file:bg-zinc-700 cursor-pointer" 
-//                     accept=".csv,.pdf" 
-//                     onChange={handleFileChange} 
-//                   />
-//                   <span className="text-[9px] text-zinc-600 font-mono hidden xl:inline whitespace-nowrap select-none pl-2 border-l border-zinc-800/80">
-//                     Drop here
-//                   </span>
-//                 </div>
+//           <div className="flex-1 min-w-[280px]">
+//             <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+//               Statement Document (PDF or CSV)
+//             </label>
+//             <div 
+//               onDragOver={handleDragOver} 
+//               onDragLeave={handleDragLeave} 
+//               onDrop={handleDrop} 
+//               className={`border border-dashed rounded-lg px-3 flex items-center justify-between transition-all h-10 ${
+//                 isDragging 
+//                   ? 'border-emerald-500 bg-emerald-500/5' 
+//                   : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-700'
+//               }`}
+//             >
+//               <input 
+//                 type="file" 
+//                 id="uniFileInput" 
+//                 className="w-full text-[11px] text-zinc-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-mono file:font-bold file:bg-zinc-800 file:text-emerald-400 hover:file:bg-zinc-700 cursor-pointer" 
+//                 accept=".csv,.pdf" 
+//                 onChange={handleFileChange} 
+//               />
+//               <span className="text-[9px] text-zinc-600 font-mono hidden xl:inline whitespace-nowrap select-none pl-2 border-l border-zinc-800/80">
+//                 Drop here
+//               </span>
+//             </div>
+//           </div>
+//         </div>
 
-
-                
-//               </div>
-
-//  {/* ⚠️ SYSTEM ERROR AND WAITING STATES CONSOLE FOOTERS */}
-//             {(errorMsg || loading) && (
-//               <div className="w-full pt-3 mt-3 border-t border-zinc-800/60 flex flex-col gap-2">
-//                 {errorMsg && (
-//                   <div className="p-2.5 bg-red-500/10 text-red-400 text-xs border border-red-500/20 rounded-lg font-mono">
-//                     ⚠️ {errorMsg}
-//                   </div>
-//                 )}
-                
-//                 {loading && (
-//                   <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-mono font-bold animate-pulse text-center tracking-wide">
-//                     ⏳ Processing Multi-Page Matrix Stream Data Array...
-//                   </div>
-//                 )}
+//         {/* ⚠️ SYSTEM ERROR AND WAITING STATES CONSOLE FOOTERS */}
+//         {(errorMsg || loading) && (
+//           <div className="w-full pt-3 mt-3 border-t border-zinc-800/60 flex flex-col gap-2">
+//             {errorMsg && (
+//               <div className="p-2.5 bg-red-500/10 text-red-400 text-xs border border-red-500/20 rounded-lg font-mono">
+//                 ⚠️ {errorMsg}
 //               </div>
 //             )}
+            
+//             {loading && (
+//               <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-mono font-bold animate-pulse text-center tracking-wide">
+//                 ⏳ Processing Multi-Page Matrix Stream Data Array...
+//               </div>
+//             )}
+//           </div>
+//         )}
 
 //         {/* 🚀 PERSISTENT WORKSPACE STAGING FLOOR */}
-//         <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
+//         <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col mt-4">
 //           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
 //             <div>
 //               <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-mono">
-//                Staging Floor
+//                 Staging Floor
 //               </h3>
-
 //             </div>
             
-//           {previewLines.length > 0 && (
-//   <div 
-//     className="self-end sm:self-auto"
-//     style={{ 
-//       display: 'flex', 
-//       flexDirection: 'row', 
-//       alignItems: 'center', 
-//       gap: '12px' 
-//     }}
-//   >
-    
-//     {/* 📊 ACTION 1: EMBODIED EXCEL/CSV FILE DOWNLOAD DISPATCH */}
-//     <button 
-//       type="button" 
-//       onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")}
-//       className="px-4 flex flex-row items-center justify-center gap-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-emerald-600/40 text-emerald-400 font-mono rounded-lg transition-all shadow-inner cursor-pointer"
-//       style={{ height: '36px', minHeight: '36px' }}
-//       title="Export Ingested Dataset as Flat CSV"
-//     >
-//       <span style={{ fontSize: '12px' }}>📥</span>
-//       <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
-//         Export CSV
-//       </span>
-//     </button>
+//             {previewLines.length > 0 && (
+//               <div 
+//                 className="self-end sm:self-auto"
+//                 style={{ 
+//                   display: 'flex', 
+//                   flexDirection: 'row', 
+//                   alignItems: 'center', 
+//                   gap: '12px' 
+//                 }}
+//               >
+//                 {/* 📊 ACTION 1: EXPORT CSV */}
+//                 <button 
+//                   type="button" 
+//                   onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")}
+//                   className="px-4 flex flex-row items-center justify-center gap-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-emerald-600/40 text-emerald-400 font-mono rounded-lg transition-all shadow-inner cursor-pointer"
+//                   style={{ height: '36px', minHeight: '36px' }}
+//                   title="Export Ingested Dataset as Flat CSV"
+//                 >
+//                   <span style={{ fontSize: '12px' }}>📥</span>
+//                   <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+//                     Export CSV
+//                   </span>
+//                 </button>
 
-//     {/* 🔒 ACTION 2: PIPELINE TRANSACTION ATOMIC COMMIT ENGINE */}
-//     <button 
-//       type="button" 
-//       onClick={handleCommitStaging} 
-//       disabled={commitLoading} 
-//       className={`px-4 flex flex-row items-center justify-center gap-2 border rounded-lg transition-all shadow-md select-none font-mono ${
-//         commitLoading 
-//           ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed' 
-//           : 'bg-emerald-600/10 hover:bg-emerald-600 border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white cursor-pointer'
-//       }`}
-//       style={{ height: '36px', minHeight: '36px' }}
-//       title={commitLoading ? 'Saving Ledger Run...' : 'Save Reconciled Statement to Ledger'}
-//     >
-//       <span 
-//         className={`${commitLoading ? 'animate-spin' : ''}`}
-//         style={{ display: 'inline-flex', alignItems: 'center', fontSize: '13px', lineHeight: '1' }}
-//       >
-//         {commitLoading ? '⏳' : '🛡️'}
-//       </span>
-//       <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
-//         {commitLoading ? 'Saving...' : 'Commit Run'}
-//       </span>
-//     </button>
-
-//   </div>
-//             )}
-
-//             </div> {/* Closes the conditional header layout sub-wrapper block cleanly */}
-
-//             {/* 📊 DYNAMIC REVIEW PANEL TARGET AGGREGATION VIEWPORTS */}
-//             {previewLines.length === 0 ? (
-//               <div className="flex-1 flex items-center justify-center p-12 text-center text-xs font-mono text-zinc-600 border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20">
-//                 No active 9-column entries extracted into staging floor yet.
+//                 {/* 🔒 ACTION 2: ATOMIC COMMIT */}
+//                 <button 
+//                   type="button" 
+//                   onClick={handleCommitStaging} 
+//                   disabled={commitLoading} 
+//                   className={`px-4 flex flex-row items-center justify-center gap-2 border rounded-lg transition-all shadow-md select-none font-mono ${
+//                     commitLoading 
+//                       ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed' 
+//                       : 'bg-emerald-600/10 hover:bg-emerald-600 border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white cursor-pointer'
+//                   }`}
+//                   style={{ height: '36px', minHeight: '36px' }}
+//                   title={commitLoading ? 'Saving Ledger Run...' : 'Save Reconciled Statement to Ledger'}
+//                 >
+//                   <span 
+//                     className={`${commitLoading ? 'animate-spin' : ''}`}
+//                     style={{ display: 'inline-flex', alignItems: 'center', fontSize: '13px', lineHeight: '1' }}
+//                   >
+//                     {commitLoading ? '⏳' : '🛡️'}
+//                   </span>
+//                   <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+//                     {commitLoading ? 'Saving...' : 'Commit Run'}
+//                   </span>
+//                 </button>
 //               </div>
-//             ) : (
-//               /* 🚀 COMPACT GENERATOR CORE HOOK ENGINE */
-//               <TableEngine 
-//                 columns={LEDGER_COLUMNS} 
-//                 data={previewLines} 
-//                 isDuplicateRow={(row) => row.status === 'DUPLICATE'}
-//               />
 //             )}
+//           </div>
 
-//             </div> 
+//           {/* 📊 DYNAMIC REVIEW PANEL TARGET AGGREGATION VIEWPORTS */}
+//           {previewLines.length === 0 ? (
+//             <div className="flex-1 flex items-center justify-center p-12 text-center text-xs font-mono text-zinc-600 border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20">
+//               No active 9-column entries extracted into staging floor yet.
 //             </div>
-//   )}
+//           ) : (
+//             <TableEngine 
+//               columns={LEDGER_COLUMNS} 
+//               data={previewLines} 
+//               isDuplicateRow={(row) => row.status === 'DUPLICATE'}
+//             />
+//           )}
+//         </div> 
+//       </div>
+//     </div>
+//   );
+// }
+
+// export default UniversalStatementIngestView;
+
+
+// // import React, { useState, useEffect } from 'react';
+// // import { accountApi } from '../api.ts';
+// // import api from '../api/client';
+// // import { type AccountEntity, type StagingPreviewLine, type TemplateMetadata, type ApiResponseMeta } from '../types/ledger';
+
+// // // 🚀 Dynamic Pipeline Engines Linked
+// // import { TableEngine } from '../components/ui/data-table/TableEngine';
+// // import { VerificationDeck } from '../components/ui/data-table/VerificationDeck';
+// // import { LEDGER_COLUMNS } from '../components/ui/data-table/columns';
+
+// // export default function UniversalStatementIngestView() {
+// //   const [accounts, setAccounts] = useState<AccountEntity[]>([]);
+// //   const [selectedAccountId, setSelectedAccountId] = useState('');
+// //   const [file, setFile] = useState<File | null>(null);
+// //   const [isDragging, setIsDragging] = useState(false);
+  
+// //   const [loading, setLoading] = useState(false);
+// //   const [commitLoading, setCommitLoading] = useState(false);
+  
+// //   const [previewLines, setPreviewLines] = useState<StagingPreviewLine[]>([]);
+// //   const [responseMeta, setResponseMeta] = useState<ApiResponseMeta | null>(null); 
+  
+// //   // 🎯 STRATEGY & CONFIDENCE TRACKING STATES
+// //   const [strategyExecuted, setStrategyExecuted] = useState<string>('');
+// //   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
+  
+// //   const [errorMsg, setErrorMsg] = useState('');
+// //   const [commitSuccessMsg, setCommitSuccessMsg] = useState('');
+
+// //   const [availableTemplates, setAvailableTemplates] = useState<TemplateMetadata[]>([]);
+// //   const [forcedTemplateId, setForcedTemplateId] = useState<string>('');
+
+// //   const downloadWorkableCSV = (rawStreamText: string) => {
+// //     if (!rawStreamText) return;
+    
+// //     let cleanContent = rawStreamText;
+// //     let exportFilename = "statement_export.csv";
+    
+// //     if (rawStreamText.startsWith("#FILENAME:")) {
+// //       const lines = rawStreamText.split("\n");
+// //       const metaLine = lines[0]; 
+      
+// //       exportFilename = metaLine.replace("#FILENAME:", "").trim() || "statement_export.csv";      
+// //       cleanContent = lines.slice(1).join("\n");
+// //     }
+    
+// //     const csvContent = cleanContent.replace(/ ~ /g, ",");
+// //     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+// //     const url = URL.createObjectURL(blob);
+// //     const link = document.createElement("a");
+    
+// //     link.setAttribute("href", url);
+// //     link.setAttribute("download", exportFilename);
+    
+// //     document.body.appendChild(link);
+// //     link.click();
+// //     document.body.removeChild(link);
+// //   };
+
+// //   useEffect(() => {
+// //     accountApi.getAccounts()
+// //       .then(res => setAccounts(Array.isArray(res) ? res : res.results || []))
+// //       .catch(() => setErrorMsg('Failed loading ledger workspace nodes.'));
+
+// //     api.get('/statements/available/')
+// //       .then((res) => setAvailableTemplates(res.data || []))
+// //       .catch((err) => console.error("Failed loading configuration maps:", err));
+// //   }, []);
+
+// //   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
+// //   const handleDragLeave = () => setIsDragging(false);
+  
+// //   const handleDrop = (e: React.DragEvent) => {
+// //     e.preventDefault();
+// //     setIsDragging(false);
+// //     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+// //       const droppedFile = e.dataTransfer.files[0];
+// //       setFile(droppedFile);
+// //       if (selectedAccountId) {
+// //         executeUploadDirectly(droppedFile, selectedAccountId);
+// //       } else {
+// //         setErrorMsg("Please select a target bank account channel first.");
+// //       }
+// //     }
+// //   };
+    
+// //   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+// //     if (e.target.files && e.target.files[0]) {
+// //       const selectedFile = e.target.files[0];
+// //       setFile(selectedFile);
+// //       if (selectedAccountId) {
+// //         executeUploadDirectly(selectedFile, selectedAccountId);
+// //       } else {
+// //         setErrorMsg("Please select a target bank account channel first.");
+// //       }
+// //     }
+// //   };
+
+// //   const executeUploadDirectly = async (targetFile: File, accountId: string) => {
+// //     setLoading(true);
+// //     setErrorMsg('');
+// //     setCommitSuccessMsg('');
+// //     setPreviewLines([]);
+// //     setResponseMeta(null);
+// //     setStrategyExecuted('');
+// //     setConfidenceScore(null);
+
+// //     const formData = new FormData();
+// //     formData.append('statement_file', targetFile);
+// //     formData.append('account_id', accountId);
+// //     if (forcedTemplateId) {
+// //       formData.append('forced_template_id', forcedTemplateId);
+// //     }
+
+// //     try {
+// //       const res = await api.post('/statement/ingestbulk/', formData, {
+// //         headers: { 'Content-Type': 'multipart/form-data' },
+// //       });
+
+// //       if (res.data.status === 'SUCCESS') {
+// //             console.log("🚀 FULL BACKEND INGESTION RESPONSE PAYLOAD:", res.data);
+            
+// //             const dataset = res.data.preview_dataset || res.data.data?.preview_dataset || [];
+// //             setPreviewLines(dataset);
+
+// //             // 🎯 CALCULATE FILE CLASSIFICATION TYPE FROM THE EXPORT_FILENAME EXTENSION
+// //             let detectedType = 'UNKNOWN';
+// //             const filename = res.data.export_filename || '';
+// //             if (filename.toLowerCase().endsWith('.csv')) {
+// //               detectedType = 'CSV';
+// //             } else if (filename.toLowerCase().endsWith('.xlsx') || filename.toLowerCase().endsWith('.xls')) {
+// //               detectedType = 'EXCEL';
+// //             } else if (filename.toLowerCase().endsWith('.pdf')) {
+// //               detectedType = 'PDF';
+// //             }
+
+// //             setStrategyExecuted(res.data.strategy_processed || res.data.engine_strategy_executed || 'STRICT_MATRIX');
+// //             setConfidenceScore(typeof res.data.confidence_score !== 'undefined' ? res.data.confidence_score : null);
+            
+// //             setResponseMeta({
+// //               // 🔥 FIX: Assigns the dynamic parsed string instead of hitting the hardcoded fallback
+// //               fileType: detectedType, 
+              
+// //               decrypted: res.data.decrypted || res.data.data?.decrypted || false,
+// //               count: typeof res.data.count !== 'undefined' ? res.data.count : (dataset.length || 0),
+// //               openingBalance: res.data.opening_balance || 0,
+// //               closingBalance: res.data.closing_balance || 0,
+// //               totalDebit: res.data.total_debit || 0,
+// //               totalCredit: res.data.total_credit || 0,
+// //               rawMatchCount: res.data.count || 0,
+// //               debitLineCount: res.data.debit_line_count || 0,
+// //               creditLineCount: res.data.credit_line_count || 0,
+// //               emptyMemoLineCount: res.data.empty_memo_line_count || res.data.system_noise_records_cleared || 0,
+// //               duplicateCount: res.data.duplicate_count || 0, 
+// //             });
+            
+// //             (window as any).__lastRawStream = res.data.raw_csv_stream || res.data.generated_raw_csv_stream || "";
+// //           }
+// //     } catch (err: any) {
+// //       console.error(err);
+// //       setErrorMsg(err.response?.data?.message || 'Staging engine processing failure.');
+// //     } finally {
+// //       setLoading(false);
+// //     }
+// //   };
+
+// //   const handleCommitStaging = async () => {
+// //     if (!selectedAccountId || !previewLines || previewLines.length === 0) return;
+// //     setCommitLoading(true);
+// //     try {
+// //       await api.post('/statement/commit-staging/', {
+// //         account_id: selectedAccountId,
+// //         preview_dataset: previewLines,
+// //         file_name: file ? file.name : "9COL_STATEMENT.PDF", 
+// //         strategy_used: strategyExecuted,
+// //         meta_summary: {
+// //           ...responseMeta,
+// //           strategy_used: strategyExecuted
+// //         }, 
+// //       });
+// //       setCommitSuccessMsg("Pipeline run committed to core ledger successfully.");
+// //       setPreviewLines([]); 
+// //       setResponseMeta(null); 
+// //       setFile(null);
+// //       setStrategyExecuted('');
+// //       setConfidenceScore(null);
+// //     } catch (err: any) {
+// //       setErrorMsg(err.response?.data?.message || 'Database commit error.');
+// //     } finally { setCommitLoading(false); }
+// //   };
+
+// //   const opening = responseMeta?.openingBalance || 0;
+// //   const totalCredit = responseMeta?.totalCredit || 0;
+// //   const totalDebit = responseMeta?.totalDebit || 0;
+// //   const statementClosing = responseMeta?.closingBalance || 0;
+// //   const calculatedClosingValue = opening + totalCredit - totalDebit;
+  
+// //   const isBalanceVerified = responseMeta ? Math.abs(calculatedClosingValue - statementClosing) < 0.05 : false;
+// //   const frontendRenderCount = previewLines.length;
+// //   const isRowCountVerified = responseMeta ? responseMeta.count === frontendRenderCount : false;
+// //   const isFileFullyStale = responseMeta ? responseMeta.count === 0 : false;
+// //   const isDoubleTrustOk = isBalanceVerified && isRowCountVerified && !isFileFullyStale;
+
+// //   const getStrategyBadgeStyles = (strat: string) => {
+// //     if (strat.includes("PADDLE_OCR")) return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+// //     if (strat.includes("UNIVERSAL_CSV")) return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+// //     return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+// //   };
+
+// //   return (
+// //     <div className="space-y-6 text-white p-2 text-left">
+// //       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+// //         <div>
+// //           {/* <h2 className="text-2xl font-bold tracking-tight text-emerald-400">Universal 9-Column Ingestion Pipeline</h2>
+// //           <p className="text-sm text-zinc-400 mt-1">Dynamic coordinate tracking processor capturing 100% of rows from multi-page JPEGs/PDFs.</p> */}
+// //         </div>
+        
+// //         {strategyExecuted && (
+// //           <div className={`px-4 py-2 rounded-xl text-xs font-mono font-bold border flex items-center gap-2 tracking-wide shadow-md transition-all ${getStrategyBadgeStyles(strategyExecuted)}`}>
+// //             <span className="relative flex h-2 w-2">
+// //               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75"></span>
+// //               <span className="relative inline-flex rounded-full h-2 w-2 bg-current"></span>
+// //             </span>
+// //             ACTIVE ENGINE: {strategyExecuted}
+// //           </div>
+// //         )}
+// //       </div>
+
+// //       {commitSuccessMsg && (
+// //         <div className="p-4 bg-emerald-500/10 text-emerald-400 text-sm border border-emerald-500/20 rounded-xl font-medium shadow-lg">
+// //           {commitSuccessMsg}
+// //         </div>
+// //       )}
+
+// //       <br/>
+
+// //       {/* 📊 Summary Reconciliation Deck */}
+// //       {responseMeta && (
+// //         <div className="space-y-4">
+// //           <VerificationDeck 
+// //             responseMeta={responseMeta}
+// //             previewLines={previewLines}
+// //             opening={opening}
+// //             totalDebit={totalDebit}
+// //             totalCredit={totalCredit}
+// //             statementClosing={statementClosing}
+// //             calculatedClosingValue={calculatedClosingValue}
+// //             isDoubleTrustOk={isDoubleTrustOk}
+// //             isBalanceVerified={isBalanceVerified}
+// //             isFileFullyStale={isFileFullyStale}
+// //             isRowCountVerified={isRowCountVerified}
+// //             strategyExecuted={strategyExecuted}
+// //             confidenceScore={confidenceScore}
+// //             frontendRenderCount={frontendRenderCount}
+// //           />
+     
+// //         </div>
+// //       )}
+
+
+
+
+
+
+// //       <br/>
+      
+// //       {/* 🎛️ HORIZONTAL INGESTION PIPELINE CONTROL BAR */}
+// //           <div className="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl mb-6">
+// //             <div 
+// //               style={{ 
+// //                 display: 'flex', 
+// //                 flexDirection: 'row', 
+// //                 alignItems: 'flex-start', 
+// //                 justifyContent: 'space-between', 
+// //                 gap: '16px',
+// //                 flexWrap: 'wrap' // Gracefully drops to a double row on small tablet displays
+// //               }}
+// //             >
+              
+// //               {/* CONTROL FIELD 1: Target Bank Account Dropdown */}
+// //                 <div className="flex-1 min-w-[240px]">
+// //                   <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+// //                     Target Bank Account
+// //                   </label>
+// //                   <select 
+// //                     value={selectedAccountId} 
+// //                     onChange={(e) => setSelectedAccountId(e.target.value)} 
+// //                     className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500 h-10 transition-colors"
+// //                   >
+// //                     <option value="">-- Select Channel --</option>
+// //                     {accounts.map((acc) => (
+// //                       <option key={acc.id} value={acc.id}>
+// //                         💳 {acc.name} {acc.account_number ? `(•••• ${acc.account_number})` : ''}
+// //                       </option>
+// //                     ))}
+// //                   </select>
+// //                 </div>
+// //               </div>
+
+
+           
+// //           </div>
+
+// //             {/* CONTROL FIELD 2: Execution Engine Dropdown (Preserved for Mapper Integration) */}
+// //               <div className="flex-1 min-w-[260px]">
+// //                 <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+// //                   Parsing Engine Execution Blueprint
+// //                 </label>
+// //                 <select 
+// //                   value={forcedTemplateId} 
+// //                   onChange={(e) => setForcedTemplateId(e.target.value)} // 🎯 Read/Write hooks used here!
+// //                   className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500 h-10 transition-colors"
+// //                 >
+// //                   <option value="">⚡ [AUTOMATED ENGINE ROUTING MODE]</option>
+// //                   {/* 🎯 availableTemplates array mapped here! */}
+// //                   {availableTemplates && availableTemplates.map((t: any) => (
+// //                     <option key={t.id} value={t.id}>
+// //                       ⚙️ {t.template_name || t.name}
+// //                     </option>
+// //                   ))}
+// //                 </select>
+// //               </div>
+
+
+// //           {/* CONTROL FIELD 3: Compact File Drop Strip Container */}
+// //               <div className="flex-1 min-w-[280px]">
+// //                 <label className="block text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1.5 font-mono">
+// //                   Statement Document (PDF or CSV)
+// //                 </label>
+// //                 <div 
+// //                   onDragOver={handleDragOver} 
+// //                   onDragLeave={handleDragLeave} 
+// //                   onDrop={handleDrop} 
+// //                   className={`border border-dashed rounded-lg px-3 flex items-center justify-between transition-all h-10 ${
+// //                     isDragging 
+// //                       ? 'border-emerald-500 bg-emerald-500/5' 
+// //                       : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-700'
+// //                   }`}
+// //                 >
+// //                   <input 
+// //                     type="file" 
+// //                     id="uniFileInput" 
+// //                     className="w-full text-[11px] text-zinc-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-mono file:font-bold file:bg-zinc-800 file:text-emerald-400 hover:file:bg-zinc-700 cursor-pointer" 
+// //                     accept=".csv,.pdf" 
+// //                     onChange={handleFileChange} 
+// //                   />
+// //                   <span className="text-[9px] text-zinc-600 font-mono hidden xl:inline whitespace-nowrap select-none pl-2 border-l border-zinc-800/80">
+// //                     Drop here
+// //                   </span>
+// //                 </div>
+
+
+                
+// //               </div>
+
+// //  {/* ⚠️ SYSTEM ERROR AND WAITING STATES CONSOLE FOOTERS */}
+// //             {(errorMsg || loading) && (
+// //               <div className="w-full pt-3 mt-3 border-t border-zinc-800/60 flex flex-col gap-2">
+// //                 {errorMsg && (
+// //                   <div className="p-2.5 bg-red-500/10 text-red-400 text-xs border border-red-500/20 rounded-lg font-mono">
+// //                     ⚠️ {errorMsg}
+// //                   </div>
+// //                 )}
+                
+// //                 {loading && (
+// //                   <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-mono font-bold animate-pulse text-center tracking-wide">
+// //                     ⏳ Processing Multi-Page Matrix Stream Data Array...
+// //                   </div>
+// //                 )}
+// //               </div>
+// //             )}
+
+// //         {/* 🚀 PERSISTENT WORKSPACE STAGING FLOOR */}
+// //         <div className="xl:col-span-8 p-5 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
+// //           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-4">
+// //             <div>
+// //               <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-mono">
+// //                Staging Floor
+// //               </h3>
+
+// //             </div>
+            
+// //           {previewLines.length > 0 && (
+// //   <div 
+// //     className="self-end sm:self-auto"
+// //     style={{ 
+// //       display: 'flex', 
+// //       flexDirection: 'row', 
+// //       alignItems: 'center', 
+// //       gap: '12px' 
+// //     }}
+// //   >
+    
+// //     {/* 📊 ACTION 1: EMBODIED EXCEL/CSV FILE DOWNLOAD DISPATCH */}
+// //     <button 
+// //       type="button" 
+// //       onClick={() => downloadWorkableCSV((window as any).__lastRawStream || "")}
+// //       className="px-4 flex flex-row items-center justify-center gap-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-emerald-600/40 text-emerald-400 font-mono rounded-lg transition-all shadow-inner cursor-pointer"
+// //       style={{ height: '36px', minHeight: '36px' }}
+// //       title="Export Ingested Dataset as Flat CSV"
+// //     >
+// //       <span style={{ fontSize: '12px' }}>📥</span>
+// //       <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+// //         Export CSV
+// //       </span>
+// //     </button>
+
+// //     {/* 🔒 ACTION 2: PIPELINE TRANSACTION ATOMIC COMMIT ENGINE */}
+// //     <button 
+// //       type="button" 
+// //       onClick={handleCommitStaging} 
+// //       disabled={commitLoading} 
+// //       className={`px-4 flex flex-row items-center justify-center gap-2 border rounded-lg transition-all shadow-md select-none font-mono ${
+// //         commitLoading 
+// //           ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed' 
+// //           : 'bg-emerald-600/10 hover:bg-emerald-600 border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white cursor-pointer'
+// //       }`}
+// //       style={{ height: '36px', minHeight: '36px' }}
+// //       title={commitLoading ? 'Saving Ledger Run...' : 'Save Reconciled Statement to Ledger'}
+// //     >
+// //       <span 
+// //         className={`${commitLoading ? 'animate-spin' : ''}`}
+// //         style={{ display: 'inline-flex', alignItems: 'center', fontSize: '13px', lineHeight: '1' }}
+// //       >
+// //         {commitLoading ? '⏳' : '🛡️'}
+// //       </span>
+// //       <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+// //         {commitLoading ? 'Saving...' : 'Commit Run'}
+// //       </span>
+// //     </button>
+
+// //   </div>
+// //             )}
+
+// //             </div> {/* Closes the conditional header layout sub-wrapper block cleanly */}
+
+// //             {/* 📊 DYNAMIC REVIEW PANEL TARGET AGGREGATION VIEWPORTS */}
+// //             {previewLines.length === 0 ? (
+// //               <div className="flex-1 flex items-center justify-center p-12 text-center text-xs font-mono text-zinc-600 border border-dashed border-zinc-800 rounded-lg bg-zinc-950/20">
+// //                 No active 9-column entries extracted into staging floor yet.
+// //               </div>
+// //             ) : (
+// //               /* 🚀 COMPACT GENERATOR CORE HOOK ENGINE */
+// //               <TableEngine 
+// //                 columns={LEDGER_COLUMNS} 
+// //                 data={previewLines} 
+// //                 isDuplicateRow={(row) => row.status === 'DUPLICATE'}
+// //               />
+// //             )}
+
+// //             </div> 
+// //             </div>
+// //   )}

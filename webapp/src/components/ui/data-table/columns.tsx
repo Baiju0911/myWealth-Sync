@@ -14,6 +14,42 @@ export interface ColumnConfig {
   renderCell?: (row: any, meta?: any) => React.ReactNode;
 }
 
+export interface SmartTermDepositMeta {
+  td_account_number?: string;
+  td_open_date?: string;
+  td_renewal_date?: string;
+  td_principal_amount?: string;
+  td_tenure?: string;
+  td_maturity_date?: string;
+  td_total_interest?: string;
+  td_tds_deducted?: string;
+  [key: string]: any;
+}
+
+export interface LiveStreamPayloadItem {
+  id: string;
+  source: 'IOS_SMS' | 'GMAIL_API' | 'MERGED_STREAM' | 'POWER_AUTOMATE' | string;
+  sender: string;
+  subject?: string | null;
+  raw_body?: string | null;
+  amount: string | number | null;
+  balance: string | number | null;
+  txn_date?: string | null;
+  account_last4: string | null;
+  account_display_name?: string | null;
+  bank_name: string | null;
+  upi_ref: string | null;
+  status: string;
+  created_at: string;
+  full_narration: string | null;
+  merchant?: string | null;
+  smart_meta?: SmartTermDepositMeta | null;
+  direction?: 'DEBIT' | 'CREDIT' | string;
+  payment_protocol?: string;
+  amount_label?: string;
+  clean_beneficiary?: string;
+}
+
 export const LEDGER_COLUMNS: ColumnConfig[] = [
   { key: 'post_date', label: 'Txn Date', width: '9%', align: 'left' },
   {
@@ -75,6 +111,249 @@ export const LEDGER_COLUMNS: ColumnConfig[] = [
   },
   { key: 'status', label: 'Status', width: '5%', align: 'center' },
 ];
+
+export const ATTACHMENT_INBOX_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'received_date',
+    label: 'Received',
+    width: '10%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <span className="font-mono text-[11px] text-zinc-400 whitespace-nowrap">
+        {row.received_date ? String(row.received_date).slice(0, 10) : '—'}
+      </span>
+    ),
+  },
+  {
+    key: 'bank_name',
+    label: 'Bank',
+    width: '15%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <span className="font-bold text-zinc-200 whitespace-nowrap text-[11px]">
+        {row.bank_name || 'Generic Bank'}
+      </span>
+    ),
+  },
+  {
+    key: 'account_hint',
+    label: 'Account',
+    width: '10%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <span className="font-bold text-emerald-400 font-mono whitespace-nowrap text-[11px]">
+        •••• {row.account_hint || '----'}
+      </span>
+    ),
+  },
+  {
+    key: 'filename',
+    label: 'File Name',
+    width: '24%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <span className="text-zinc-300 font-mono text-[11px] truncate max-w-xs block" title={row.filename}>
+        {row.filename}
+      </span>
+    ),
+  },
+  {
+    key: 'period',
+    label: 'Statement Period',
+    width: '21%',
+    align: 'left',
+    renderCell: (row: any) => {
+      const formatDate = (dateStr: string | null) => {
+        if (!dateStr) return null;
+        try {
+          const d = new Date(dateStr);
+          if (isNaN(d.getTime())) return dateStr.slice(0, 10);
+          return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        } catch {
+          return dateStr.slice(0, 10);
+        }
+      };
+
+      const start = formatDate(row.period_start);
+      const end = formatDate(row.period_end);
+
+      if (start && end) {
+        return (
+          <div className="flex items-center gap-1.5 font-mono text-[10px]">
+            <span className="text-emerald-400 font-medium">{start}</span>
+            <span className="text-zinc-500">→</span>
+            <span className="text-emerald-400 font-medium">{end}</span>
+          </div>
+        );
+      }
+      return <span className="text-zinc-600 italic text-[10px]">Auto-detect on preview</span>;
+    },
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    width: '10%',
+    align: 'center',
+    renderCell: (row: any) => (
+      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold font-mono bg-zinc-800 text-zinc-400 border border-zinc-700">
+        {row.status}
+      </span>
+    ),
+  },
+  {
+    key: 'actions',
+    label: 'Action',
+    width: '10%',
+    align: 'right',
+    renderCell: (row: any, meta: any) => {
+      const isActive = meta?.activeItemId === row.id;
+      const isLoading = meta?.loading && isActive;
+
+      return (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            meta?.onPreviewItem?.(row.id);
+          }}
+          disabled={meta?.loading}
+          className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all cursor-pointer border font-mono ${
+            isActive
+              ? 'bg-emerald-500 text-black border-emerald-400 font-extrabold shadow-sm'
+              : 'bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white border-emerald-500/30 hover:border-emerald-500'
+          }`}
+        >
+          {isLoading ? 'Extracting...' : isActive ? '✓ Staged' : 'Preview & Verify'}
+        </button>
+      );
+    },
+  },
+];
+
+export const LIVE_STREAM_COLUMNS: ColumnConfig[] = [
+  {
+    key: 'source',
+    label: 'SOURCE',
+    width: '11%',
+    align: 'left',
+    renderCell: (row: any) => {
+      const isSms = row.source === 'IOS_SMS';
+      const isMerged = row.source === 'MERGED_STREAM';
+      const badgeStyle = isMerged
+        ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+        : isSms
+        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+        : 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+      return (
+        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${badgeStyle}`}>
+          {row.source}
+        </span>
+      );
+    },
+  },
+  {
+    key: 'account_and_bank',
+    label: 'ACCOUNT & BANK',
+    width: '15%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <div className="font-mono text-xs">
+        <div className="text-zinc-200 font-bold">{row.bank_name || 'UNKNOWN BANK'}</div>
+        <div className="text-zinc-500 text-[11px]">•••• {row.account_last4 || '----'}</div>
+      </div>
+    ),
+  },
+  {
+    key: 'merchant_narration',
+    label: 'MERCHANT / NARRATION',
+    width: '24%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <div className="font-mono text-xs max-w-sm truncate" title={row.full_narration || ''}>
+        <span className="text-zinc-200">{row.merchant || row.full_narration || 'Direct Payment'}</span>
+      </div>
+    ),
+  },
+  {
+    key: 'amount',
+    label: 'AMOUNT',
+    width: '10%',
+    align: 'right',
+    isCurrency: true,
+    renderCell: (row: any) => {
+      const amt = parseFloat(String(row.amount || 0));
+      return (
+        <span className="font-mono font-bold text-xs text-zinc-200">
+          ₹{amt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+        </span>
+      );
+    },
+  },
+  {
+    key: 'balance',
+    label: 'AVAIL. BALANCE',
+    width: '10%',
+    align: 'right',
+    isCurrency: true,
+    renderCell: (row: any) => {
+      if (!row.balance) return <span className="text-zinc-600 font-mono text-xs">-</span>;
+      const bal = parseFloat(String(row.balance));
+      return (
+        <span className="font-mono text-xs text-emerald-400">
+          ₹{bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+        </span>
+      );
+    },
+  },
+  {
+    key: 'upi_ref',
+    label: 'UPI REF / RRN',
+    width: '12%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <span className="font-mono text-xs text-zinc-400 select-all">
+        {row.upi_ref || <span className="text-zinc-600">-</span>}
+      </span>
+    ),
+  },
+  {
+    key: 'status',
+    label: 'STATUS',
+    width: '8%',
+    align: 'center',
+    renderCell: (row: any) => {
+      const isMatched = row.status === 'MATCHED_2_WAY';
+      const isDup = row.status === 'DUPLICATE';
+      const badgeStyle = isMatched
+        ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+        : isDup
+        ? 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+        : 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+      return (
+        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${badgeStyle}`}>
+          {row.status}
+        </span>
+      );
+    },
+  },
+  {
+    key: 'created_at',
+    label: 'TXN / INGEST DATE',
+    width: '14%',
+    align: 'left',
+    renderCell: (row: any) => (
+      <div className="font-mono text-[11px] leading-tight flex flex-col">
+        <span className={row.txn_date ? 'text-amber-400 font-semibold' : 'text-zinc-400'}>
+          {row.txn_date ? `Txn: ${row.txn_date}` : 'Txn: Same Day'}
+        </span>
+        <span className="text-zinc-600 text-[10px]">
+          Ingest: {row.created_at ? new Date(row.created_at).toLocaleDateString('en-GB') : '-'}
+        </span>
+      </div>
+    ),
+  },
+];
+
 
 export const STATEMENT_STAGING_COLUMNS: ColumnConfig[] = [
   {

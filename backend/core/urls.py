@@ -33,6 +33,7 @@ urlpatterns = [
     path("api/classification/", include("tracker.classification.urls")),
     path("api/subledgers/", include("tracker.subledgers.urls")),
     path("api/ingest/email/", include("tracker.emailIngest.urls")),
+    # path("api/tracker/inbox/", include("tracker.parsers.parsers_v1.inbox.urls")),
 ]
 
 

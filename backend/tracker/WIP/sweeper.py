@@ -49,6 +49,14 @@ class WIPIngestionSweeper:
 
             for row in staging_queue:
                 row_hash = row.row_identifier
+                if not row_hash:
+                    row_hash = cls.generate_row_hash(
+                        row.raw_statement_date,
+                        row.debit,
+                        row.credit,
+                        row.running_balance,
+                    )
+                    row.row_identifier = row_hash
 
                 if row_hash in existing_wip_hashes:
                     metrics["skipped"] += 1

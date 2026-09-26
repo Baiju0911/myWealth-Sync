@@ -105,6 +105,66 @@ from ..WIP import WIPIngestionSweeper, WIPReconciliationEngine
 #         return HttpResponse(json_payload, content_type="application/json", status=200)
 
 
+# class AutoCategorizeStagingQueueView(APIView):
+#     """
+#     🤖 TIER 1 ISOLATION PROXY ADAPTER
+#     Wraps Tier 1-5 outputs inside expected schema boundaries using high-speed native
+#     JSON streaming to bypass heavy DRF serialization overhead.
+#     """
+
+#     permission_classes = [AllowAny]
+
+#     def post(self, request, *args, **kwargs):
+#         account_id = request.data.get("account_id")
+#         if not account_id:
+#             from rest_framework.response import Response
+
+#             return Response(
+#                 {"error": "Missing parameter tracking field: account_id"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         # 🎯 STEP 1: Execute the sweep harvester loop phase first!
+#         sweep_metrics = WIPIngestionSweeper.execute_sweep(account_context_id=account_id)
+
+#         # 🎯 STEP 2: Run multi-track evaluation matrix engine rules (T1 -> T5 AI)
+#         engine_result = WIPReconciliationEngine.evaluate_account_queue(
+#             account_id=account_id
+#         )
+
+#         workspace_queue = engine_result.get("workspace_queue", [])
+#         total_nodes = len(workspace_queue)
+
+#         # Pull matrix stats calculated by reconciliation engine
+#         matrix_summary_stats = engine_result.get(
+#             "matrix_summary_stats",
+#             {
+#                 "t1_system": {"real": 0, "suspense": 0},
+#                 "t2_internal": {"real": 0, "suspense": 0},
+#                 "t3_layout": {"real": 0, "suspense": 0},
+#                 "t4_rulebook": {"real": 0, "suspense": 0},
+#                 "t5_ai": {"real": 0, "suspense": 0},
+#                 "total_processed": total_nodes,
+#             },
+#         )
+
+#         # Package payload expected by StagingQueueEvaluator frontend
+#         response_data = {
+#             "account_id": account_id,
+#             "sweep_metrics": sweep_metrics,
+#             "evaluation_summary": {
+#                 "staged_for_bulk_high": total_nodes,
+#                 "staged_for_bulk_medium": 0,
+#                 "uncategorized_vault_zero": 0,
+#             },
+#             "workspace_queue": workspace_queue,
+#             "matrix_summary_stats": matrix_summary_stats,
+#         }
+
+#         json_payload = json.dumps(response_data)
+#         return HttpResponse(json_payload, content_type="application/json", status=200)
+
+
 class AutoCategorizeStagingQueueView(APIView):
     """
     🤖 TIER 1 ISOLATION PROXY ADAPTER
@@ -115,10 +175,9 @@ class AutoCategorizeStagingQueueView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
+        #  breakpoint()
         account_id = request.data.get("account_id")
         if not account_id:
-            from rest_framework.response import Response
-
             return Response(
                 {"error": "Missing parameter tracking field: account_id"},
                 status=status.HTTP_400_BAD_REQUEST,
