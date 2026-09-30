@@ -196,6 +196,13 @@ export interface EnrichedAuditRecord {
   live_upi_rrn?: string | null;
   enriched_at?: string | null;
   completed_at?: string | null;
+  match_tier?: string;
+  classification?: {
+    target_account: string;
+    rule_code: string;
+    status: string;
+    user_note?: string;
+  } | null;
   has_warning?: boolean;
   discrepancy_details?: {
     alert_amount?: number | null;
@@ -204,7 +211,6 @@ export interface EnrichedAuditRecord {
     warning_type?: string;
   } | null;
 }
-
 export interface EnrichedAuditListResponse {
   total_count: number;
   results: EnrichedAuditRecord[];

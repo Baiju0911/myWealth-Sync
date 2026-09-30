@@ -290,7 +290,7 @@ export const LiveStreamTab: React.FC<LiveStreamTabProps> = ({
         </div>
       )}
 
-      {/* MODALS */}
+{/* MODALS */}
       {inspectingDonor && (
         <DonorInspectorModal
           payload={inspectingDonor}

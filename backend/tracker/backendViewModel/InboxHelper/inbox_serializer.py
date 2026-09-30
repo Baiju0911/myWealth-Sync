@@ -129,13 +129,17 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
         headers = record.headers_json or {}
         parsed = headers.get("parsed_summary", {}) if isinstance(headers, dict) else {}
 
-        # Safe body content retrieval
+        # 🛡️ Authentic Body Content Priority: Decrypted body -> body_text -> raw snippet
         body_content = (
             getattr(record, "decrypted_body", None)
             or getattr(record, "body_text", None)
             or getattr(record, "body", None)
             or getattr(record, "snippet", None)
-            or parsed.get("full_narration")
+            or (
+                parsed.get("full_narration")
+                if parsed.get("full_narration") != "UPI/REF/Direct Payment"
+                else None
+            )
             or ""
         )
 
@@ -169,12 +173,10 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
             getattr(record, "merchant", None)
             or parsed.get("merchant")
             or headers.get("merge_details", {}).get("resolved_narration")
-            or parsed.get("full_narration")
             or record.subject
             or ""
         )
 
-        # Priority for clean payee name: harvested hint -> cleaned string
         clean_name = harvested.get("payee_hint") or cls.clean_payee_entity(
             raw_merchant or body_content
         )
@@ -189,11 +191,18 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
         return {
             "id": str(record.id),
             "source": record.source or headers.get("source", default_source),
-            "sender": record.sender,
+            "sender": record.sender
+            or getattr(record, "email_from", None)
+            or "SMS Gateway",
             "subject": record.subject or "NO_SUBJECT",
             "raw_body": body_content,
+            "full_narration": body_content
+            or parsed.get("full_narration")
+            or "No raw body preserved.",
             "amount": (
-                record.amount if record.amount is not None else parsed.get("amount")
+                float(record.amount)
+                if record.amount is not None
+                else parsed.get("amount")
             ),
             "balance": harvested.get("balance") or parsed.get("balance"),
             "account_last4": (
@@ -205,9 +214,14 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
             "upi_ref": upi_ref_candidate,
             "status": record.status,
             "created_at": record.created_at.isoformat() if record.created_at else None,
-            "txn_date": harvested.get("txn_date"),
-            "full_narration": parsed.get("full_narration") or body_content,
+            "txn_date": harvested.get("txn_date")
+            or (
+                record.email_date.isoformat()
+                if getattr(record, "email_date", None)
+                else None
+            ),
             "merchant": raw_merchant,
+            "txn_fingerprint": getattr(record, "txn_fingerprint", None),
             "smart_meta": harvested.get("extra_meta", {}),
             # 🎯 Authoritative Backend Logic
             "direction": direction,

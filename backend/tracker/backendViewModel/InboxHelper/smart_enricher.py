@@ -1,6 +1,7 @@
+import logging
 import re
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Tuple
 
 from tracker.constants import (
@@ -8,6 +9,8 @@ from tracker.constants import (
     EnrichmentMetadata,
     SystemDefaults,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SmartPayloadEnricher:
@@ -77,9 +80,19 @@ class SmartPayloadEnricher:
         ):
             resolved_account_last4 = cls._extract_true_account(subj, body)
 
-        # 2. Resolve Amount (with single-digit decimal correction, e.g., .6 -> .60)
-        resolved_amount = existing_amount or parsed.get("amount")
-        if resolved_amount is None or Decimal(str(resolved_amount)) == Decimal("0.00"):
+        # 2. Resolve Amount (with hardened Decimal conversion protection)
+        resolved_amount = None
+        raw_amt_candidate = existing_amount or parsed.get("amount")
+
+        if raw_amt_candidate is not None:
+            try:
+                cand_dec = Decimal(str(raw_amt_candidate).strip().replace(",", ""))
+                if cand_dec != Decimal("0.00"):
+                    resolved_amount = cand_dec
+            except (InvalidOperation, TypeError, ValueError):
+                resolved_amount = None
+
+        if resolved_amount is None:
             extracted_amt = cls._extract_smart_amount(body, subj)
             if extracted_amt is not None:
                 resolved_amount = extracted_amt
@@ -151,30 +164,61 @@ class SmartPayloadEnricher:
 
     @classmethod
     def _extract_smart_amount(cls, body: str, subject: str) -> Optional[Decimal]:
-        # Handle Loan Intimation
+        """
+        Safely extracts currency amounts from plain text.
+        Guarantees protection against InvalidOperation: [<class 'decimal.ConversionSyntax'>].
+        """
+
+        def _safe_to_decimal(val_str: str) -> Optional[Decimal]:
+            if not val_str:
+                return None
+            try:
+                # 1. Strip commas, currency marks, whitespace
+                cleaned = str(val_str).strip().replace(",", "")
+                cleaned = re.sub(r"[^\d.-]", "", cleaned)
+
+                if not cleaned or cleaned in {".", "-", "-.", ".-"}:
+                    return None
+
+                # 2. Guard against multiple decimal dots
+                if cleaned.count(".") > 1:
+                    parts = cleaned.split(".")
+                    cleaned = "".join(parts[:-1]) + "." + parts[-1]
+
+                dec = Decimal(cleaned)
+
+                # 3. Handle single-digit decimal notation (e.g., 6283.6 -> 6283.60)
+                if "." in cleaned and len(cleaned.split(".")[1]) == 1:
+                    dec = Decimal(f"{cleaned}0")
+
+                return dec
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+
+        # A. Handle Loan Intimation
         loan_match = cls.LOAN_OPENED_PATTERN.search(body)
         if loan_match:
-            raw_amt = loan_match.group(2).replace(",", "")
-            return Decimal(raw_amt)
+            dec = _safe_to_decimal(loan_match.group(2))
+            if dec is not None:
+                return dec
 
-        # Handle Term Deposit Closure Row
+        # B. Handle Term Deposit Closure Row
         td_match = cls.TD_TABLE_PATTERN.search(body)
         if td_match and td_match.group(4):
-            return Decimal(td_match.group(4).replace(",", ""))
+            dec = _safe_to_decimal(td_match.group(4))
+            if dec is not None:
+                return dec
 
-        # Standard INR Amount Regex with single-digit decimal protection
+        # C. Standard INR Amount Regex
         amt_match = re.search(
             r"(?:INR|RS\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)",
             body,
             re.IGNORECASE,
         )
         if amt_match:
-            amt_str = amt_match.group(1).replace(",", "")
-            dec = Decimal(amt_str)
-            # If formatted like 6283.6, treat as 6283.60
-            if "." in amt_str and len(amt_str.split(".")[1]) == 1:
-                dec = Decimal(f"{amt_str}0")
-            return dec
+            dec = _safe_to_decimal(amt_match.group(1))
+            if dec is not None:
+                return dec
 
         return None
 
@@ -214,7 +258,6 @@ class SmartPayloadEnricher:
     @classmethod
     def _extract_payee_hint(cls, body: str) -> Optional[str]:
         """Extracts payee entity or flags self/internal transfers."""
-        # e.g., Info - MOB/507710983141/self/IMPS
         if re.search(r"/(?:self|own account)/", body, re.IGNORECASE):
             return "Self Transfer"
         return None

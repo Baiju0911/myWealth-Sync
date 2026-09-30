@@ -6,7 +6,12 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from tracker.models import DocumentInboxItem, StatementStagingLine, RawEmailPayload
+from tracker.models import (
+    DocumentInboxItem,
+    StatementStagingLine,
+    RawEmailPayload,
+    JournalEntry,
+)
 from tracker.constants import (
     EnrichmentMetadata,
     SystemDefaults,
@@ -224,16 +229,27 @@ class EnrichedReconciliationAuditView(APIView):
         stmt_records = list(stmt_qs[:limit])
 
         payload_id_map = {}
+        row_identifiers = []
         for line in stmt_records:
             meta = line.live_metadata or {}
             raw_id = meta.get("raw_payload_id")
             if raw_id:
                 payload_id_map[line.id] = str(raw_id).strip()
+            if line.row_identifier:
+                row_identifiers.append(line.row_identifier)
 
         raw_ids = list(set(payload_id_map.values()))
         donor_payloads = {
             str(p.id): p for p in RawEmailPayload.objects.filter(id__in=raw_ids)
         }
+
+        # Bulk fetch counter legs for auto-sweep classification footprint
+        counter_legs = {}
+        if row_identifiers:
+            for je in JournalEntry.objects.filter(
+                row_identifier__in=row_identifiers
+            ).select_related("account"):
+                counter_legs[je.row_identifier] = je
 
         results = []
         for line in stmt_records:
@@ -249,11 +265,66 @@ class EnrichedReconciliationAuditView(APIView):
                 or SystemDefaults.BANK.value
             )
 
+            # Build classification footprint if journal leg exists
+            je_leg = counter_legs.get(line.row_identifier)
+            classification_data = None
+            if je_leg:
+                snap = je_leg.evaluation_matrix_snapshot or {}
+                cat = (
+                    snap.get("resolved_category")
+                    or (
+                        je_leg.account.category
+                        if hasattr(je_leg.account, "category")
+                        else None
+                    )
+                    or "Node 99"
+                )
+                subcat = (
+                    snap.get("resolved_subcategory")
+                    or (
+                        je_leg.account.subcategory
+                        if hasattr(je_leg.account, "subcategory")
+                        else None
+                    )
+                    or "Suspense"
+                )
+                rule_code = snap.get("applied_rule_code") or "AUTO_SWEEP_INITIAL"
+                classification_data = {
+                    "target_account": f"{cat} > {subcat}",
+                    "rule_code": rule_code,
+                    "status": getattr(je_leg, "classification_status", "PARKED"),
+                    "user_note": snap.get("user_note", ""),
+                }
+
+            # 🛡️ Authoritative Payee Resolution
+            resolved_merchant = (
+                meta.get("merchant")
+                or (donor.merchant if donor else None)
+                or meta.get("resolved_narration")
+                or EnrichmentMetadata.DEFAULT_MERCHANT
+            )
+
+            clean_remark = meta.get("remark")
+            synthesized_narration = meta.get("resolved_narration")
+            if not synthesized_narration:
+                synthesized_narration = (
+                    f"{resolved_merchant} ({clean_remark})"
+                    if clean_remark
+                    else resolved_merchant
+                )
+
             results.append(
                 {
                     "statement_id": str(line.id),
                     "statement_date": line.raw_statement_date.isoformat(),
                     "statement_amount": float(line.amount),
+                    "running_balance": (
+                        float(line.running_balance)
+                        if line.running_balance is not None
+                        else None
+                    ),
+                    "debit": float(line.debit) if line.debit is not None else None,
+                    "credit": float(line.credit) if line.credit is not None else None,
                     "raw_narration": meta.get("original_narration") or line.narration,
                     "account_last4": (
                         line.account.account_number[-4:]
@@ -261,26 +332,50 @@ class EnrichedReconciliationAuditView(APIView):
                         else SystemDefaults.EMPTY_STRING.value
                     ),
                     "bank_name": resolved_bank_name,
-                    "payload_id": donor_id,
+                    "payload_id": meta.get("raw_payload_id") or donor_id,
                     "stream_source": (
                         donor.source
                         if donor
                         else meta.get("source", EnrichmentMetadata.DEFAULT_SOURCE)
                     ),
-                    "resolved_merchant": (
-                        donor.merchant
-                        if donor
-                        else meta.get("merchant", EnrichmentMetadata.DEFAULT_MERCHANT)
+                    "resolved_merchant": resolved_merchant,
+                    "remark": clean_remark,
+                    "resolved_narration": synthesized_narration,
+                    "live_upi_rrn": (
+                        line.live_upi_rrn
+                        or (donor.upi_ref if donor else None)
+                        or SystemDefaults.DASH.value
                     ),
-                    "live_upi_rrn": line.live_upi_rrn
-                    or (donor.upi_ref if donor else None)
-                    or SystemDefaults.DASH.value,
                     "enriched_at": meta.get("enriched_at"),
                     "completed_at": (
                         donor.completed_at.isoformat()
                         if (donor and donor.completed_at)
                         else None
                     ),
+                    "match_tier": meta.get(
+                        "matched_tier",
+                        (
+                            "TIER 1 (RRN Exact Match)"
+                            if line.live_upi_rrn
+                            else "TIER 2 (Hex Fingerprint)"
+                        ),
+                    ),
+                    "donor_raw_snippet": (
+                        meta.get("donor_raw_snippet")
+                        or (
+                            donor.snippet
+                            if donor and hasattr(donor, "snippet")
+                            else None
+                        )
+                        or (
+                            donor.body_text[:120]
+                            if donor and hasattr(donor, "body_text") and donor.body_text
+                            else None
+                        )
+                        or (donor.subject if donor else None)
+                    ),
+                    "routing_status": getattr(line, "routing_status", "PENDING"),
+                    "classification": classification_data,
                     "has_warning": meta.get("has_amount_discrepancy", False),
                     "discrepancy_details": meta.get("discrepancy_details"),
                 }

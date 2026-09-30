@@ -251,7 +251,9 @@ class LiveStreamEnrichmentService:
             )
 
         # 7. Retire Companion Duplicates
-        companion_retired_count = cls._retire_companion_duplicates(now_ts)
+        companion_retired_count = cls._retire_companion_duplicates(
+            now_ts, bank_name_to_id
+        )
 
         return {
             "enriched_count": enriched_count,
@@ -428,15 +430,34 @@ class LiveStreamEnrichmentService:
             candidate_donor_merchant=donor_merchant,
         )
 
+        tier_label = (
+            "TIER 1 (RRN Exact Match)" if extracted_ref else "TIER 2 (Hex Fingerprint)"
+        )
+
+        donor_snippet = (
+            getattr(payload, "snippet", None) or getattr(payload, "subject", None) or ""
+        )
+
+        # 🔍 Extract optional remark/context (e.g., 'WIFE' from '.../SUMEE S/WIFE')
+        remark = None
+        narration_str = target_line.narration or ""
+        if narration_str.count("/") >= 4:
+            candidate_remark = narration_str.split("/")[-1].strip()
+            if candidate_remark.upper() not in {"NO REMARK", "NO REMAR", ""}:
+                remark = candidate_remark
+
         current_meta.update(
             {
                 "hash_val": matched_hash or current_meta.get("hash_val"),
                 "raw_payload_id": str(payload.id),
                 "source": payload.source or EnrichmentMetadata.DEFAULT_SOURCE,
                 "merchant": final_merchant,
+                "remark": remark,
+                "matched_tier": tier_label,
+                "donor_raw_snippet": donor_snippet[:200],
                 "enriched_at": now_ts.isoformat(),
                 "original_narration": target_line.narration,
-                "resolved_narration": final_merchant,
+                "resolved_narration": f"{final_merchant}{f' ({remark})' if remark else ''}",
                 "has_amount_discrepancy": has_amount_discrepancy,
                 "smart_extra_meta": harvested.get("extra_meta"),
                 "discrepancy_details": (
@@ -455,6 +476,7 @@ class LiveStreamEnrichmentService:
                 ),
             }
         )
+
         target_line.live_metadata = current_meta
 
         # Synchronize raw email payload
@@ -485,52 +507,222 @@ class LiveStreamEnrichmentService:
                 "is_enriched": True,
                 "enriched_at": now_ts.isoformat(),
                 "matched_staging_line_id": str(target_line.id),
+                "resolved_payee": final_merchant,
+                "remark": remark,
                 "has_amount_discrepancy": has_amount_discrepancy,
                 "smart_extra_meta": harvested.get("extra_meta"),
             }
         )
         payload.staging_payload = stg_dict
 
+    # @classmethod
+    # def _retire_companion_duplicates(cls, now_ts) -> int:
+    #     all_enriched_rrns = set(
+    #         StatementStagingLine.objects.filter(
+    #             is_enriched_from_live=1,
+    #             live_upi_rrn__isnull=False,
+    #         )
+    #         .exclude(live_upi_rrn="")
+    #         .values_list("live_upi_rrn", flat=True)
+    #     )
+
+    #     if not all_enriched_rrns:
+    #         return 0
+
+    #     staged_companions = RawEmailPayload.objects.filter(
+    #         status=PayloadStatus.STAGED.value,
+    #         is_completed=0,
+    #         upi_ref__in=all_enriched_rrns,
+    #     )
+
+    #     companion_updates = []
+    #     for comp in staged_companions:
+    #         comp.status = PayloadStatus.DUPLICATE_RETIRED.value
+    #         comp.is_completed = 1
+    #         comp.is_staged_for_matching = 0
+    #         comp.completed_at = now_ts
+    #         comp.processed_at = now_ts
+
+    #         stg_dict = (
+    #             comp.staging_payload if isinstance(comp.staging_payload, dict) else {}
+    #         )
+    #         stg_dict.update(
+    #             {
+    #                 "match_status": StagingMatchStatus.DUPLICATE_COMPANION_RETIRED.value,
+    #                 "retirement_reason": EnrichmentMetadata.COMPANION_RETIREMENT_REASON,
+    #                 "retired_at": now_ts.isoformat(),
+    #             }
+    #         )
+    #         comp.staging_payload = stg_dict
+    #         companion_updates.append(comp)
+
+    #     if companion_updates:
+    #         RawEmailPayload.objects.bulk_update(
+    #             companion_updates,
+    #             [
+    #                 "status",
+    #                 "is_completed",
+    #                 "is_staged_for_matching",
+    #                 "completed_at",
+    #                 "processed_at",
+    #                 "staging_payload",
+    #             ],
+    #             batch_size=MatchingRules.BULK_UPDATE_BATCH_SIZE,
+    #         )
+    #     return len(companion_updates)
+
     @classmethod
-    def _retire_companion_duplicates(cls, now_ts) -> int:
-        all_enriched_rrns = set(
-            StatementStagingLine.objects.filter(
-                is_enriched_from_live=1,
-                live_upi_rrn__isnull=False,
+    def _retire_companion_duplicates(
+        cls, now_ts, bank_name_to_id: Dict[str, int]
+    ) -> int:
+        """
+        Retires twin alerts (e.g., IOS_SMS matching GMAIL_API) across both RRN anchors
+        and deterministic collision hashes (Date + Bank + Account Last4 + Amount).
+        Synchronizes matched statement line context and marks both rows enriched.
+        """
+        # 1. Fetch all actively enriched statement lines
+        enriched_statement_lines = (
+            StatementStagingLine.objects.filter(is_enriched_from_live=1)
+            .select_related("account", "bank", "account__bank")
+            .only(
+                "id",
+                "live_upi_rrn",
+                "cheque_ref_number",
+                "narration",
+                "raw_statement_date",
+                "amount",
+                "live_metadata",
+                "bank_id",
+                "account__bank_id",
+                "account__account_number",
             )
-            .exclude(live_upi_rrn="")
-            .values_list("live_upi_rrn", flat=True)
         )
 
-        if not all_enriched_rrns:
+        if not enriched_statement_lines:
             return 0
 
-        staged_companions = RawEmailPayload.objects.filter(
-            status=PayloadStatus.STAGED.value,
-            is_completed=0,
-            upi_ref__in=all_enriched_rrns,
+        # Build dual lookup tables: RRN map and Hexa Collision Hash map
+        rrn_to_line = {}
+        hash_to_line = {}
+
+        for line in enriched_statement_lines:
+            # Anchor 1: UPI RRN / Cheque ref
+            clean_rrn = str(line.live_upi_rrn or line.cheque_ref_number or "").strip()
+            if clean_rrn:
+                rrn_to_line[clean_rrn] = line
+
+            # Anchor 2: Hexa Hash from statement line
+            acc_num = line.account.account_number if line.account else ""
+            line_bank_id = line.bank_id or (
+                line.account.bank_id if line.account else None
+            )
+            bank_key = str(line_bank_id) if line_bank_id is not None else ""
+
+            line_hash = generate_live_collision_hash(
+                date_val=line.raw_statement_date,
+                bank_val=bank_key,
+                account_last4=acc_num[-4:] if acc_num else "",
+                amount_val=line.amount,
+            )
+            if line_hash:
+                hash_to_line[line_hash] = line
+
+        # 2. Query remaining STAGED candidate payloads
+        staged_candidates = list(
+            RawEmailPayload.objects.filter(
+                status=PayloadStatus.STAGED.value,
+                is_completed=0,
+            )
         )
 
         companion_updates = []
-        for comp in staged_companions:
-            comp.status = PayloadStatus.DUPLICATE_RETIRED.value
-            comp.is_completed = 1
-            comp.is_staged_for_matching = 0
-            comp.completed_at = now_ts
-            comp.processed_at = now_ts
+        for comp in staged_candidates:
+            matched_line = None
 
-            stg_dict = (
-                comp.staging_payload if isinstance(comp.staging_payload, dict) else {}
-            )
-            stg_dict.update(
-                {
-                    "match_status": StagingMatchStatus.DUPLICATE_COMPANION_RETIRED.value,
-                    "retirement_reason": EnrichmentMetadata.COMPANION_RETIREMENT_REASON,
-                    "retired_at": now_ts.isoformat(),
-                }
-            )
-            comp.staging_payload = stg_dict
-            companion_updates.append(comp)
+            # Check 1: RRN match
+            clean_comp_ref = str(comp.upi_ref or "").strip()
+            if clean_comp_ref and clean_comp_ref in rrn_to_line:
+                matched_line = rrn_to_line[clean_comp_ref]
+
+            # Check 2: Hexa Hash match (handles non-RRN transactions: POS, NEFT, ATM, etc.)
+            if not matched_line and comp.amount is not None:
+                comp_bank_key = cls._resolve_bank_key(comp, bank_name_to_id)
+                comp_acc_last4 = str(comp.account_last4 or "")[-4:]
+
+                # Resolve execution date or delivery date
+                comp_date = None
+                if comp.staging_payload and isinstance(comp.staging_payload, dict):
+                    raw_txn_date = comp.staging_payload.get("txn_date")
+                    if raw_txn_date:
+                        try:
+                            comp_date = datetime.strptime(
+                                raw_txn_date, "%d-%m-%Y"
+                            ).date()
+                        except Exception:
+                            pass
+                if not comp_date:
+                    comp_date = (
+                        comp.email_date.date()
+                        if comp.email_date
+                        else (comp.created_at.date() if comp.created_at else None)
+                    )
+
+                if comp_date:
+                    for offset in MatchingRules.HOLIDAY_DAY_OFFSETS:
+                        h = generate_live_collision_hash(
+                            date_val=comp_date + timedelta(days=offset),
+                            bank_val=comp_bank_key,
+                            account_last4=comp_acc_last4,
+                            amount_val=comp.amount,
+                        )
+                        if h in hash_to_line:
+                            matched_line = hash_to_line[h]
+                            break
+
+            # If matched via RRN or Hexa Hash, synchronize and retire
+            if matched_line:
+                parent_meta = (
+                    matched_line.live_metadata
+                    if isinstance(matched_line.live_metadata, dict)
+                    else {}
+                )
+                resolved_merchant = (
+                    parent_meta.get("merchant")
+                    or parent_meta.get("resolved_narration")
+                    or EnrichmentMetadata.DEFAULT_MERCHANT
+                )
+
+                comp.status = PayloadStatus.DUPLICATE_RETIRED.value
+                comp.is_completed = 1
+                comp.is_staged_for_matching = 0
+                comp.completed_at = now_ts
+                comp.processed_at = now_ts
+
+                stg_dict = (
+                    comp.staging_payload
+                    if isinstance(comp.staging_payload, dict)
+                    else {}
+                )
+                stg_dict.update(
+                    {
+                        "match_status": StagingMatchStatus.DUPLICATE_COMPANION_RETIRED.value,
+                        "retirement_reason": EnrichmentMetadata.COMPANION_RETIREMENT_REASON,
+                        "retired_at": now_ts.isoformat(),
+                        "is_enriched": True,
+                        "enriched": "YES",
+                        "enriched_at": now_ts.isoformat(),
+                        "matched_staging_line_id": str(matched_line.id),
+                        "resolved_payee": resolved_merchant,
+                        "twin_source": parent_meta.get("source"),
+                        "matched_via": (
+                            "HEXA_HASH"
+                            if not (clean_comp_ref and clean_comp_ref in rrn_to_line)
+                            else "RRN"
+                        ),
+                    }
+                )
+                comp.staging_payload = stg_dict
+                companion_updates.append(comp)
 
         if companion_updates:
             RawEmailPayload.objects.bulk_update(
@@ -545,4 +737,5 @@ class LiveStreamEnrichmentService:
                 ],
                 batch_size=MatchingRules.BULK_UPDATE_BATCH_SIZE,
             )
+
         return len(companion_updates)
