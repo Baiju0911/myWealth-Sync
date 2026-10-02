@@ -78,7 +78,7 @@ export const EvaluationTierCellRenderer: React.FC<EvaluationTierCellProps> = ({ 
 
   const modalContent = isOpen ? (
     <div 
-      className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+      className="fixed inset-0 z-9999 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
       onClick={() => setIsOpen(false)}
     >
       <div 
@@ -244,7 +244,7 @@ export const EvaluationTierCellRenderer: React.FC<EvaluationTierCellProps> = ({ 
       >
         <span className="font-bold uppercase text-[9px] tracking-wide">{winnerTag}</span>
         <span className="opacity-40">›</span>
-        <span className="truncate max-w-[120px] text-[10px] font-medium">{winnerCategory}</span>
+        <span className="truncate max-w-30 text-[10px] font-medium">{winnerCategory}</span>
       </button>
 
       {modalContent && typeof document !== 'undefined' && createPortal(modalContent, document.body)}

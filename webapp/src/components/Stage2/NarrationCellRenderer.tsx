@@ -72,7 +72,7 @@ export const NarrationCellRenderer: React.FC<NarrationCellProps> = ({ row }) => 
         {cleanRemark && (
           <span 
             title={cleanRemark}
-            className="px-1.5 py-0.2 text-[8px] font-mono rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/50 uppercase tracking-tight max-w-[120px] truncate"
+            className="px-1.5 py-0.2 text-[8px] font-mono rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/50 uppercase tracking-tight max-w-30 truncate"
           >
             {cleanRemark}
           </span>
