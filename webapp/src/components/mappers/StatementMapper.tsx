@@ -373,7 +373,7 @@ export default function StatementMapper() {
                     <div className="w-full overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2">
                       <div 
                         ref={canvasRef} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeaveCanvas}
-                        className="relative p-4 py-6 min-h-[350px] font-mono text-[11px] select-none cursor-crosshair"
+                        className="relative p-4 py-6 min-h-87.5 font-mono text-[11px] select-none cursor-crosshair"
                         style={{ width: '1300px', minWidth: '1300px' }}
                       >
                         {/* Vertical slicing tracking lines on Canvas */}

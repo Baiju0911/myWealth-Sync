@@ -438,13 +438,29 @@ class LiveStreamEnrichmentService:
             getattr(payload, "snippet", None) or getattr(payload, "subject", None) or ""
         )
 
-        # 🔍 Extract optional remark/context (e.g., 'WIFE' from '.../SUMEE S/WIFE')
-        remark = None
-        narration_str = target_line.narration or ""
-        if narration_str.count("/") >= 4:
-            candidate_remark = narration_str.split("/")[-1].strip()
-            if candidate_remark.upper() not in {"NO REMARK", "NO REMAR", ""}:
-                remark = candidate_remark
+        # 🔍 Prioritize harvested remark hint ("Bill Payment", "Fuel", etc.), fallback to statement narration
+        remark = harvested.get("remark_hint")
+        if not remark:
+            narration_str = target_line.narration or ""
+            if narration_str.count("/") >= 4:
+                candidate_remark = narration_str.split("/")[-1].strip()
+                if candidate_remark.upper() not in {"NO REMARK", "NO REMAR", ""}:
+                    remark = candidate_remark
+
+        # Clean generic remark leftovers
+        if remark and remark.upper() in {
+            "NO REMARK",
+            "NO REMAR",
+            "UPI",
+            "IMPS",
+            "NEFT",
+        }:
+            remark = None
+
+        # Build synthesized resolved narration
+        synthesized_narration = (
+            f"{final_merchant} ({remark})" if remark else final_merchant
+        )
 
         current_meta.update(
             {
@@ -457,7 +473,7 @@ class LiveStreamEnrichmentService:
                 "donor_raw_snippet": donor_snippet[:200],
                 "enriched_at": now_ts.isoformat(),
                 "original_narration": target_line.narration,
-                "resolved_narration": f"{final_merchant}{f' ({remark})' if remark else ''}",
+                "resolved_narration": synthesized_narration,
                 "has_amount_discrepancy": has_amount_discrepancy,
                 "smart_extra_meta": harvested.get("extra_meta"),
                 "discrepancy_details": (
@@ -465,11 +481,16 @@ class LiveStreamEnrichmentService:
                         "alert_amount": (
                             float(harvested["amount"])
                             if harvested.get("amount") is not None
-                            else None
+                            else (
+                                float(payload.amount)
+                                if payload.amount is not None
+                                else None
+                            )
                         ),
                         "statement_amount": float(target_line.amount),
                         "variance": float(amount_variance),
                         "warning_type": EnrichmentMetadata.WARNING_TYPE_PAISE_DELTA,
+                        "raw_snippet": donor_snippet[:120],
                     }
                     if has_amount_discrepancy
                     else None
@@ -510,66 +531,21 @@ class LiveStreamEnrichmentService:
                 "resolved_payee": final_merchant,
                 "remark": remark,
                 "has_amount_discrepancy": has_amount_discrepancy,
+                "discrepancy_details": (
+                    {
+                        "alert_amount": (
+                            float(payload.amount) if payload.amount else None
+                        ),
+                        "statement_amount": float(target_line.amount),
+                        "variance": float(amount_variance),
+                    }
+                    if has_amount_discrepancy
+                    else None
+                ),
                 "smart_extra_meta": harvested.get("extra_meta"),
             }
         )
         payload.staging_payload = stg_dict
-
-    # @classmethod
-    # def _retire_companion_duplicates(cls, now_ts) -> int:
-    #     all_enriched_rrns = set(
-    #         StatementStagingLine.objects.filter(
-    #             is_enriched_from_live=1,
-    #             live_upi_rrn__isnull=False,
-    #         )
-    #         .exclude(live_upi_rrn="")
-    #         .values_list("live_upi_rrn", flat=True)
-    #     )
-
-    #     if not all_enriched_rrns:
-    #         return 0
-
-    #     staged_companions = RawEmailPayload.objects.filter(
-    #         status=PayloadStatus.STAGED.value,
-    #         is_completed=0,
-    #         upi_ref__in=all_enriched_rrns,
-    #     )
-
-    #     companion_updates = []
-    #     for comp in staged_companions:
-    #         comp.status = PayloadStatus.DUPLICATE_RETIRED.value
-    #         comp.is_completed = 1
-    #         comp.is_staged_for_matching = 0
-    #         comp.completed_at = now_ts
-    #         comp.processed_at = now_ts
-
-    #         stg_dict = (
-    #             comp.staging_payload if isinstance(comp.staging_payload, dict) else {}
-    #         )
-    #         stg_dict.update(
-    #             {
-    #                 "match_status": StagingMatchStatus.DUPLICATE_COMPANION_RETIRED.value,
-    #                 "retirement_reason": EnrichmentMetadata.COMPANION_RETIREMENT_REASON,
-    #                 "retired_at": now_ts.isoformat(),
-    #             }
-    #         )
-    #         comp.staging_payload = stg_dict
-    #         companion_updates.append(comp)
-
-    #     if companion_updates:
-    #         RawEmailPayload.objects.bulk_update(
-    #             companion_updates,
-    #             [
-    #                 "status",
-    #                 "is_completed",
-    #                 "is_staged_for_matching",
-    #                 "completed_at",
-    #                 "processed_at",
-    #                 "staging_payload",
-    #             ],
-    #             batch_size=MatchingRules.BULK_UPDATE_BATCH_SIZE,
-    #         )
-    #     return len(companion_updates)
 
     @classmethod
     def _retire_companion_duplicates(

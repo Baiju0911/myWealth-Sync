@@ -15,7 +15,9 @@ from .models.models import (
     MasterFinancialCategory,
     AccountingRule,
     JournalEntryMapping,
+    StatementStagingLine,
 )
+from tracker.parsers.universal_narration import UniversalNarrationExtractor
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -192,6 +194,58 @@ class AccountingRuleAdminSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class StatementStagingLineSerializer(serializers.ModelSerializer):
+    """
+    Authoritative serializer for StatementStagingLine across:
+    - Stage 1: Enriched Audit Matrix & Staged Modals
+    - Stage 2: WIP Auto-Clearance Validation Desk
+    - Stage 3: Categorization & Sweeper Workbenches
+    """
+
+    parsed_narration = serializers.SerializerMethodField()
+    display_payee = serializers.SerializerMethodField()
+    display_remark = serializers.SerializerMethodField()
+    detected_rail = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StatementStagingLine
+        fields = [
+            "id",
+            "account_id",
+            "bank_id",
+            "raw_statement_date",
+            "narration",
+            "cheque_ref_number",
+            "amount",
+            "running_balance",
+            "debit",
+            "credit",
+            "bank_transaction_id",
+            "transaction_type",
+            "routing_status",
+            "is_enriched_from_live",
+            "live_upi_rrn",
+            "live_metadata",
+            # Standardized universal narration package
+            "parsed_narration",
+            "display_payee",
+            "display_remark",
+            "detected_rail",
+        ]
+
+    def get_parsed_narration(self, obj) -> dict:
+        return UniversalNarrationExtractor.resolve_from_staging_line(obj)
+
+    def get_display_payee(self, obj) -> str:
+        return self.get_parsed_narration(obj).get("suggested_payee") or obj.narration
+
+    def get_display_remark(self, obj) -> str | None:
+        return self.get_parsed_narration(obj).get("suggested_remark")
+
+    def get_detected_rail(self, obj) -> str:
+        return self.get_parsed_narration(obj).get("detected_rail", "BANK_TRANSFER")
 
 
 # import decimal

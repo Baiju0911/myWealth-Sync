@@ -752,6 +752,35 @@ class StatementStagingLine(models.Model):
             else None
         )
 
+    @property
+    def parsed_narration(self) -> dict:
+        """
+        Non-destructive narration decomposition merged with live telemetry.
+        Cached on the instance lifecycle to avoid redundant regex passes.
+        """
+        if not hasattr(self, "_cached_parsed_narration"):
+            from tracker.parsers.universal_narration import UniversalNarrationExtractor
+
+            self._cached_parsed_narration = (
+                UniversalNarrationExtractor.resolve_from_staging_line(self)
+            )
+        return self._cached_parsed_narration
+
+    @property
+    def display_payee(self) -> str:
+        """Convenience accessor for primary entity title."""
+        return self.parsed_narration.get("suggested_payee") or self.narration
+
+    @property
+    def display_remark(self) -> str | None:
+        """Convenience accessor for extracted remark / context."""
+        return self.parsed_narration.get("suggested_remark")
+
+    @property
+    def detected_rail(self) -> str:
+        """Convenience accessor for payment rail (UPI, IMPS, NEFT, ATM, etc.)."""
+        return self.parsed_narration.get("detected_rail", "BANK_TRANSFER")
+
 
 class StatementIngestRegistry(models.Model):
     objects = BulkAuditManager()

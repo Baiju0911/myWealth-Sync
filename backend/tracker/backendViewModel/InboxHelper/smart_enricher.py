@@ -12,6 +12,37 @@ from tracker.constants import (
 
 logger = logging.getLogger(__name__)
 
+GENERIC_PAYEE_BLACKLIST = {
+    "DIRECT PAYMENT",
+    "DIRECT_PAYMENT",
+    "UNKNOWN",
+    "PAYMENT",
+    "UPI",
+    "TRANSFER",
+    "INFO",
+    "UNCLASSIFIED",
+    "NO REMARK",
+    "NO REMAR",
+    "NO REMARKS",
+    "IMPS",
+    "NEFT",
+    "RTGS",
+    "MOB",
+}
+
+GENERIC_REMARKS_BLACKLIST = {
+    "NO REMARK",
+    "NO REMAR",
+    "NO REMARKS",
+    "UPI",
+    "IMPS",
+    "NEFT",
+    "RTGS",
+    "INFO",
+    "MOB",
+    "DIRECT PAYMENT",
+}
+
 
 class SmartPayloadEnricher:
     """
@@ -71,7 +102,7 @@ class SmartPayloadEnricher:
         headers = headers_json if isinstance(headers_json, dict) else {}
         parsed = headers.get("parsed_summary", {}) if isinstance(headers, dict) else {}
 
-        # 1. Resolve true Account Last 4 (avoid password sample footers)
+        # 1. Resolve true Account Last 4
         resolved_account_last4 = existing_account_last4 or parsed.get("account")
         if (
             not resolved_account_last4
@@ -80,7 +111,7 @@ class SmartPayloadEnricher:
         ):
             resolved_account_last4 = cls._extract_true_account(subj, body)
 
-        # 2. Resolve Amount (with hardened Decimal conversion protection)
+        # 2. Resolve Amount (preserves exact fractional paise like 6283.6 -> 6283.60)
         resolved_amount = None
         raw_amt_candidate = existing_amount or parsed.get("amount")
 
@@ -107,15 +138,19 @@ class SmartPayloadEnricher:
         if not resolved_ref and body:
             resolved_ref = cls._extract_smart_reference(body)
 
-        # 4. Resolve Balance & Term Deposit Metadata
+        # 4. Extract Merchant, User Remark & Reference from Narration / Body Info
+        entity_info = cls._extract_entity_and_remark(body, parsed.get("full_narration"))
+        payee_hint = entity_info.get("merchant")
+        remark_hint = entity_info.get("remark")
+        if not resolved_ref and entity_info.get("ref"):
+            resolved_ref = entity_info.get("ref")
+
+        # 5. Resolve Balance & Term Deposit Metadata
         extracted_balance = cls._extract_balance(body) or parsed.get("balance")
         td_meta = cls._extract_term_deposit_metadata(body)
 
-        # 5. Resolve Bank Transaction Date ("On Date")
+        # 6. Resolve Bank Transaction Date ("On Date")
         bank_txn_date = cls._extract_bank_txn_date(body)
-
-        # 6. Resolve Merchant / Beneficiary hint
-        payee_hint = cls._extract_payee_hint(body)
 
         return {
             "amount": resolved_amount,
@@ -124,12 +159,12 @@ class SmartPayloadEnricher:
             "balance": extracted_balance,
             "txn_date": bank_txn_date,
             "payee_hint": payee_hint,
+            "remark_hint": remark_hint,
             "extra_meta": td_meta,
         }
 
     @classmethod
     def _extract_true_account(cls, subject: str, body: str) -> Optional[str]:
-        # Strip out email password example footers before checking body
         cleaned_body = re.split(
             r"How to open the statement|Example Customer Name:",
             body,
@@ -142,7 +177,7 @@ class SmartPayloadEnricher:
             digits = subj_match.group(1)
             return digits[-4:] if len(digits) >= 4 else digits
 
-        # Priority B: Term Deposit Table Account Number (e.g. 0624101000001974 -> 1974)
+        # Priority B: Term Deposit Table Account Number
         td_match = cls.TD_TABLE_PATTERN.search(cleaned_body)
         if td_match:
             acc_num = td_match.group(1)
@@ -166,28 +201,26 @@ class SmartPayloadEnricher:
     def _extract_smart_amount(cls, body: str, subject: str) -> Optional[Decimal]:
         """
         Safely extracts currency amounts from plain text.
-        Guarantees protection against InvalidOperation: [<class 'decimal.ConversionSyntax'>].
+        Guarantees protection against InvalidOperation while preserving fractional paise.
         """
 
         def _safe_to_decimal(val_str: str) -> Optional[Decimal]:
             if not val_str:
                 return None
             try:
-                # 1. Strip commas, currency marks, whitespace
                 cleaned = str(val_str).strip().replace(",", "")
                 cleaned = re.sub(r"[^\d.-]", "", cleaned)
 
                 if not cleaned or cleaned in {".", "-", "-.", ".-"}:
                     return None
 
-                # 2. Guard against multiple decimal dots
                 if cleaned.count(".") > 1:
                     parts = cleaned.split(".")
                     cleaned = "".join(parts[:-1]) + "." + parts[-1]
 
                 dec = Decimal(cleaned)
 
-                # 3. Handle single-digit decimal notation (e.g., 6283.6 -> 6283.60)
+                # Preserve single decimal digit precision (e.g., 6283.6 -> 6283.60)
                 if "." in cleaned and len(cleaned.split(".")[1]) == 1:
                     dec = Decimal(f"{cleaned}0")
 
@@ -209,7 +242,7 @@ class SmartPayloadEnricher:
             if dec is not None:
                 return dec
 
-        # C. Standard INR Amount Regex
+        # C. Standard INR Amount Regex with full decimal capture
         amt_match = re.search(
             r"(?:INR|RS\.?|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)",
             body,
@@ -221,6 +254,116 @@ class SmartPayloadEnricher:
                 return dec
 
         return None
+
+    @classmethod
+    def _extract_entity_and_remark(
+        cls, body: str, full_narration: Optional[str] = None
+    ) -> Dict[str, Optional[str]]:
+        """
+        Extracts clean merchant, user remark, and rail reference across
+        UPI, IMPS, NEFT, and MOB streams.
+        """
+        raw_text = full_narration or body or ""
+        text = raw_text.strip()
+
+        # Check self transfer pattern
+        if re.search(r"/(?:self|own account)/", text, re.IGNORECASE):
+            return {"merchant": "Self Transfer", "remark": "Self Transfer", "ref": None}
+
+        # 1. Extract standard Info envelope (e.g. "Info - MOB/..." or "Info: Info - UPI/...")
+        info_match = re.search(r"Info(?:\s*-\s*|\s*:\s*)+(.*)", text, re.IGNORECASE)
+        clean_text = info_match.group(1).strip() if info_match else text
+
+        # Strip trailing "on DD-MM-YYYY..."
+        clean_text = re.sub(
+            r"\s+on\s+\d{2}[-/]\d{2}[-/]\d{2,4}.*$", "", clean_text, flags=re.I
+        ).strip()
+
+        # 2. MOB / Bill Payment Stream
+        # Formats:
+        #   MOB/Bill Payment/VAZHIVARAM HARDWARES
+        #   MOB/625513140718/Bill Payment/IMPS
+        #   MOB/625513140718/Bill Payment/ELECTRICITY BILL
+        mob_match = re.search(
+            r"MOB/(?:(\d{6,16})/)?(?:Bill\s*Payment/)?([^/]+)(?:/(.*))?$",
+            clean_text,
+            re.I,
+        )
+        if mob_match:
+            ref_no = mob_match.group(1)
+            token1 = mob_match.group(2).strip()
+            token2 = mob_match.group(3).strip() if mob_match.group(3) else None
+
+            # If token1 is an actual merchant (e.g. VAZHIVARAM HARDWARES)
+            if token1.upper() not in GENERIC_PAYEE_BLACKLIST:
+                return {
+                    "merchant": token1,
+                    "remark": "Bill Payment",
+                    "ref": ref_no,
+                }
+
+            # If token1 is a channel like IMPS or BILL PAYMENT, check token2
+            if token2 and token2.upper() not in GENERIC_PAYEE_BLACKLIST:
+                return {
+                    "merchant": token2,
+                    "remark": "Bill Payment",
+                    "ref": ref_no,
+                }
+
+            return {
+                "merchant": "Bill Payment",
+                "remark": "Bill Payment",
+                "ref": ref_no,
+            }
+
+        # 3. Slash Rail Stream (UPI / IMPS / NEFT / RTGS)
+        # Formats:
+        #   UPI/UTIB/112232902191/IRCTC Ticketing/Pay via Pine
+        #   UPI/YESB/173525908415/S S FUELS/Fuel
+        #   UPI/SBIN/625522137653/SUMEE S/UPI
+        #   UPI/FDRL/175910334694/BAIJU SUSEELAN NAIR/NO REMAR
+        parts = [p.strip() for p in clean_text.split("/") if p.strip()]
+        if len(parts) >= 3 and parts[0].upper() in {"UPI", "IMPS", "NEFT", "RTGS"}:
+            ref_candidate = None
+            merchant_idx = None
+
+            for idx in range(1, len(parts)):
+                token = parts[idx]
+                # Identify RRN / UTR
+                if re.fullmatch(r"\d{6,16}", token):
+                    ref_candidate = token
+                    continue
+                # Skip bank route codes (e.g. SBIN, YESB, UTIB, FDRL, P2A)
+                if len(token) <= 4 and token.isupper() and idx <= 2:
+                    continue
+                if token.upper() not in GENERIC_PAYEE_BLACKLIST:
+                    merchant_idx = idx
+                    break
+
+            if merchant_idx is not None:
+                merchant = parts[merchant_idx]
+                merchant = re.sub(r"\s*NO REMAR.*$", "", merchant, flags=re.I).strip()
+
+                remark = None
+                if len(parts) > merchant_idx + 1:
+                    raw_rem = parts[merchant_idx + 1].strip()
+                    # Clean out generic "NO REMARK" or rail echo "UPI"
+                    if raw_rem.upper() not in GENERIC_REMARKS_BLACKLIST:
+                        remark = raw_rem
+
+                return {
+                    "merchant": merchant,
+                    "remark": remark,
+                    "ref": ref_candidate,
+                }
+
+        # 4. Fallback Regex Parsing
+        cleaned = re.sub(r"^(UPI|IMPS|NEFT)/(\d+|REF)/", "", clean_text, flags=re.I)
+        cleaned = re.sub(r"/(NO REMAR.*|NO REMARK.*)$", "", cleaned, flags=re.I).strip()
+        if cleaned.upper() in GENERIC_PAYEE_BLACKLIST or not cleaned:
+            cleaned = "Direct Payment"
+
+        return {"merchant": cleaned, "remark": None, "ref": None}
 
     @classmethod
     def _extract_smart_reference(cls, body: str) -> Optional[str]:
@@ -244,22 +387,13 @@ class SmartPayloadEnricher:
 
     @classmethod
     def _extract_bank_txn_date(cls, body: str) -> Optional[str]:
-        """Extracts execution date formatted in body (e.g. 'on 18-03-2025')."""
         match = cls.TXN_DATE_PATTERN.search(body)
         if match:
             raw_date = match.group(1).replace("/", "-")
-            # Convert 2-digit years to 4-digit if needed
             parts = raw_date.split("-")
             if len(parts) == 3 and len(parts[2]) == 2:
                 raw_date = f"{parts[0]}-{parts[1]}-20{parts[2]}"
             return raw_date
-        return None
-
-    @classmethod
-    def _extract_payee_hint(cls, body: str) -> Optional[str]:
-        """Extracts payee entity or flags self/internal transfers."""
-        if re.search(r"/(?:self|own account)/", body, re.IGNORECASE):
-            return "Self Transfer"
         return None
 
     @classmethod

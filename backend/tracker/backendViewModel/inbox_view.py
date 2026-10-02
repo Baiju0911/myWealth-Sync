@@ -20,6 +20,7 @@ from tracker.constants import (
 )
 from .InboxHelper import LiveStreamEnrichmentService
 from .InboxHelper.inbox_serializer import LiveStreamPayloadSerializer
+from tracker.parsers.universal_narration import UniversalNarrationExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -106,68 +107,6 @@ class InboxItemCommitView(APIView):
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-
-# class LiveStreamPayloadsView(APIView):
-#     def get(self, request):
-#         try:
-#             active_statuses = ACTIVE_STAGED_PAYLOAD_STATUSES + ["PREVIEW_ONLY"]
-#             base_qs = RawEmailPayload.objects.filter(
-#                 status__in=active_statuses,
-#                 is_completed=0,
-#             ).order_by("-created_at")
-
-#             total_staged_count = base_qs.count()
-#             limit = int(request.query_params.get("limit", 200))
-#             records = base_qs[:limit]
-
-#             results = []
-#             for r in records:
-#                 headers = r.headers_json or {}
-#                 parsed = headers.get("parsed_summary", {})
-#                 merchant_name = (
-#                     parsed.get("merchant")
-#                     or headers.get("merge_details", {}).get("resolved_narration")
-#                     or parsed.get("full_narration")
-#                     or r.subject
-#                 )
-#                 results.append(
-#                     {
-#                         "id": str(r.id),
-#                         "source": r.source
-#                         or headers.get("source", EnrichmentMetadata.DEFAULT_SOURCE),
-#                         "sender": r.sender,
-#                         "amount": (
-#                             r.amount if r.amount is not None else parsed.get("amount")
-#                         ),
-#                         "balance": parsed.get("balance"),
-#                         "account_last4": r.account_last4 or parsed.get("account"),
-#                         "bank_name": parsed.get("bank") or BankNames.SOUTH_INDIAN.value,
-#                         "upi_ref": (
-#                             r.upi_ref
-#                             or headers.get("merge_details", {}).get("matched_rrn")
-#                             or parsed.get("upi_ref")
-#                             or parsed.get("utr_no")
-#                         ),
-#                         "status": r.status,
-#                         "created_at": (
-#                             r.created_at.isoformat() if r.created_at else None
-#                         ),
-#                         "full_narration": parsed.get("full_narration")
-#                         or r.decrypted_body,
-#                         "merchant": merchant_name,
-#                     }
-#                 )
-
-#             return Response(
-#                 {"total_count": total_staged_count, "results": results},
-#                 status=status.HTTP_200_OK,
-#             )
-#         except Exception as e:
-#             logger.exception(f"Error fetching live stream payloads: {str(e)}")
-#             return Response(
-#                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#             )
 
 
 class LiveStreamPayloadsView(APIView):
@@ -296,22 +235,15 @@ class EnrichedReconciliationAuditView(APIView):
                     "user_note": snap.get("user_note", ""),
                 }
 
-            # 🛡️ Authoritative Payee Resolution
-            resolved_merchant = (
-                meta.get("merchant")
-                or (donor.merchant if donor else None)
-                or meta.get("resolved_narration")
-                or EnrichmentMetadata.DEFAULT_MERCHANT
+            # 🛡️ Invoke Authoritative Universal Extractor
+            parsed_info = UniversalNarrationExtractor.resolve_from_staging_line(line)
+            resolved_merchant = parsed_info["suggested_payee"]
+            clean_remark = parsed_info["suggested_remark"]
+            synthesized_narration = (
+                f"{resolved_merchant} ({clean_remark})"
+                if clean_remark
+                else resolved_merchant
             )
-
-            clean_remark = meta.get("remark")
-            synthesized_narration = meta.get("resolved_narration")
-            if not synthesized_narration:
-                synthesized_narration = (
-                    f"{resolved_merchant} ({clean_remark})"
-                    if clean_remark
-                    else resolved_merchant
-                )
 
             results.append(
                 {
@@ -325,7 +257,7 @@ class EnrichedReconciliationAuditView(APIView):
                     ),
                     "debit": float(line.debit) if line.debit is not None else None,
                     "credit": float(line.credit) if line.credit is not None else None,
-                    "raw_narration": meta.get("original_narration") or line.narration,
+                    "raw_narration": parsed_info["raw_statement_narration"],
                     "account_last4": (
                         line.account.account_number[-4:]
                         if line.account and line.account.account_number
@@ -378,6 +310,8 @@ class EnrichedReconciliationAuditView(APIView):
                     "classification": classification_data,
                     "has_warning": meta.get("has_amount_discrepancy", False),
                     "discrepancy_details": meta.get("discrepancy_details"),
+                    # New full telemetry package for modals
+                    "parsed_narration": parsed_info,
                 }
             )
 
