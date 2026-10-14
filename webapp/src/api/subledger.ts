@@ -212,6 +212,7 @@ export interface CandidateMatchResult {
     asset_id: string | number;
     asset_code?: string;
     asset_name?: string;
+    vendor_name?: string; // Added vendor_name to mapping_info for better context
   } | null;
 }
 
@@ -464,9 +465,16 @@ export const subledgerApi = {
   findCandidates: async (
     query: CandidateMatchQuery
   ): Promise<CandidateMatchResponse> => {
+    console.log('📤 [findCandidates API] Query Sent:', query);
     const res = await api.post<CandidateMatchResponse>(
       '/subledgers/assets/find-candidates/',
       query
+    );
+    console.log('📥 [findCandidates API] Raw Axios res:', res);
+    console.log('📥 [findCandidates API] res.data payload:', res.data);
+    console.log(
+      '📥 [findCandidates API] Keys on res.data:',
+      Object.keys(res.data || {})
     );
     return res.data;
   },
@@ -489,6 +497,26 @@ export const subledgerApi = {
   /**
    * ⚡ POST: Atomically bind a bank row identifier to an asset schedule
    */
+  checkMappedRows: async (payload: {
+    row_identifiers: string[];
+  }): Promise<{
+    mapped_map: Record<
+      string,
+      {
+        mapping_id: string;
+        asset_id: string;
+        asset_code?: string;
+        asset_name?: string;
+      }
+    >;
+  }> => {
+    const response = await api.post(
+      '/subledgers/assets/check-mapped-rows/',
+      payload
+    );
+    return response.data;
+  },
+
   bindTransaction: async (
     payload: BindTransactionPayload
   ): Promise<BindTransactionResponse> => {

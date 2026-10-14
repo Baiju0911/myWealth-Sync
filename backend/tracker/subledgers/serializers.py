@@ -352,22 +352,37 @@ class AssetSubLedgerSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 
+# class CandidateMatchRequestSerializer(serializers.Serializer):
+#     document_date = serializers.DateField(required=True)
+#     target_amount = serializers.DecimalField(
+#         max_digits=15,
+#         decimal_places=2,
+#         required=False,
+#         allow_null=True,
+#     )
+#     account_id = serializers.IntegerField(required=False, allow_null=True)
+#     asset_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+#     keywords = serializers.ListField(
+#         child=serializers.CharField(), required=False, default=list
+#     )
+#     day_window = serializers.IntegerField(
+#         default=10, min_value=1, max_value=3650, required=False
+#     )
+
+
 class CandidateMatchRequestSerializer(serializers.Serializer):
-    document_date = serializers.DateField(required=True)
+    document_date = serializers.CharField(required=False, allow_null=True, default=None)
     target_amount = serializers.DecimalField(
-        max_digits=15,
-        decimal_places=2,
-        required=False,
-        allow_null=True,
+        max_digits=15, decimal_places=2, required=False, allow_null=True
     )
     account_id = serializers.IntegerField(required=False, allow_null=True)
-    asset_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     keywords = serializers.ListField(
         child=serializers.CharField(), required=False, default=list
     )
-    day_window = serializers.IntegerField(
-        default=10, min_value=1, max_value=3650, required=False
-    )
+    day_window = serializers.IntegerField(required=False, default=1825)
+    asset_id = serializers.CharField(required=False, allow_null=True)
+    subcategory = serializers.CharField(required=False, allow_null=True)
+    unmapped_only = serializers.BooleanField(required=False, default=False)
 
 
 class BindRowRequestSerializer(serializers.Serializer):

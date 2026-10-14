@@ -352,6 +352,9 @@ export interface RemarksJSON {
   user_note?: string | null;
   rule_code?: string | null;
   source?: string | null;
+  bank_name?: string;
+  bank_last4?: string;
+  [key: string]: any;
 }
 
 export interface ClusterItem {
@@ -458,20 +461,23 @@ export interface ReclassifyPayload {
 
 export const getSuspenseClusters = async (
   subcategoryName: string = 'Suspense Account',
-  accountId?: number
+  accountId?: number,
+  searchQuery?: string,
+  includeCleared: boolean = false
 ): Promise<SuspenseWorkbenchResponse> => {
   const response = await api.get<SuspenseWorkbenchResponse>(
     '/get_suspense_workbench_data/',
     {
       params: {
         subcategory: subcategoryName,
+        include_cleared: includeCleared,
         ...(accountId && { account_id: accountId }),
+        ...(searchQuery && searchQuery.trim() && { q: searchQuery.trim() }),
       },
     }
   );
   return response.data;
 };
-
 /**
  * Applies bulk reclassification and updates/learns classification rules.
  */
@@ -554,11 +560,80 @@ export const updateEntryUserNote = async (
   }
 };
 
+export interface ClusterLineItemsResponse {
+  status: string;
+  count?: number;
+  items: any[];
+}
+
+export const getClusterLineItems = async (
+  entryIds: string[]
+): Promise<any[]> => {
+  if (!entryIds || entryIds.length === 0) return [];
+  try {
+    const response = await api.post<ClusterLineItemsResponse>(
+      '/classification/get_cluster_line_items/',
+      { entry_ids: entryIds }
+    );
+    return response.data?.status === 'success' ? response.data.items || [] : [];
+  } catch (err) {
+    console.error('Failed to fetch cluster line items:', err);
+    return [];
+  }
+};
+
 export interface SuggestedRule {
   rule_code: string;
   suggested_category: string;
   suggested_subcategory: string;
   matched_pattern: string;
+}
+
+// export const getSuggestedRule = async (
+//   pattern: string,
+//   entryType: 'Debit' | 'Credit' = 'Debit'
+// ): Promise<SuggestedRule | null> => {
+//   if (!pattern || pattern.trim().length < 3) return null;
+
+//   try {
+//     const response = await fetch('/classification/suggest_rule_for_cluster/', {
+//       // 👈 Added /api/classification
+//       method: 'POST',
+//       headers: { 'Content-Type': 'application/json' },
+//       body: JSON.stringify({
+//         pattern: pattern.trim(),
+//         entry_type: entryType,
+//       }),
+//     });
+
+//     if (!response.ok) return null;
+//     const data = await response.json();
+
+//     if (data?.has_suggestion) {
+//       return {
+//         rule_code: data.rule_code,
+//         suggested_category: data.suggested_category,
+//         suggested_subcategory: data.suggested_subcategory,
+//         matched_pattern: data.matched_pattern,
+//       };
+//     }
+//   } catch (err) {
+//     console.error('Failed to fetch rule suggestion:', err);
+//   }
+//   return null;
+// };
+
+//// Sweep Call
+// ==========================================
+// SWEEP HUB & RULE SUGGESTION ENDPOINTS
+// ==========================================
+
+export interface SuggestedRuleResponse {
+  has_suggestion: boolean;
+  rule_code?: string;
+  suggested_category?: string;
+  suggested_subcategory?: string;
+  matched_pattern?: string;
 }
 
 export const getSuggestedRule = async (
@@ -568,25 +643,21 @@ export const getSuggestedRule = async (
   if (!pattern || pattern.trim().length < 3) return null;
 
   try {
-    const response = await fetch('/classification/suggest_rule_for_cluster/', {
-      // 👈 Added /api/classification
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const response = await api.post<SuggestedRuleResponse>(
+      '/classification/suggest_rule_for_cluster/',
+      {
         pattern: pattern.trim(),
         entry_type: entryType,
-      }),
-    });
+      }
+    );
 
-    if (!response.ok) return null;
-    const data = await response.json();
-
-    if (data?.has_suggestion) {
+    const data = response.data;
+    if (data?.has_suggestion && data.rule_code) {
       return {
         rule_code: data.rule_code,
-        suggested_category: data.suggested_category,
-        suggested_subcategory: data.suggested_subcategory,
-        matched_pattern: data.matched_pattern,
+        suggested_category: data.suggested_category || '',
+        suggested_subcategory: data.suggested_subcategory || '',
+        matched_pattern: data.matched_pattern || '',
       };
     }
   } catch (err) {
@@ -594,11 +665,6 @@ export const getSuggestedRule = async (
   }
   return null;
 };
-
-//// Sweep Call
-// ==========================================
-// SWEEP HUB & RULE SUGGESTION ENDPOINTS
-// ==========================================
 
 export interface SweepMatchGroup {
   pattern: string;

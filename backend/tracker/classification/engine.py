@@ -8,7 +8,11 @@ from collections import Counter
 from django.db.models import Q
 from django.utils import timezone
 
-from tracker.classification.remarks_service import generate_cluster_pattern
+from tracker.classification.remarks_service import (
+    generate_cluster_pattern,
+    canonicalize_merchant_token,
+    BLACKLIST_TAGS,
+)
 from tracker.classification.utils.upiparser import parse_upi_narration
 from ..models.models import (
     AccountingRule,
@@ -25,6 +29,13 @@ from tracker.constants import (
     RULE_SAFETY_BLACKLIST,
     ABSOLUTE_GREEDY_BLACKLIST,
     OK_WORD_LIST,
+)
+
+# At the top of engine.py:
+from tracker.classification.remarks_service import (
+    generate_cluster_pattern,
+    canonicalize_merchant_token,
+    BLACKLIST_TAGS,
 )
 
 GENERIC_NOISE_TOKENS = NOISE_KEYWORD_BLACKLIST
@@ -207,11 +218,204 @@ def extract_clean_payee_pattern(narration: str) -> str:
     return " ".join(clean_tokens)
 
 
+# def get_suspense_clusters(
+#     target_subcategory="Suspense Account",
+#     account_id=None,
+#     search_query=None,
+#     include_cleared=False,
+# ):
+#     print("\n" + "=" * 80)
+#     print(
+#         f"[engine] START get_suspense_clusters(sub='{target_subcategory}',"
+#         f" account_id={account_id}, query='{search_query}', include_cleared={include_cleared})"
+#     )
+#     print("=" * 80)
+
+#     if not include_cleared:
+#         query = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
+#         if target_subcategory and target_subcategory.strip() not in [
+#             "Suspense Account",
+#             "All",
+#         ]:
+#             query = query.filter(
+#                 evaluation_matrix_snapshot__resolved_subcategory=target_subcategory
+#             )
+#     else:
+#         query = JournalEntry.objects.filter(account_id=99)
+#         if target_subcategory and target_subcategory.strip() not in [
+#             "Suspense Account",
+#             "All",
+#         ]:
+#             query = query.filter(
+#                 evaluation_matrix_snapshot__resolved_subcategory=target_subcategory
+#             )
+
+#     if account_id and str(account_id) != "99":
+#         bank_row_ids = JournalEntry.objects.filter(account_id=account_id).values_list(
+#             "row_identifier", flat=True
+#         )
+#         query = query.filter(row_identifier__in=bank_row_ids)
+
+#     entries = list(query.order_by("-transaction_date"))
+#     print(f"[engine] Total entries fetched: {len(entries)}")
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+#     staging_map = {
+#         s.row_identifier: s.narration
+#         for s in StatementStagingLine.objects.filter(row_identifier__in=row_ids).only(
+#             "row_identifier", "narration"
+#         )
+#     }
+
+#     clusters_map = {}
+
+#     for idx, entry in enumerate(entries, 1):
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         narration = staging_map.get(entry.row_identifier, "")
+#         stored_pattern = remarks.get("pattern")
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+
+#         if credit_val > 0 and debit_val == 0:
+#             is_outflow = False
+#             amount = credit_val
+#         elif debit_val > 0 and credit_val == 0:
+#             is_outflow = True
+#             amount = debit_val
+#         else:
+#             amount = debit_val if debit_val > 0 else credit_val
+#             is_outflow = debit_val > 0
+
+#         parsed_meta = parse_upi_narration(narration) or {}
+#         payee = parsed_meta.get("payee") or remarks.get("payee")
+#         ref_no = parsed_meta.get("upi_ref") or remarks.get("upi_ref")
+
+#         if not stored_pattern or stored_pattern in GENERIC_PATTERNS:
+#             pattern = generate_cluster_pattern(
+#                 narration=narration, remarks_data={"payee": payee}
+#             )
+#         else:
+#             pattern = stored_pattern
+
+#         if pattern not in clusters_map:
+#             clusters_map[pattern] = {
+#                 "pattern": pattern,
+#                 "count": 0,
+#                 "total_amount": 0.0,
+#                 "total_inflow": 0.0,
+#                 "total_outflow": 0.0,
+#                 "sample_descriptions": [],
+#                 "items": [],
+#                 "transaction_ids": [],
+#             }
+
+#         direction_word = "By" if is_outflow else "To"
+
+#         if is_outflow:
+#             action_word = (
+#                 f"Paid ₹{amount:,.2f} to {payee}"
+#                 if payee
+#                 else f"Outflow of ₹{amount:,.2f}"
+#             )
+#         else:
+#             if pattern == "BANK_INTEREST" or (payee and "INTEREST" in payee.upper()):
+#                 action_word = f"Received ₹{amount:,.2f} interest credit"
+#             else:
+#                 action_word = f"Received ₹{amount:,.2f} from {payee or 'Payee'}"
+
+#         ref_str = f" [Ref: {ref_no}]" if ref_no else ""
+#         dynamic_display_text = (
+#             f"{direction_word} {target_subcategory} | {action_word}{ref_str} |"
+#             " Ingested via Staging"
+#         )
+
+#         item_remarks = {
+#             **remarks,
+#             "payee": payee,
+#             "upi_ref": ref_no,
+#             "display_text": dynamic_display_text,
+#             "target_account_name": target_subcategory,
+#             "directional_prefix": direction_word,
+#         }
+
+#         cluster = clusters_map[pattern]
+#         cluster["count"] += 1
+#         cluster["total_amount"] += amount
+
+#         if is_outflow:
+#             cluster["total_outflow"] += amount
+#         else:
+#             cluster["total_inflow"] += amount
+
+#         cluster["transaction_ids"].append(str(entry.id))
+
+#         if (
+#             len(cluster["sample_descriptions"]) < 3
+#             and dynamic_display_text not in cluster["sample_descriptions"]
+#         ):
+#             cluster["sample_descriptions"].append(dynamic_display_text)
+
+#         cluster["items"].append(
+#             {
+#                 "id": str(entry.id),
+#                 "narration": narration,
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "amount": amount,
+#                 "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                 "transaction_date": str(entry.transaction_date),
+#                 "remarks": item_remarks,
+#             }
+#         )
+
+#     sorted_clusters = sorted(
+#         clusters_map.values(), key=lambda c: c["count"], reverse=True
+#     )
+
+#     if search_query and str(search_query).strip():
+#         norm_query = normalize_for_search(search_query)
+#         filtered_clusters = []
+
+#         for cluster in sorted_clusters:
+#             norm_pattern = normalize_for_search(cluster["pattern"])
+#             norm_samples = " ".join(
+#                 [
+#                     normalize_for_search(s)
+#                     for s in cluster.get("sample_descriptions", [])
+#                 ]
+#             )
+
+#             matches_pattern = norm_query in norm_pattern or norm_query in norm_samples
+#             matches_item = any(
+#                 norm_query in normalize_for_search(item.get("narration", ""))
+#                 or norm_query
+#                 in normalize_for_search(item.get("remarks", {}).get("payee", ""))
+#                 for item in cluster.get("items", [])
+#             )
+
+#             if matches_pattern or matches_item:
+#                 filtered_clusters.append(cluster)
+
+#         return filtered_clusters
+
+#     print(f"[engine] Total distinct clusters created: {len(sorted_clusters)}")
+#     return sorted_clusters
+
+
+def normalize_for_search(text: str) -> str:
+    """Strips underscores, spaces, dashes, colons, and punctuation for fuzzy matching."""
+    if not text:
+        return ""
+    return re.sub(r"[^A-Z0-9]+", "", str(text).upper())
+
+
 def get_suspense_clusters(
     target_subcategory="Suspense Account",
     account_id=None,
     search_query=None,
     include_cleared=False,
+    include_items=False,
 ):
     print("\n" + "=" * 80)
     print(
@@ -220,24 +424,17 @@ def get_suspense_clusters(
     )
     print("=" * 80)
 
+    query = JournalEntry.objects.filter(account_id=99)
     if not include_cleared:
-        query = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-        if target_subcategory and target_subcategory.strip() not in [
-            "Suspense Account",
-            "All",
-        ]:
-            query = query.filter(
-                evaluation_matrix_snapshot__resolved_subcategory=target_subcategory
-            )
-    else:
-        query = JournalEntry.objects.filter(account_id=99)
-        if target_subcategory and target_subcategory.strip() not in [
-            "Suspense Account",
-            "All",
-        ]:
-            query = query.filter(
-                evaluation_matrix_snapshot__resolved_subcategory=target_subcategory
-            )
+        query = query.filter(is_reclassified=False)
+
+    if target_subcategory and target_subcategory.strip() not in [
+        "Suspense Account",
+        "All",
+    ]:
+        query = query.filter(
+            evaluation_matrix_snapshot__resolved_subcategory=target_subcategory
+        )
 
     if account_id and str(account_id) != "99":
         bank_row_ids = JournalEntry.objects.filter(account_id=account_id).values_list(
@@ -245,22 +442,35 @@ def get_suspense_clusters(
         )
         query = query.filter(row_identifier__in=bank_row_ids)
 
-    entries = list(query.order_by("-transaction_date"))
+    entries = list(
+        query.only(
+            "id", "row_identifier", "debit", "credit", "remarks", "transaction_date"
+        ).order_by("-transaction_date")
+    )
     print(f"[engine] Total entries fetched: {len(entries)}")
 
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
-    staging_map = {
-        s.row_identifier: s.narration
-        for s in StatementStagingLine.objects.filter(row_identifier__in=row_ids).only(
+
+    # Staging lookup
+    staging_map = dict(
+        StatementStagingLine.objects.filter(row_identifier__in=row_ids).values_list(
             "row_identifier", "narration"
         )
-    }
+    )
 
     clusters_map = {}
 
-    for idx, entry in enumerate(entries, 1):
+    for entry in entries:
         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
-        narration = staging_map.get(entry.row_identifier, "")
+
+        # Universal Narration Priority: remarks -> staging -> display text
+        universal_narr = (
+            remarks.get("universal_narration")
+            or staging_map.get(entry.row_identifier)
+            or remarks.get("narration")
+            or remarks.get("display_text")
+            or ""
+        )
         stored_pattern = remarks.get("pattern")
 
         debit_val = float(entry.debit or 0)
@@ -276,16 +486,30 @@ def get_suspense_clusters(
             amount = debit_val if debit_val > 0 else credit_val
             is_outflow = debit_val > 0
 
-        parsed_meta = parse_upi_narration(narration) or {}
+        parsed_meta = parse_upi_narration(universal_narr) or {}
         payee = parsed_meta.get("payee") or remarks.get("payee")
         ref_no = parsed_meta.get("upi_ref") or remarks.get("upi_ref")
 
-        if not stored_pattern or stored_pattern in GENERIC_PATTERNS:
+        # Invalidate dirty/hash stored patterns like #UPI_YESB_RRN... or #RRN
+        is_bad_stored_pattern = (
+            not stored_pattern
+            or stored_pattern in GENERIC_PATTERNS
+            or str(stored_pattern).upper() in BLACKLIST_TAGS
+            or bool(
+                re.search(
+                    r"(RRN|YESB|UTIB|AIRP|FDRL|ICIC|\d{6,})",
+                    str(stored_pattern).upper(),
+                )
+            )
+        )
+
+        if is_bad_stored_pattern:
             pattern = generate_cluster_pattern(
-                narration=narration, remarks_data={"payee": payee}
+                narration=universal_narr,
+                remarks_data={"payee": payee, "universal_narration": universal_narr},
             )
         else:
-            pattern = stored_pattern
+            pattern = canonicalize_merchant_token(str(stored_pattern))
 
         if pattern not in clusters_map:
             clusters_map[pattern] = {
@@ -300,7 +524,6 @@ def get_suspense_clusters(
             }
 
         direction_word = "By" if is_outflow else "To"
-
         if is_outflow:
             action_word = (
                 f"Paid ₹{amount:,.2f} to {payee}"
@@ -315,18 +538,8 @@ def get_suspense_clusters(
 
         ref_str = f" [Ref: {ref_no}]" if ref_no else ""
         dynamic_display_text = (
-            f"{direction_word} {target_subcategory} | {action_word}{ref_str} |"
-            " Ingested via Staging"
+            f"{direction_word} {target_subcategory} | {action_word}{ref_str}"
         )
-
-        item_remarks = {
-            **remarks,
-            "payee": payee,
-            "upi_ref": ref_no,
-            "display_text": dynamic_display_text,
-            "target_account_name": target_subcategory,
-            "directional_prefix": direction_word,
-        }
 
         cluster = clusters_map[pattern]
         cluster["count"] += 1
@@ -340,23 +553,34 @@ def get_suspense_clusters(
         cluster["transaction_ids"].append(str(entry.id))
 
         if (
-            len(cluster["sample_descriptions"]) < 3
+            len(cluster["sample_descriptions"]) < 2
             and dynamic_display_text not in cluster["sample_descriptions"]
         ):
             cluster["sample_descriptions"].append(dynamic_display_text)
 
-        cluster["items"].append(
-            {
-                "id": str(entry.id),
-                "narration": narration,
-                "debit": debit_val,
-                "credit": credit_val,
-                "amount": amount,
-                "direction": "OUTFLOW" if is_outflow else "INFLOW",
-                "transaction_date": str(entry.transaction_date),
-                "remarks": item_remarks,
+        if include_items:
+            item_remarks = {
+                **remarks,
+                "payee": payee,
+                "upi_ref": ref_no,
+                "universal_narration": universal_narr,
+                "display_text": dynamic_display_text,
+                "target_account_name": target_subcategory,
+                "directional_prefix": direction_word,
             }
-        )
+            cluster["items"].append(
+                {
+                    "id": str(entry.id),
+                    "narration": universal_narr,
+                    "universal_narration": universal_narr,
+                    "debit": debit_val,
+                    "credit": credit_val,
+                    "amount": amount,
+                    "direction": "OUTFLOW" if is_outflow else "INFLOW",
+                    "transaction_date": str(entry.transaction_date),
+                    "remarks": item_remarks,
+                }
+            )
 
     sorted_clusters = sorted(
         clusters_map.values(), key=lambda c: c["count"], reverse=True
@@ -364,32 +588,262 @@ def get_suspense_clusters(
 
     if search_query and str(search_query).strip():
         norm_query = normalize_for_search(search_query)
-        filtered_clusters = []
-
-        for cluster in sorted_clusters:
-            norm_pattern = normalize_for_search(cluster["pattern"])
-            norm_samples = " ".join(
-                [
-                    normalize_for_search(s)
-                    for s in cluster.get("sample_descriptions", [])
-                ]
+        filtered_clusters = [
+            c
+            for c in sorted_clusters
+            if norm_query in normalize_for_search(c["pattern"])
+            or any(
+                norm_query in normalize_for_search(s)
+                for s in c.get("sample_descriptions", [])
             )
-
-            matches_pattern = norm_query in norm_pattern or norm_query in norm_samples
-            matches_item = any(
-                norm_query in normalize_for_search(item.get("narration", ""))
-                or norm_query
-                in normalize_for_search(item.get("remarks", {}).get("payee", ""))
-                for item in cluster.get("items", [])
-            )
-
-            if matches_pattern or matches_item:
-                filtered_clusters.append(cluster)
-
+        ]
         return filtered_clusters
 
     print(f"[engine] Total distinct clusters created: {len(sorted_clusters)}")
     return sorted_clusters
+
+
+# def fetch_cluster_line_items(entry_ids: list) -> list:
+#     """
+#     Fetches and prepares granular line items for an expanded cluster.
+#     Hydrates raw statement narration from StatementStagingLine and resolves
+#     the true originating Bank Account (Account / Bank metadata).
+#     """
+#     if not entry_ids:
+#         return []
+
+#     from django.apps import apps
+
+#     JournalEntry = apps.get_model("ledger", "JournalEntry")
+#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+#     Account = apps.get_model("ledger", "Account")
+
+#     entries = list(
+#         JournalEntry.objects.filter(id__in=entry_ids)
+#         .only(
+#             "id",
+#             "row_identifier",
+#             "account_id",
+#             "debit",
+#             "credit",
+#             "remarks",
+#             "transaction_date",
+#         )
+#         .order_by("-transaction_date")
+#     )
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+
+#     # Pull raw narration and originating bank/account keys from StatementStagingLine
+#     staging_rows = StatementStagingLine.objects.filter(
+#         row_identifier__in=row_ids
+#     ).values("row_identifier", "narration", "bank_id", "account_id")
+
+#     staging_map = {s["row_identifier"]: s for s in staging_rows}
+
+#     # Gather distinct bank account IDs (ignoring Node 99 Suspense leg)
+#     target_account_ids = set()
+#     for e in entries:
+#         stg = staging_map.get(e.row_identifier) or {}
+#         bank_id = stg.get("bank_id")
+#         staging_acc_id = stg.get("account_id")
+#         je_acc_id = e.account_id
+
+#         if bank_id:
+#             target_account_ids.add(bank_id)
+#         elif staging_acc_id and staging_acc_id != 99:
+#             target_account_ids.add(staging_acc_id)
+#         elif je_acc_id and je_acc_id != 99:
+#             target_account_ids.add(je_acc_id)
+
+#     # Preload account metadata
+#     account_lookup = {}
+#     if target_account_ids:
+#         for acc in Account.objects.filter(id__in=target_account_ids):
+#             acc_name = getattr(acc, "bank_name", None) or getattr(acc, "name", "Bank")
+#             acc_num = str(getattr(acc, "account_number", "") or "")
+#             last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+#             account_lookup[acc.id] = {
+#                 "bank_name": acc_name,
+#                 "bank_last4": last4,
+#                 "code": getattr(acc, "code", f"ACC-{acc.id}"),
+#             }
+
+#     items = []
+#     for entry in entries:
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         stg = staging_map.get(entry.row_identifier) or {}
+
+#         # Prioritize narration with clean fallback
+#         narration = (
+#             stg.get("narration")
+#             or remarks.get("universal_narration")
+#             or remarks.get("narration")
+#             or remarks.get("display_text")
+#             or "Statement Line"
+#         )
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+#         is_outflow = debit_val > 0
+#         amount = debit_val if is_outflow else credit_val
+
+#         parsed_meta = parse_upi_narration(narration) or {}
+#         payee = parsed_meta.get("payee") or remarks.get("payee")
+#         ref_no = parsed_meta.get("upi_ref") or remarks.get("upi_ref")
+
+#         # Resolve the true bank account key
+#         bank_acc_id = (
+#             stg.get("bank_id")
+#             or (stg.get("account_id") if stg.get("account_id") != 99 else None)
+#             or (entry.account_id if entry.account_id != 99 else None)
+#         )
+#         bank_meta = account_lookup.get(bank_acc_id) or {}
+
+#         items.append(
+#             {
+#                 "id": str(entry.id),
+#                 "row_identifier": entry.row_identifier,
+#                 "narration": narration,
+#                 "universal_narration": remarks.get("universal_narration") or narration,
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "amount": amount,
+#                 "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                 "transaction_date": str(entry.transaction_date),
+#                 "account_id": bank_acc_id,
+#                 "bank_name": bank_meta.get("bank_name"),
+#                 "bank_last4": bank_meta.get("bank_last4"),
+#                 "remarks": {
+#                     **remarks,
+#                     "payee": payee,
+#                     "upi_ref": ref_no,
+#                     "universal_narration": narration,
+#                     "bank_name": bank_meta.get("bank_name"),
+#                     "bank_last4": bank_meta.get("bank_last4"),
+#                 },
+#             }
+#         )
+
+#     return items
+
+
+def fetch_cluster_line_items(entry_ids: list) -> list:
+    """
+    Fetches and prepares granular line items for an expanded cluster.
+    Resolves the true originating Bank Account using StatementStagingLine.account_id
+    mapped directly to Account.id (strictly ignoring Suspense Node 99 and bank institution IDs).
+    """
+    if not entry_ids:
+        return []
+
+    from django.apps import apps
+
+    JournalEntry = apps.get_model("ledger", "JournalEntry")
+    StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+    Account = apps.get_model("ledger", "Account")
+
+    entries = list(
+        JournalEntry.objects.filter(id__in=entry_ids)
+        .only(
+            "id",
+            "row_identifier",
+            "account_id",
+            "debit",
+            "credit",
+            "remarks",
+            "transaction_date",
+        )
+        .order_by("-transaction_date")
+    )
+
+    row_ids = [e.row_identifier for e in entries if e.row_identifier]
+
+    # SSOT staging lines for narration and account resolution
+    staging_rows = StatementStagingLine.objects.filter(
+        row_identifier__in=row_ids
+    ).values("row_identifier", "narration", "account_id")
+    staging_map = {s["row_identifier"]: s for s in staging_rows}
+
+    # Extract target account IDs (StatementStagingLine.account_id -> Account.id)
+    target_acc_ids = set()
+    for e in entries:
+        stg = staging_map.get(e.row_identifier) or {}
+        stg_acc_id = stg.get("account_id")
+        je_acc_id = e.account_id
+
+        if stg_acc_id and int(stg_acc_id) != 99:
+            target_acc_ids.add(int(stg_acc_id))
+        elif je_acc_id and int(je_acc_id) != 99:
+            target_acc_ids.add(int(je_acc_id))
+
+    account_lookup = {}
+    if target_acc_ids:
+        for acc in Account.objects.filter(id__in=target_acc_ids):
+            acc_name = getattr(acc, "name", None) or getattr(acc, "bank_name", "Bank")
+            acc_num = str(getattr(acc, "account_number", "") or "")
+            last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+            account_lookup[acc.id] = {
+                "bank_name": acc_name,
+                "bank_last4": last4,
+            }
+
+    items = []
+    for entry in entries:
+        remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+        stg = staging_map.get(entry.row_identifier) or {}
+
+        narration = (
+            stg.get("narration")
+            or remarks.get("universal_narration")
+            or remarks.get("narration")
+            or remarks.get("display_text")
+            or "Statement Line"
+        )
+
+        debit_val = float(entry.debit or 0)
+        credit_val = float(entry.credit or 0)
+        is_outflow = debit_val > 0
+        amount = debit_val if is_outflow else credit_val
+
+        # Prioritize staging line account_id; fallback to JournalEntry leg
+        stg_acc_id = stg.get("account_id")
+        resolved_acc_id = None
+        if stg_acc_id and int(stg_acc_id) != 99:
+            resolved_acc_id = int(stg_acc_id)
+        elif entry.account_id and int(entry.account_id) != 99:
+            resolved_acc_id = int(entry.account_id)
+
+        bank_meta = account_lookup.get(resolved_acc_id) or {}
+
+        items.append(
+            {
+                "id": str(entry.id),
+                "row_identifier": entry.row_identifier,
+                "narration": narration,
+                "universal_narration": remarks.get("universal_narration") or narration,
+                "debit": debit_val,
+                "credit": credit_val,
+                "amount": amount,
+                "direction": "OUTFLOW" if is_outflow else "INFLOW",
+                "transaction_date": (
+                    entry.transaction_date.strftime("%d-%m-%Y")
+                    if entry.transaction_date
+                    else None
+                ),
+                "account_id": resolved_acc_id,
+                "bank_name": bank_meta.get("bank_name"),
+                "bank_last4": bank_meta.get("bank_last4"),
+                "remarks": {
+                    **remarks,
+                    "universal_narration": narration,
+                    "bank_name": bank_meta.get("bank_name"),
+                    "bank_last4": bank_meta.get("bank_last4"),
+                },
+            }
+        )
+
+    return items
 
 
 def get_clean_patterns(rule) -> list[str]:
@@ -502,9 +956,8 @@ def add_or_update_classification_rule(
 ) -> bool:
     """Appends an explicit pattern into an existing ClassificationRule or creates a new active rule.
 
-    Protects multi-word phrases from token-splitting, prunes loose single
-    sub-tokens when compounds are learned, and keeps patterns sorted
-    compound-first.
+    Protects canonical merchant brands from being pruned, eliminates redundant
+    compound phrases when a universal anchor exists, and maintains clean pattern arrays.
     """
     if not new_pattern or not str(new_pattern).strip():
         return False
@@ -513,6 +966,8 @@ def add_or_update_classification_rule(
     clean_pattern = sanitize_user_pattern(new_pattern)
     if not clean_pattern:
         return False
+
+    clean_pattern = clean_pattern.upper().strip()
 
     # 2. Single token safety validation (only applies if pattern is a single word)
     if " " not in clean_pattern:
@@ -552,12 +1007,14 @@ def add_or_update_classification_rule(
     ).first()
 
     if existing_rule:
-        patterns = set(get_clean_patterns(existing_rule))
+        patterns = {p.upper().strip() for p in get_clean_patterns(existing_rule) if p}
         updated_fields = ["patterns", "match_count", "updated_at"]
 
         if clean_pattern not in patterns:
-            # 💡 FULL REVERSE PRUNING:
-            # Gather all component words from all multi-word compounds (including clean_pattern)
+            # -------------------------------------------------------------
+            # 🟢 SAFE PRUNING LOGIC:
+            # 1. Guard Canonical Brands: NEVER prune single-word merchant anchors.
+            # -------------------------------------------------------------
             all_compound_words = set()
             for p in patterns:
                 if " " in p:
@@ -565,21 +1022,51 @@ def add_or_update_classification_rule(
             if " " in clean_pattern:
                 all_compound_words.update(clean_pattern.split())
 
-            # Automatically prune any single-word token that belongs to a multi-word compound
+            # Only prune loose tokens if they are NOT in KNOWN_MERCHANTS or OK_WORD_LIST
             pruned_tokens = {
-                p for p in patterns if " " not in p and p in all_compound_words
+                p
+                for p in patterns
+                if " " not in p
+                and p in all_compound_words
+                and p not in KNOWN_MERCHANTS
+                and p not in OK_WORD_LIST
             }
+
             if pruned_tokens:
                 patterns = patterns - pruned_tokens
                 print(
                     f"🧹 Pruned loose sub-tokens {pruned_tokens} from rule {existing_rule.rule_code} in favor of compound phrases"
                 )
 
+            # -------------------------------------------------------------
+            # 2. Reverse Pruning: If a universal brand anchor is added
+            # (e.g. 'SWIGGY' or 'ZOMATO'), prune noisy compound phrases that
+            # contain it (e.g. 'WDL SWIGGY', 'HDFC ZOMATO').
+            # -------------------------------------------------------------
+            active_brand_anchors = {
+                p
+                for p in patterns | {clean_pattern}
+                if " " not in p and p in KNOWN_MERCHANTS
+            }
+
+            redundant_compounds = {
+                p
+                for p in patterns
+                if " " in p
+                and any(brand in p.split() for brand in active_brand_anchors)
+            }
+
+            if redundant_compounds:
+                patterns = patterns - redundant_compounds
+                print(
+                    f"✨ Pruned redundant compound phrases {redundant_compounds} covered by standalone brand anchors"
+                )
+
             patterns.add(clean_pattern)
 
-            # Sort array so multi-word compound phrases ALWAYS appear first
+            # Sort array compound-first, then alphabetically
             sorted_patterns = sorted(
-                list(patterns), key=lambda x: (-len(x.split()), -len(x))
+                list(patterns), key=lambda x: (-len(x.split()), -len(x), x)
             )
 
             existing_rule.patterns = sorted_patterns
@@ -619,133 +1106,6 @@ def add_or_update_classification_rule(
             f"✅ Created new distinct rule {rule_code} with clean pattern '{clean_pattern}'"
         )
         return True
-
-
-# def add_or_update_classification_rule(
-#     category: str,
-#     subcategory: str,
-#     new_pattern: str,
-#     entry_type: str = "Debit",
-# ) -> bool:
-#     """
-#     Appends an explicit pattern into an existing ClassificationRule or creates a new active rule.
-#     Protects multi-word phrases from token-splitting, prunes loose single sub-tokens when
-#     compounds are learned, and keeps patterns sorted compound-first.
-#     """
-#     if not new_pattern or not str(new_pattern).strip():
-#         return False
-
-#     # 1. Clean explicit user selection as an ATOMIC unit (NO word splitting)
-#     clean_pattern = sanitize_user_pattern(new_pattern)
-#     if not clean_pattern:
-#         return False
-
-#     # 2. Single token safety validation (only applies if pattern is a single word)
-#     if " " not in clean_pattern:
-#         if (
-#             clean_pattern in NOISE_KEYWORD_BLACKLIST
-#             or clean_pattern in RULE_SAFETY_BLACKLIST
-#             or is_ref_hash_or_noise(clean_pattern)
-#         ):
-#             print(
-#                 f"⚠️ Rejected unsafe single-token pattern from blacklist: '{clean_pattern}'"
-#             )
-#             return False
-
-#         if len(clean_pattern) < 4:
-#             if clean_pattern in OK_WORD_LIST:
-#                 print(f"✅ Approved short whitelist pattern: '{clean_pattern}'")
-#                 # Pass validation - allow execution to proceed
-#         else:
-#             print(
-#                 f"⚠️ Rejected short single-token pattern (<4 chars): '{clean_pattern}'"
-#             )
-#             return False
-
-#     clean_entry_type = (
-#         "Credit" if str(entry_type).strip().lower() == "credit" else "Debit"
-#     )
-
-#     taxonomy_node = TaxonomyTree.objects.filter(
-#         category__iexact=category, subcategory__iexact=subcategory
-#     ).first()
-#     resolved_taxonomy = taxonomy_node if taxonomy_node else None
-
-#     existing_rule = ClassificationRule.objects.filter(
-#         target_category=category,
-#         target_subcategory=subcategory,
-#         rule_type=clean_entry_type,
-#         is_active=True,
-#     ).first()
-
-#     if existing_rule:
-#         patterns = set(get_clean_patterns(existing_rule))
-#         updated_fields = ["patterns", "match_count", "updated_at"]
-
-#         if clean_pattern not in patterns:
-#             # 💡 FULL REVERSE PRUNING:
-#             # Gather all component words from all multi-word compounds (including clean_pattern)
-#             all_compound_words = set()
-#             for p in patterns:
-#                 if " " in p:
-#                     all_compound_words.update(p.split())
-#             if " " in clean_pattern:
-#                 all_compound_words.update(clean_pattern.split())
-
-#             # Automatically prune any single-word token that belongs to a multi-word compound
-#             pruned_tokens = {
-#                 p for p in patterns if " " not in p and p in all_compound_words
-#             }
-#             if pruned_tokens:
-#                 patterns = patterns - pruned_tokens
-#                 print(
-#                     f"🧹 Pruned loose sub-tokens {pruned_tokens} from rule {existing_rule.rule_code} in favor of compound phrases"
-#                 )
-
-#             patterns.add(clean_pattern)
-
-#             # Sort array so multi-word compound phrases ALWAYS appear first
-#             sorted_patterns = sorted(
-#                 list(patterns), key=lambda x: (-len(x.split()), -len(x))
-#             )
-
-#             existing_rule.patterns = sorted_patterns
-#             existing_rule.match_count = (existing_rule.match_count or 0) + 1
-
-#             if not existing_rule.taxonomy and resolved_taxonomy:
-#                 existing_rule.taxonomy = resolved_taxonomy
-#                 updated_fields.append("taxonomy")
-
-#             existing_rule.save(update_fields=updated_fields)
-#             print(
-#                 f"✅ Appended clean pattern '{clean_pattern}' to existing rule {existing_rule.rule_code}"
-#             )
-#             return True
-#         return False
-
-#     else:
-#         vector_prefix = "DE" if clean_entry_type == "Debit" else "CR"
-#         hash_input = f"{subcategory}_{clean_pattern}_{clean_entry_type}".upper()
-#         short_code = hashlib.md5(hash_input.encode()).hexdigest()[:6].upper()
-#         rule_code = f"CR_{vector_prefix}_{short_code}"
-
-#         ClassificationRule.objects.create(
-#             name=f"Learned ({clean_entry_type}): {subcategory} ({clean_pattern})",
-#             rule_code=rule_code,
-#             rule_type=clean_entry_type,
-#             target_category=category,
-#             target_subcategory=subcategory,
-#             patterns=[clean_pattern],
-#             priority=1,
-#             is_active=True,
-#             created_from_manual_override=True,
-#             match_count=1,
-#             taxonomy=resolved_taxonomy,
-#         )
-#         print(
-#             f"✅ Created new distinct rule {rule_code} with clean pattern '{clean_pattern}'"
-#         )
-#         return True
 
 
 def reclassify_and_learn(
@@ -836,7 +1196,7 @@ def reclassify_and_learn(
     learned_patterns = []
 
     if save_rule:
-        print("\n" + "🔍" * 40)
+        print("\n" + "_" * 40)
         print(f"[ENGINE DEBUG] Learning Rules for Subcategory: '{target_subcategory}'")
 
         if patterns and isinstance(patterns, list) and len(patterns) > 0:
@@ -896,7 +1256,7 @@ def reclassify_and_learn(
                             rules_updated = True
                             learned_patterns.append(compound_pattern)
 
-        print("🔍" * 40 + "\n")
+        print("_" * 40 + "\n")
 
     return {
         "status": "success",

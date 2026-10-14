@@ -1,499 +1,191 @@
-from datetime import date, datetime, timedelta
-from decimal import Decimal
-from django.db import models
-
-import json
 import re
+from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
+from decimal import Decimal
+from django.db.models import Q
+from django.apps import apps
+
+if TYPE_CHECKING:
+    from tracker.models import JournalEntry
+    from tracker.models.subledger import AssetSubLedger, AssetTransactionMapping
 
 
 class AssetCandidateMatcher:
 
-    @staticmethod
-    def normalize_text(text: str) -> str:
-        """Extracts narration/payee from dict/JSON string if needed,
+    # ---------------------------------------------------------
+    # STATIC HELPER METHODS
+    # ---------------------------------------------------------
 
-        then strips all non-alphanumeric characters and converts to UPPERCASE.
-        """
+    @staticmethod
+    def parse_date_safely(val, default=None):
+        """Safely normalize strings, datetimes, or dates into datetime.date."""
+        if not val:
+            return default
+        if isinstance(val, date) and not isinstance(val, datetime):
+            return val
+        if isinstance(val, datetime):
+            return val.date()
+        if isinstance(val, str):
+            clean_str = val.strip()
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+                try:
+                    return datetime.strptime(clean_str, fmt).date()
+                except ValueError:
+                    continue
+        return default
+
+    @staticmethod
+    def normalize_text(text):
+        """Sanitize remarks and keywords for case-insensitive matching."""
         if not text:
             return ""
-
-        if isinstance(text, dict):
-            text = f"{text.get('narration', '')} {text.get('payee', '')}"
-        elif isinstance(text, str) and text.strip().startswith("{"):
-            try:
-                data = json.loads(text)
-                if isinstance(data, dict):
-                    text = f"{data.get('narration', '')} {data.get('payee', '')}"
-            except Exception:
-                pass
-
-        return re.sub(r"[^A-Za-z0-9]", "", str(text)).upper()
+        return re.sub(r"[^a-zA-Z0-9]", "", str(text)).lower()
 
     @staticmethod
-    def tokenize_text(text: str) -> set:
-        """Splits text into clean, individual alphanumeric uppercase words/tokens.
-
-        Useful for precise word-boundary matching.
-        """
-        if not text:
-            return set()
-
-        if isinstance(text, dict):
-            text = f"{text.get('narration', '')} {text.get('payee', '')}"
-        elif isinstance(text, str) and text.strip().startswith("{"):
-            try:
-                data = json.loads(text)
-                if isinstance(data, dict):
-                    text = f"{data.get('narration', '')} {data.get('payee', '')}"
-            except Exception:
-                pass
-
-        tokens = re.findall(r"[A-Za-z0-9]+", str(text).upper())
-        return set(tokens)
-
-    # @staticmethod
-    # def find_candidate_rows(
-    #     document_date,
-    #     target_amount=None,
-    #     account_id=None,
-    #     keywords=None,
-    #     day_window=30,
-    #     amount_tolerance_pct=Decimal("0.05"),
-    #     asset_id=None,
-    #     to_date=None,
-    # ):
-    #     from tracker.models import JournalEntry
-    #     from tracker.models.subledger import AssetSubLedger, AssetTransactionMapping
-
-    #     # 🎯 Normalize document_date safely
-    #     if isinstance(document_date, str):
-    #         try:
-    #             doc_date = datetime.strptime(document_date, "%Y-%m-%d").date()
-    #         except ValueError:
-    #             doc_date = date.today()
-    #     elif isinstance(document_date, datetime):
-    #         doc_date = document_date.date()
-    #     elif isinstance(document_date, date):
-    #         doc_date = document_date
-    #     else:
-    #         doc_date = date.today()
-
-    #     if isinstance(to_date, str):
-    #         try:
-    #             parsed_to_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-    #         except ValueError:
-    #             parsed_to_date = None
-    #     elif isinstance(to_date, datetime):
-    #         parsed_to_date = to_date.date()
-    #     elif isinstance(to_date, date):
-    #         parsed_to_date = to_date
-    #     else:
-    #         parsed_to_date = None
-
-    #     # 🎯 AUTO-KEYWORD INHERITANCE FROM LINKED VENDOR
-    #     if asset_id and not keywords:
-    #         try:
-    #             asset_obj = AssetSubLedger.objects.select_related("vendor").get(
-    #                 id=asset_id
-    #             )
-    #             if asset_obj.vendor:
-    #                 if asset_obj.vendor.default_keywords:
-    #                     keywords = asset_obj.vendor.default_keywords
-    #                 elif asset_obj.vendor.name:
-    #                     keywords = [asset_obj.vendor.name]
-    #         except Exception as e:
-    #             print(f"⚠️ [CANDIDATE MATCHER] Failed to inherit vendor keywords: {e}")
-
-    #     keywords = keywords or []
-
-    #     print("\n==================================================")
-    #     print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-    #     print(
-    #         f"📥 Keywords: {keywords} | Target Amount: {target_amount} | Horizon Days: {day_window}"
-    #     )
-    #     print("==================================================")
-
-    #     mapped_entries = []
-    #     seen_row_ids = set()
-    #     seen_journal_ids = set()
-
-    #     # Pre-build fuzzy regex patterns for input keywords to catch weird spacing like "S UN MED ANATA"
-    #     fuzzy_keyword_patterns = []
-    #     clean_keywords = []
-    #     keyword_token_sets = []
-
-    #     for kw in keywords:
-    #         norm_kw = AssetCandidateMatcher.normalize_text(kw)
-    #         tokens = AssetCandidateMatcher.tokenize_text(kw)
-    #         if norm_kw:
-    #             clean_keywords.append(norm_kw)
-    #             # Create fuzzy regex allowing optional spaces or symbols between letters
-    #             # e.g., "SUNMEDANTA" -> r'S[\s\-]*U[\s\-]*N[\s\-]*M[\s\-]*E[\s\-]*D[\s\-]*A[\s\-]*N[\s\-]*T[\s\-]*A'
-    #             pattern_str = r"[\s\-]*".join([re.escape(ch) for ch in norm_kw])
-    #             fuzzy_keyword_patterns.append(
-    #                 (kw, norm_kw, re.compile(pattern_str, re.IGNORECASE))
-    #             )
-    #         if tokens:
-    #             keyword_token_sets.append(tokens)
-
-    #     # =========================================================================
-    #     # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (THIS ASSET ONLY)
-    #     # =========================================================================
-    #     if asset_id:
-    #         bound_mappings = AssetTransactionMapping.objects.filter(
-    #             asset_id=asset_id
-    #         ).exclude(row_identifier__isnull=True)
-
-    #         bound_row_ids = list(
-    #             bound_mappings.values_list("row_identifier", flat=True)
-    #         )
-
-    #         if bound_row_ids:
-    #             bound_staging_entries = JournalEntry.objects.filter(
-    #                 row_identifier__in=bound_row_ids, debit__gt=0
-    #             )
-    #             mapping_map = {m.row_identifier: m for m in bound_mappings}
-
-    #             print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-    #             for idx, entry in enumerate(bound_staging_entries, 1):
-    #                 m_obj = mapping_map.get(entry.row_identifier)
-
-    #                 seen_row_ids.add(entry.row_identifier)
-    #                 seen_journal_ids.add(str(entry.id))
-
-    #                 # Extract matched keywords for bound items
-    #                 norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-    #                 bound_matched_kws = []
-    #                 for orig_kw, _, regex_pat in fuzzy_keyword_patterns:
-    #                     if regex_pat.search(norm_remarks):
-    #                         bound_matched_kws.append(orig_kw)
-
-    #                 raw_remarks_str = str(entry.remarks or "")[:60]
-    #                 print(
-    #                     f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-    #                     f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-    #                     f"RowID: {entry.row_identifier[:12]}... | "
-    #                     f"Remarks: {raw_remarks_str}"
-    #                 )
-
-    #                 mapped_entries.append(
-    #                     {
-    #                         "journal_id": str(entry.id),
-    #                         "row_identifier": entry.row_identifier,
-    #                         "account_id": entry.account_id,
-    #                         "transaction_date": entry.transaction_date.strftime(
-    #                             "%Y-%m-%d"
-    #                         ),
-    #                         "date_offset_days": 0,
-    #                         "debit": float(entry.debit),
-    #                         "credit": float(entry.credit),
-    #                         "remarks": entry.remarks,
-    #                         "matched_keywords": bound_matched_kws,  # 🎯 Tagged matched terms
-    #                         "probability_score": 100,
-    #                         "is_mapped": True,
-    #                         "is_mapped_to_this_asset": True,
-    #                         "mapping_info": {
-    #                             "mapping_id": str(m_obj.id) if m_obj else None,
-    #                             "asset_id": str(asset_id),
-    #                         },
-    #                     }
-    #                 )
-
-    #     print(f"\n📌 Phase 1 Total Bound Rows (Debits Only): {len(mapped_entries)}")
-
-    #     # =========================================================================
-    #     # PHASE 2: UNMAPPED POOL MATCHING (EXCLUDES OTHER SUBLEDGERS)
-    #     # =========================================================================
-    #     start_date = doc_date - timedelta(days=day_window)
-    #     end_date = (
-    #         parsed_to_date
-    #         if parsed_to_date
-    #         else (doc_date + timedelta(days=day_window))
-    #     )
-
-    #     # 🎯 BLACKLIST: Exclude rows mapped to OTHER subledgers (keep current asset out of blacklist)
-    #     other_subledger_mappings = AssetTransactionMapping.objects.exclude(
-    #         row_identifier__isnull=True
-    #     )
-    #     if asset_id:
-    #         other_subledger_mappings = other_subledger_mappings.exclude(
-    #             asset_id=asset_id
-    #         )
-
-    #     blacklisted_row_ids = set(
-    #         other_subledger_mappings.values_list("row_identifier", flat=True)
-    #     )
-    #     blacklisted_row_ids.update(seen_row_ids)
-
-    #     unmapped_query = JournalEntry.objects.filter(
-    #         transaction_date__gte=start_date,
-    #         transaction_date__lte=end_date,
-    #         debit__gt=0,
-    #     )
-
-    #     if account_id:
-    #         unmapped_query = unmapped_query.filter(account_id=account_id)
-
-    #     if blacklisted_row_ids:
-    #         unmapped_query = unmapped_query.exclude(
-    #             row_identifier__in=list(blacklisted_row_ids)
-    #         )
-
-    #     has_target_amount = (
-    #         target_amount is not None and Decimal(str(target_amount)) > 0
-    #     )
-
-    #     target_amt = None
-    #     min_amount = None
-    #     max_amount = None
-    #     if has_target_amount:
-    #         target_amt = Decimal(str(target_amount))
-    #         min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-    #         max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-    #     exclude_self_kw = ["INTRAACCOUNT", "OWNACCOUNTTFR", "SELFTRANSFER"]
-
-    #     unmapped_candidates = []
-    #     print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-    #     idx_p2 = 0
-
-    #     for entry in unmapped_query.iterator():
-    #         if (
-    #             entry.row_identifier in seen_row_ids
-    #             or str(entry.id) in seen_journal_ids
-    #         ):
-    #             continue
-
-    #         eval_snapshot = entry.evaluation_matrix_snapshot or {}
-    #         if isinstance(eval_snapshot, str):
-    #             try:
-    #                 eval_snapshot = json.loads(eval_snapshot)
-    #             except Exception:
-    #                 eval_snapshot = {}
-
-    #         res_cat = eval_snapshot.get("resolved_category", "")
-    #         res_sub = eval_snapshot.get("resolved_subcategory", "")
-
-    #         if res_sub == "Self Inter-Account" or res_cat == "Income":
-    #             continue
-
-    #         norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-    #         if any(skw in norm_remarks for skw in exclude_self_kw):
-    #             continue
-
-    #         # 🎯 FUZZY KEYWORD MATCHING (HANDLES RANDOMLY SPACED CHARACTERS)
-    #         matched_count = 0
-    #         matched_keywords_found = []
-    #         entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-    #         if fuzzy_keyword_patterns:
-    #             for orig_kw, norm_kw, regex_pat in fuzzy_keyword_patterns:
-    #                 # 1. Check fuzzy space-agnostic regex match
-    #                 if regex_pat.search(norm_remarks):
-    #                     matched_count += 1
-    #                     matched_keywords_found.append(orig_kw)
-    #                     continue
-
-    #                 # 2. Check token subset match
-    #                 kw_tokens = AssetCandidateMatcher.tokenize_text(orig_kw)
-    #                 if kw_tokens and kw_tokens.issubset(entry_tokens):
-    #                     matched_count += 1
-    #                     matched_keywords_found.append(orig_kw)
-    #                     continue
-
-    #                 # 3. Check clean substring or stem match
-    #                 stem = norm_kw.rstrip("S")
-    #                 if norm_kw in norm_remarks or (
-    #                     len(stem) >= 4 and stem in norm_remarks
-    #                 ):
-    #                     matched_count += 1
-    #                     matched_keywords_found.append(orig_kw)
-
-    #         # AMOUNT MATCHING
-    #         entry_debit = Decimal(str(entry.debit or 0))
-    #         is_amount_matched = False
-    #         if has_target_amount and min_amount and max_amount:
-    #             if min_amount <= entry_debit <= max_amount:
-    #                 is_amount_matched = True
-
-    #         # HARD GUARDRAIL: Skip if neither keyword nor amount matches
-    #         if clean_keywords or has_target_amount:
-    #             if matched_count == 0 and not is_amount_matched:
-    #                 continue
-
-    #         # PROBABILITY SCORE CALCULATION
-    #         score = 0
-
-    #         if matched_count > 0:
-    #             score += min(30 + (matched_count * 10), 50)
-
-    #         if is_amount_matched:
-    #             diff = abs(entry_debit - target_amt)
-    #             if diff == Decimal("0"):
-    #                 score += 40
-    #             else:
-    #                 score += 25
-
-    #         date_diff = abs((entry.transaction_date - doc_date).days)
-    #         if date_diff == 0:
-    #             score += 10
-    #         elif date_diff <= 7:
-    #             score += 5
-
-    #         seen_row_ids.add(entry.row_identifier)
-    #         seen_journal_ids.add(str(entry.id))
-    #         idx_p2 += 1
-
-    #         raw_remarks_str = str(entry.remarks or "")[:60]
-    #         print(
-    #             f"[{idx_p2:02d}] UNMAPPED | Score: {score}% | Date: {entry.transaction_date} | "
-    #             f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-    #             f"RowID: {entry.row_identifier[:12]}... | "
-    #             f"Remarks: {raw_remarks_str}"
-    #         )
-
-    #         unmapped_candidates.append(
-    #             {
-    #                 "journal_id": str(entry.id),
-    #                 "row_identifier": entry.row_identifier,
-    #                 "account_id": entry.account_id,
-    #                 "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-    #                 "date_offset_days": (entry.transaction_date - doc_date).days,
-    #                 "debit": float(entry.debit),
-    #                 "credit": float(entry.credit),
-    #                 "remarks": entry.remarks,
-    #                 "matched_keywords": list(
-    #                     set(matched_keywords_found)
-    #                 ),  # 🎯 Matched tags array
-    #                 "probability_score": min(score, 100),
-    #                 "is_mapped": False,
-    #                 "is_mapped_to_this_asset": False,
-    #                 "mapping_info": None,
-    #             }
-    #         )
-
-    #     sorted_unmapped = sorted(
-    #         unmapped_candidates,
-    #         key=lambda x: (x["probability_score"], -abs(x["date_offset_days"])),
-    #         reverse=True,
-    #     )
-
-    #     total_final = len(mapped_entries) + len(sorted_unmapped)
-    #     print("\n==================================================")
-    #     print(
-    #         f"📊 Phase 1 Bound (Debits): {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-    #     )
-    #     print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-    #     print("==================================================\n")
-
-    #     return mapped_entries + sorted_unmapped
+    def normalize_subcategory(sub_name):
+        """Strip taxonomy arrow notation dynamically (e.g. 'Asset ➔ Gold' -> 'Gold')."""
+        if not sub_name:
+            return ""
+        tokens = re.split(r"[➔\->/]+", str(sub_name))
+        return tokens[-1].strip()
 
     @staticmethod
+    def inspect_asset_stream(asset_obj):
+        """Determine if asset represents an inflow/credit or outflow/debit stream."""
+        if not asset_obj or not asset_obj.asset_category:
+            return False
+
+        cat_type = getattr(asset_obj.asset_category, "category_type", "").upper()
+        cat_code = getattr(asset_obj.asset_category, "code", "").upper()
+        return cat_type == "INCOME" or "INCOME" in cat_code or "RENT" in cat_code
+
+    @staticmethod
+    def extract_asset_keywords(asset_obj, fallback_keywords=None):
+        """Derive search keywords from vendor defaults or cleaned asset codes/names."""
+        if fallback_keywords:
+            return [kw for kw in fallback_keywords if kw]
+
+        if not asset_obj:
+            return []
+
+        # 1. Vendor defaults
+        if asset_obj.vendor:
+            if getattr(asset_obj.vendor, "default_keywords", None):
+                return asset_obj.vendor.default_keywords
+            if getattr(asset_obj.vendor, "name", None):
+                return [asset_obj.vendor.name]
+
+        # 2. Asset name cleanup (strip leading prefixes like FD#, AST-, etc.)
+        if asset_obj.name:
+            clean_token = re.sub(
+                r"^(FD#?|AST-|SBI FD|Asset)\s*", "", asset_obj.name, flags=re.I
+            ).strip()
+            if len(clean_token) >= 4:
+                return [clean_token]
+
+        return []
+
+    @staticmethod
+    def build_vector_filter(is_income_stream):
+        """Return credit > 0 for income or debit > 0 for expenditure/assets."""
+        return {"credit__gt": 0} if is_income_stream else {"debit__gt": 0}
+
+    @staticmethod
+    def calculate_match_score(
+        has_subcategory, matched_count, is_amount_matched, base_unmapped_score=70
+    ):
+        """Calculate dynamic confidence probability score."""
+        score = base_unmapped_score if has_subcategory else 0
+        if matched_count > 0:
+            score += min(20 + (matched_count * 10), 30)
+        if is_amount_matched:
+            score += 30
+        return min(score, 100)
+
+    @classmethod
     def find_candidate_rows(
-        document_date,
+        cls,
+        document_date=None,
         target_amount=None,
-        account_id=None,
+        account_id=99,
         keywords=None,
-        day_window=30,
+        day_window=1825,
         amount_tolerance_pct=Decimal("0.05"),
         asset_id=None,
         to_date=None,
+        subcategory=None,
+        unmapped_only=False,
+        max_results=200,
     ):
-        from tracker.models import JournalEntry
-        from tracker.models.subledger import AssetSubLedger, AssetTransactionMapping
+        from django.apps import apps
+        from django.db.models import Q
+        from datetime import date, timedelta
+        from decimal import Decimal
 
-        # 🎯 Normalize document_date safely
-        if isinstance(document_date, str):
-            try:
-                doc_date = datetime.strptime(document_date, "%Y-%m-%d").date()
-            except ValueError:
-                doc_date = date.today()
-        elif isinstance(document_date, datetime):
-            doc_date = document_date.date()
-        elif isinstance(document_date, date):
-            doc_date = document_date
-        else:
-            doc_date = date.today()
+        JournalEntry = apps.get_model("ledger", "JournalEntry")
+        StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+        AssetSubLedger = apps.get_model("ledger", "AssetSubLedger")
+        AssetTransactionMapping = apps.get_model("ledger", "AssetTransactionMapping")
 
-        if isinstance(to_date, str):
-            try:
-                parsed_to_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-            except ValueError:
-                parsed_to_date = None
-        elif isinstance(to_date, datetime):
-            parsed_to_date = to_date.date()
-        elif isinstance(to_date, date):
-            parsed_to_date = to_date
-        else:
-            parsed_to_date = None
+        doc_date = cls.parse_date_safely(document_date)
+        parsed_to_date = cls.parse_date_safely(to_date)
 
-        # 🎯 DYNAMIC VECTOR DETECTION (INCOME / CREDIT VS EXPENSE / DEBIT)
+        # -------------------------------------------------------------------------
+        # 1. Asset Folio Inspection
+        # -------------------------------------------------------------------------
+        asset_obj = None
         is_income_stream = False
         if asset_id:
             try:
                 asset_obj = AssetSubLedger.objects.select_related(
                     "asset_category", "vendor"
                 ).get(id=asset_id)
+                is_income_stream = cls.inspect_asset_stream(asset_obj)
 
-                # Check category or code for income streams (e.g. RENTAL_STREAM, Income, etc.)
-                if asset_obj.asset_category:
-                    cat_type = getattr(
-                        asset_obj.asset_category, "category_type", ""
-                    ).upper()
-                    cat_code = getattr(asset_obj.asset_category, "code", "").upper()
-                    if (
-                        cat_type == "INCOME"
-                        or "INCOME" in cat_code
-                        or "RENT" in cat_code
-                    ):
-                        is_income_stream = True
-
-                # 🎯 AUTO-KEYWORD INHERITANCE FROM LINKED VENDOR
-                if not keywords and asset_obj.vendor:
-                    if asset_obj.vendor.default_keywords:
-                        keywords = asset_obj.vendor.default_keywords
-                    elif asset_obj.vendor.name:
-                        keywords = [asset_obj.vendor.name]
+                if not subcategory and getattr(asset_obj, "linked_gl_account", None):
+                    subcategory = asset_obj.linked_gl_account
             except Exception as e:
-                print(
-                    f"⚠️ [CANDIDATE MATCHER] Failed to inspect asset vector/keywords: {e}"
-                )
+                print(f"⚠️ [CANDIDATE MATCHER] Asset inspection failed: {e}")
 
-        keywords = keywords or []
+        # -------------------------------------------------------------------------
+        # 2. Keywords Resolution
+        # -------------------------------------------------------------------------
+        search_terms = []
+        if keywords:
+            if isinstance(keywords, str):
+                search_terms = [k.strip() for k in keywords.split(",") if k.strip()]
+            elif isinstance(keywords, list):
+                search_terms = [str(k).strip() for k in keywords if str(k).strip()]
 
-        print("\n==================================================")
-        print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-        print(
-            f"📥 Stream Vector: {'CREDIT (INFLOW)' if is_income_stream else 'DEBIT (OUTFLOW)'} | "
-            f"Keywords: {keywords} | Target Amount: {target_amount} | Horizon Days: {day_window}"
+        if not search_terms and asset_obj:
+            search_terms = cls.extract_asset_keywords(asset_obj) or []
+
+        # -------------------------------------------------------------------------
+        # 3. Target Amount Bounds (Covers Debit & Credit)
+        # -------------------------------------------------------------------------
+        has_target_amount = (
+            target_amount is not None and Decimal(str(target_amount)) > 0
         )
-        print("==================================================")
+        target_amt = Decimal(str(target_amount)) if has_target_amount else None
+        min_amount = (
+            target_amt * (Decimal("1") - amount_tolerance_pct)
+            if has_target_amount
+            else None
+        )
+        max_amount = (
+            target_amt * (Decimal("1") + amount_tolerance_pct)
+            if has_target_amount
+            else None
+        )
 
+        # =========================================================================
+        # PHASE 1: DIRECT LOOKUP FOR BOUND TRANSACTIONS (THIS ASSET)
+        # =========================================================================
         mapped_entries = []
         seen_row_ids = set()
         seen_journal_ids = set()
 
-        fuzzy_keyword_patterns = []
-        clean_keywords = []
-        keyword_token_sets = []
-
-        for kw in keywords:
-            norm_kw = AssetCandidateMatcher.normalize_text(kw)
-            tokens = AssetCandidateMatcher.tokenize_text(kw)
-            if norm_kw:
-                clean_keywords.append(norm_kw)
-                pattern_str = r"[\s\-]*".join([re.escape(ch) for ch in norm_kw])
-                fuzzy_keyword_patterns.append(
-                    (kw, norm_kw, re.compile(pattern_str, re.IGNORECASE))
-                )
-            if tokens:
-                keyword_token_sets.append(tokens)
-
-        # =========================================================================
-        # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (THIS ASSET ONLY)
-        # =========================================================================
-        if asset_id:
+        if asset_id and not unmapped_only:
             bound_mappings = AssetTransactionMapping.objects.filter(
                 asset_id=asset_id
             ).exclude(row_identifier__isnull=True)
@@ -501,40 +193,26 @@ class AssetCandidateMatcher:
             bound_row_ids = list(
                 bound_mappings.values_list("row_identifier", flat=True)
             )
-
             if bound_row_ids:
-                # 🟢 DYNAMIC QUERY: Query credit > 0 for Income streams, debit > 0 for Expense/Asset streams
-                if is_income_stream:
-                    bound_staging_entries = JournalEntry.objects.filter(
-                        row_identifier__in=bound_row_ids, credit__gt=0
-                    )
-                else:
-                    bound_staging_entries = JournalEntry.objects.filter(
-                        row_identifier__in=bound_row_ids, debit__gt=0
-                    )
-
+                bound_entries = JournalEntry.objects.filter(
+                    row_identifier__in=bound_row_ids
+                )
                 mapping_map = {m.row_identifier: m for m in bound_mappings}
 
-                print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-                for idx, entry in enumerate(bound_staging_entries, 1):
-                    m_obj = mapping_map.get(entry.row_identifier)
+                # Pre-fetch raw SSOT narrations for bound lines
+                bound_narrations = dict(
+                    StatementStagingLine.objects.filter(
+                        row_identifier__in=bound_row_ids
+                    ).values_list("row_identifier", "narration")
+                )
 
+                for entry in bound_entries:
+                    m_obj = mapping_map.get(entry.row_identifier)
                     seen_row_ids.add(entry.row_identifier)
                     seen_journal_ids.add(str(entry.id))
 
-                    norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-                    bound_matched_kws = []
-                    for orig_kw, _, regex_pat in fuzzy_keyword_patterns:
-                        if regex_pat.search(norm_remarks):
-                            bound_matched_kws.append(orig_kw)
-
-                    raw_remarks_str = str(entry.remarks or "")[:60]
-                    entry_amount = entry.credit if is_income_stream else entry.debit
-                    print(
-                        f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-                        f"Amount: {entry_amount:10.2f} | ID: {entry.id} | "
-                        f"RowID: {entry.row_identifier[:12]}... | "
-                        f"Remarks: {raw_remarks_str}"
+                    ssot_narration = bound_narrations.get(
+                        entry.row_identifier, entry.remarks
                     )
 
                     mapped_entries.append(
@@ -548,176 +226,158 @@ class AssetCandidateMatcher:
                             "date_offset_days": 0,
                             "debit": float(entry.debit),
                             "credit": float(entry.credit),
-                            "remarks": entry.remarks,
-                            "matched_keywords": bound_matched_kws,
+                            "remarks": ssot_narration,
+                            "matched_keywords": search_terms,
                             "probability_score": 100,
                             "is_mapped": True,
                             "is_mapped_to_this_asset": True,
                             "mapping_info": {
                                 "mapping_id": str(m_obj.id) if m_obj else None,
                                 "asset_id": str(asset_id),
+                                "asset_code": (
+                                    getattr(asset_obj, "asset_code", "")
+                                    if asset_obj
+                                    else ""
+                                ),
+                                "asset_name": (
+                                    getattr(asset_obj, "name", "") if asset_obj else ""
+                                ),
                             },
                         }
                     )
 
-                print(f"\n📌 Phase 1 Total Bound Rows: {len(mapped_entries)}")
-
         # =========================================================================
-        # PHASE 2: UNMAPPED POOL MATCHING (EXCLUDES OTHER SUBLEDGERS)
+        # PHASE 2: SEARCH VIA RAW STATEMENT STAGING (SSOT) + JOURNAL ENTRY (STAGE 3)
         # =========================================================================
-        start_date = doc_date - timedelta(days=day_window)
-        end_date = (
-            parsed_to_date
-            if parsed_to_date
-            else (doc_date + timedelta(days=day_window))
-        )
+        staging_matched_row_ids = set()
 
-        other_subledger_mappings = AssetTransactionMapping.objects.exclude(
-            row_identifier__isnull=True
-        )
-        if asset_id:
-            other_subledger_mappings = other_subledger_mappings.exclude(
-                asset_id=asset_id
+        # If user searched terms, find all matching row_identifiers from the raw bank statement SSOT
+        if search_terms:
+            staging_kw_q = Q()
+            for term in search_terms:
+                staging_kw_q |= Q(narration__icontains=term)
+
+            staging_matched_row_ids = set(
+                StatementStagingLine.objects.filter(staging_kw_q).values_list(
+                    "row_identifier", flat=True
+                )
             )
 
-        blacklisted_row_ids = set(
-            other_subledger_mappings.values_list("row_identifier", flat=True)
-        )
-        blacklisted_row_ids.update(seen_row_ids)
+        # Query Node 99 Journal entries
+        unmapped_query = JournalEntry.objects.filter(account_id=account_id or 99)
 
-        # 🟢 DYNAMIC UNMAPPED QUERY: Query credit > 0 for Income streams, debit > 0 for Expense/Asset streams
-        if is_income_stream:
-            unmapped_query = JournalEntry.objects.filter(
+        # Date filtering
+        if doc_date:
+            start_date = doc_date - timedelta(days=day_window)
+            if parsed_to_date:
+                end_date = parsed_to_date
+            elif day_window >= 1825:
+                end_date = date.today()
+            else:
+                end_date = doc_date + timedelta(days=day_window)
+
+            unmapped_query = unmapped_query.filter(
                 transaction_date__gte=start_date,
                 transaction_date__lte=end_date,
-                credit__gt=0,
+            )
+
+        # Amount filtering (debit or credit)
+        if has_target_amount and min_amount is not None and max_amount is not None:
+            unmapped_query = unmapped_query.filter(
+                (Q(debit__gte=min_amount) & Q(debit__lte=max_amount))
+                | (Q(credit__gte=min_amount) & Q(credit__lte=max_amount))
             )
         else:
-            unmapped_query = JournalEntry.objects.filter(
-                transaction_date__gte=start_date,
-                transaction_date__lte=end_date,
-                debit__gt=0,
+            vector_filter = cls.build_vector_filter(is_income_stream)
+            unmapped_query = unmapped_query.filter(**vector_filter)
+
+        # Subcategory filtering: Only apply if NO explicit keyword search was made
+        clean_sub = cls.normalize_subcategory(subcategory)
+        if clean_sub and not search_terms:
+            unmapped_query = unmapped_query.filter(
+                Q(evaluation_matrix_snapshot__resolved_subcategory__iexact=clean_sub)
+                | Q(evaluation_matrix_snapshot__target_subcategory__iexact=clean_sub)
+                | Q(evaluation_matrix_snapshot__resolved_category__iexact=clean_sub)
+                | Q(
+                    evaluation_matrix_snapshot__resolved_subcategory__iexact="Suspense Account"
+                )
+                | Q(evaluation_matrix_snapshot__isnull=True)
             )
 
-        if account_id:
-            unmapped_query = unmapped_query.filter(account_id=account_id)
+        # If keywords were specified, include matches from either StatementStagingLine or JournalEntry.remarks
+        if search_terms:
+            remarks_q = Q(row_identifier__in=staging_matched_row_ids)
+            for term in search_terms:
+                remarks_q |= Q(remarks__icontains=term)
+            unmapped_query = unmapped_query.filter(remarks_q)
 
-        if blacklisted_row_ids:
-            unmapped_query = unmapped_query.exclude(
-                row_identifier__in=list(blacklisted_row_ids)
-            )
+        candidate_entries = list(
+            unmapped_query.order_by("-transaction_date")[:max_results]
+        )
+        candidate_row_ids = [
+            e.row_identifier for e in candidate_entries if e.row_identifier
+        ]
 
-        has_target_amount = (
-            target_amount is not None and Decimal(str(target_amount)) > 0
+        # Hydrate the candidate list with the raw narration from StatementStagingLine (SSOT)
+        staging_narrations_map = dict(
+            StatementStagingLine.objects.filter(
+                row_identifier__in=candidate_row_ids
+            ).values_list("row_identifier", "narration")
         )
 
-        target_amt = None
-        min_amount = None
-        max_amount = None
-        if has_target_amount:
-            target_amt = Decimal(str(target_amount))
-            min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-            max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-        exclude_self_kw = ["INTRAACCOUNT", "OWNACCOUNTTFR", "SELFTRANSFER"]
+        # Look up cross-asset lock bindings
+        all_mappings = {
+            m.row_identifier: m
+            for m in AssetTransactionMapping.objects.filter(
+                row_identifier__in=candidate_row_ids
+            ).select_related("asset")
+        }
 
         unmapped_candidates = []
-        print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-        idx_p2 = 0
-
-        for entry in unmapped_query.iterator():
+        for entry in candidate_entries:
             if (
                 entry.row_identifier in seen_row_ids
                 or str(entry.id) in seen_journal_ids
             ):
                 continue
 
-            eval_snapshot = entry.evaluation_matrix_snapshot or {}
-            if isinstance(eval_snapshot, str):
-                try:
-                    eval_snapshot = json.loads(eval_snapshot)
-                except Exception:
-                    eval_snapshot = {}
+            # Resolve true narration from SSOT (fallback to remarks)
+            ssot_narration = staging_narrations_map.get(entry.row_identifier)
+            if not ssot_narration:
+                raw_remarks = entry.remarks
+                if isinstance(raw_remarks, dict):
+                    ssot_narration = (
+                        raw_remarks.get("display_text")
+                        or raw_remarks.get("narration")
+                        or ""
+                    )
+                else:
+                    ssot_narration = str(raw_remarks or "")
 
-            res_cat = eval_snapshot.get("resolved_category", "")
-            res_sub = eval_snapshot.get("resolved_subcategory", "")
+            entry_debit = Decimal(str(entry.debit or 0))
+            entry_credit = Decimal(str(entry.credit or 0))
 
-            # 🟢 DO NOT SKIP 'Income' when matching an Income subledger stream!
-            if res_sub == "Self Inter-Account":
-                continue
+            matched_keywords_found = [
+                term for term in search_terms if term.lower() in ssot_narration.lower()
+            ]
 
-            norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-            if any(skw in norm_remarks for skw in exclude_self_kw):
-                continue
-
-            matched_count = 0
-            matched_keywords_found = []
-            entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-            if fuzzy_keyword_patterns:
-                for orig_kw, norm_kw, regex_pat in fuzzy_keyword_patterns:
-                    if regex_pat.search(norm_remarks):
-                        matched_count += 1
-                        matched_keywords_found.append(orig_kw)
-                        continue
-
-                    kw_tokens = AssetCandidateMatcher.tokenize_text(orig_kw)
-                    if kw_tokens and kw_tokens.issubset(entry_tokens):
-                        matched_count += 1
-                        matched_keywords_found.append(orig_kw)
-                        continue
-
-                    stem = norm_kw.rstrip("S")
-                    if norm_kw in norm_remarks or (
-                        len(stem) >= 4 and stem in norm_remarks
-                    ):
-                        matched_count += 1
-                        matched_keywords_found.append(orig_kw)
-
-            # AMOUNT MATCHING
-            entry_val = Decimal(
-                str(entry.credit if is_income_stream else entry.debit or 0)
-            )
             is_amount_matched = False
-            if has_target_amount and min_amount and max_amount:
-                if min_amount <= entry_val <= max_amount:
+            if has_target_amount and min_amount is not None and max_amount is not None:
+                if (min_amount <= entry_debit <= max_amount) or (
+                    min_amount <= entry_credit <= max_amount
+                ):
                     is_amount_matched = True
 
-            if clean_keywords or has_target_amount:
-                if matched_count == 0 and not is_amount_matched:
-                    continue
-
-            # PROBABILITY SCORE CALCULATION
-            score = 0
-
-            if matched_count > 0:
-                score += min(30 + (matched_count * 10), 50)
-
-            if is_amount_matched:
-                diff = abs(entry_val - target_amt)
-                if diff == Decimal("0"):
-                    score += 40
-                else:
-                    score += 25
-
-            date_diff = abs((entry.transaction_date - doc_date).days)
-            if date_diff == 0:
-                score += 10
-            elif date_diff <= 7:
-                score += 5
-
-            seen_row_ids.add(entry.row_identifier)
-            seen_journal_ids.add(str(entry.id))
-            idx_p2 += 1
-
-            raw_remarks_str = str(entry.remarks or "")[:60]
-            print(
-                f"[{idx_p2:02d}] UNMAPPED | Score: {score}% | Date: {entry.transaction_date} | "
-                f"Amount: {entry_val:10.2f} | ID: {entry.id} | "
-                f"RowID: {entry.row_identifier[:12]}... | "
-                f"Remarks: {raw_remarks_str}"
+            score = cls.calculate_match_score(
+                has_subcategory=bool(clean_sub),
+                matched_count=len(matched_keywords_found),
+                is_amount_matched=is_amount_matched,
             )
+
+            date_offset = (entry.transaction_date - doc_date).days if doc_date else 0
+            mapping = all_mappings.get(entry.row_identifier)
+            is_bound = mapping is not None
+            is_this_asset = is_bound and str(mapping.asset_id) == str(asset_id or "")
 
             unmapped_candidates.append(
                 {
@@ -725,1282 +385,25 @@ class AssetCandidateMatcher:
                     "row_identifier": entry.row_identifier,
                     "account_id": entry.account_id,
                     "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-                    "date_offset_days": (entry.transaction_date - doc_date).days,
+                    "date_offset_days": date_offset,
                     "debit": float(entry.debit),
                     "credit": float(entry.credit),
-                    "remarks": entry.remarks,
-                    "matched_keywords": list(set(matched_keywords_found)),
-                    "probability_score": min(score, 100),
-                    "is_mapped": False,
-                    "is_mapped_to_this_asset": False,
-                    "mapping_info": None,
+                    "remarks": ssot_narration,
+                    "matched_keywords": matched_keywords_found,
+                    "probability_score": score,
+                    "is_mapped": is_bound,
+                    "is_mapped_to_this_asset": is_this_asset,
+                    "mapping_info": (
+                        {
+                            "mapping_id": str(mapping.id),
+                            "asset_id": str(mapping.asset.id),
+                            "asset_code": mapping.asset.asset_code,
+                            "asset_name": mapping.asset.name,
+                        }
+                        if is_bound
+                        else None
+                    ),
                 }
             )
 
-        sorted_unmapped = sorted(
-            unmapped_candidates,
-            key=lambda x: (x["probability_score"], -abs(x["date_offset_days"])),
-            reverse=True,
-        )
-
-        total_final = len(mapped_entries) + len(sorted_unmapped)
-        print("\n==================================================")
-        print(
-            f"📊 Phase 1 Bound: {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-        )
-        print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-        print("==================================================\n")
-
-        return mapped_entries + sorted_unmapped
-
-    # @staticmethod
-    # def find_candidate_rows(
-    #     document_date,
-    #     target_amount=None,
-    #     account_id=None,
-    #     keywords=None,
-    #     day_window=30,
-    #     amount_tolerance_pct=Decimal("0.05"),
-    #     asset_id=None,
-    #     to_date=None,
-    # ):
-    #     from tracker.models import JournalEntry
-    #     from tracker.models.subledger import AssetSubLedger, AssetTransactionMapping
-
-    #     # 🎯 Normalize document_date safely
-    #     if isinstance(document_date, str):
-    #         try:
-    #             doc_date = datetime.strptime(document_date, "%Y-%m-%d").date()
-    #         except ValueError:
-    #             doc_date = date.today()
-    #     elif isinstance(document_date, datetime):
-    #         doc_date = document_date.date()
-    #     elif isinstance(document_date, date):
-    #         doc_date = document_date
-    #     else:
-    #         doc_date = date.today()
-
-    #     if isinstance(to_date, str):
-    #         try:
-    #             parsed_to_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-    #         except ValueError:
-    #             parsed_to_date = None
-    #     elif isinstance(to_date, datetime):
-    #         parsed_to_date = to_date.date()
-    #     elif isinstance(to_date, date):
-    #         parsed_to_date = to_date
-    #     else:
-    #         parsed_to_date = None
-
-    #     # 🎯 AUTO-KEYWORD INHERITANCE FROM LINKED VENDOR
-    #     if asset_id and not keywords:
-    #         try:
-    #             asset_obj = AssetSubLedger.objects.select_related("vendor").get(
-    #                 id=asset_id
-    #             )
-    #             if asset_obj.vendor:
-    #                 if asset_obj.vendor.default_keywords:
-    #                     keywords = asset_obj.vendor.default_keywords
-    #                 elif asset_obj.vendor.name:
-    #                     keywords = [asset_obj.vendor.name]
-    #         except Exception as e:
-    #             print(f"⚠️ [CANDIDATE MATCHER] Failed to inherit vendor keywords: {e}")
-
-    #     print("\n==================================================")
-    #     print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-    #     print(
-    #         f"📥 Keywords: {keywords} | Target Amount: {target_amount} | Horizon Days: {day_window}"
-    #     )
-    #     print("==================================================")
-
-    #     mapped_entries = []
-    #     seen_row_ids = set()
-    #     seen_journal_ids = set()
-
-    #     # =========================================================================
-    #     # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (THIS ASSET ONLY)
-    #     # =========================================================================
-    #     if asset_id:
-    #         bound_mappings = AssetTransactionMapping.objects.filter(
-    #             asset_id=asset_id
-    #         ).exclude(row_identifier__isnull=True)
-
-    #         bound_row_ids = list(
-    #             bound_mappings.values_list("row_identifier", flat=True)
-    #         )
-
-    #         if bound_row_ids:
-    #             bound_staging_entries = JournalEntry.objects.filter(
-    #                 row_identifier__in=bound_row_ids, debit__gt=0
-    #             )
-    #             mapping_map = {m.row_identifier: m for m in bound_mappings}
-
-    #             print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-    #             for idx, entry in enumerate(bound_staging_entries, 1):
-    #                 m_obj = mapping_map.get(entry.row_identifier)
-
-    #                 seen_row_ids.add(entry.row_identifier)
-    #                 seen_journal_ids.add(str(entry.id))
-
-    #                 raw_remarks_str = str(entry.remarks or "")[:60]
-    #                 print(
-    #                     f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-    #                     f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-    #                     f"RowID: {entry.row_identifier[:12]}... | "
-    #                     f"Remarks: {raw_remarks_str}"
-    #                 )
-
-    #                 mapped_entries.append(
-    #                     {
-    #                         "journal_id": str(entry.id),
-    #                         "row_identifier": entry.row_identifier,
-    #                         "account_id": entry.account_id,
-    #                         "transaction_date": entry.transaction_date.strftime(
-    #                             "%Y-%m-%d"
-    #                         ),
-    #                         "date_offset_days": 0,
-    #                         "debit": float(entry.debit),
-    #                         "credit": float(entry.credit),
-    #                         "remarks": entry.remarks,
-    #                         "probability_score": 100,
-    #                         "is_mapped": True,
-    #                         "is_mapped_to_this_asset": True,
-    #                         "mapping_info": {
-    #                             "mapping_id": str(m_obj.id) if m_obj else None,
-    #                             "asset_id": str(asset_id),
-    #                         },
-    #                     }
-    #                 )
-
-    #     print(f"\n📌 Phase 1 Total Bound Rows (Debits Only): {len(mapped_entries)}")
-
-    #     # =========================================================================
-    #     # PHASE 2: UNMAPPED POOL MATCHING (EXCLUDES OTHER SUBLEDGERS)
-    #     # =========================================================================
-    #     start_date = doc_date - timedelta(days=day_window)
-    #     end_date = (
-    #         parsed_to_date
-    #         if parsed_to_date
-    #         else (doc_date + timedelta(days=day_window))
-    #     )
-
-    #     # 🎯 BLACKLIST: Exclude rows mapped to OTHER subledgers (keep current asset out of blacklist)
-    #     other_subledger_mappings = AssetTransactionMapping.objects.exclude(
-    #         row_identifier__isnull=True
-    #     )
-    #     if asset_id:
-    #         other_subledger_mappings = other_subledger_mappings.exclude(
-    #             asset_id=asset_id
-    #         )
-
-    #     blacklisted_row_ids = set(
-    #         other_subledger_mappings.values_list("row_identifier", flat=True)
-    #     )
-    #     blacklisted_row_ids.update(seen_row_ids)
-
-    #     unmapped_query = JournalEntry.objects.filter(
-    #         transaction_date__gte=start_date,
-    #         transaction_date__lte=end_date,
-    #         debit__gt=0,
-    #     )
-
-    #     if account_id:
-    #         unmapped_query = unmapped_query.filter(account_id=account_id)
-
-    #     if blacklisted_row_ids:
-    #         unmapped_query = unmapped_query.exclude(
-    #             row_identifier__in=list(blacklisted_row_ids)
-    #         )
-
-    #     has_target_amount = (
-    #         target_amount is not None and Decimal(str(target_amount)) > 0
-    #     )
-
-    #     target_amt = None
-    #     min_amount = None
-    #     max_amount = None
-    #     if has_target_amount:
-    #         target_amt = Decimal(str(target_amount))
-    #         min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-    #         max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-    #     clean_keywords = []
-    #     keyword_token_sets = []
-    #     if keywords:
-    #         for kw in keywords:
-    #             norm_kw = AssetCandidateMatcher.normalize_text(kw)
-    #             tokens = AssetCandidateMatcher.tokenize_text(kw)
-    #             if norm_kw:
-    #                 clean_keywords.append(norm_kw)
-    #             if tokens:
-    #                 keyword_token_sets.append(tokens)
-
-    #     exclude_self_kw = ["INTRAACCOUNT", "OWNACCOUNTTFR", "SELFTRANSFER"]
-
-    #     unmapped_candidates = []
-    #     print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-    #     idx_p2 = 0
-
-    #     for entry in unmapped_query.iterator():
-    #         if (
-    #             entry.row_identifier in seen_row_ids
-    #             or str(entry.id) in seen_journal_ids
-    #         ):
-    #             continue
-
-    #         eval_snapshot = entry.evaluation_matrix_snapshot or {}
-    #         if isinstance(eval_snapshot, str):
-    #             try:
-    #                 eval_snapshot = json.loads(eval_snapshot)
-    #             except Exception:
-    #                 eval_snapshot = {}
-
-    #         res_cat = eval_snapshot.get("resolved_category", "")
-    #         res_sub = eval_snapshot.get("resolved_subcategory", "")
-
-    #         if res_sub == "Self Inter-Account" or res_cat == "Income":
-    #             continue
-
-    #         norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-    #         if any(skw in norm_remarks for skw in exclude_self_kw):
-    #             continue
-
-    #         # KEYWORD MATCHING
-    #         matched_count = 0
-    #         entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-    #         if clean_keywords:
-    #             for norm_kw, kw_tokens in zip(clean_keywords, keyword_token_sets):
-    #                 if kw_tokens and kw_tokens.issubset(entry_tokens):
-    #                     matched_count += 1
-    #                     continue
-
-    #                 stem = norm_kw.rstrip("S")
-    #                 if norm_kw in norm_remarks or (
-    #                     len(stem) >= 4 and stem in norm_remarks
-    #                 ):
-    #                     matched_count += 1
-
-    #         # AMOUNT MATCHING
-    #         entry_debit = Decimal(str(entry.debit or 0))
-    #         is_amount_matched = False
-    #         if has_target_amount and min_amount and max_amount:
-    #             if min_amount <= entry_debit <= max_amount:
-    #                 is_amount_matched = True
-
-    #         # HARD GUARDRAIL: Skip if neither keyword nor amount matches
-    #         if clean_keywords or has_target_amount:
-    #             if matched_count == 0 and not is_amount_matched:
-    #                 continue
-
-    #         # PROBABILITY SCORE CALCULATION
-    #         score = 0
-
-    #         if matched_count > 0:
-    #             score += min(30 + (matched_count * 10), 50)
-
-    #         if is_amount_matched:
-    #             diff = abs(entry_debit - target_amt)
-    #             if diff == Decimal("0"):
-    #                 score += 40
-    #             else:
-    #                 score += 25
-
-    #         date_diff = abs((entry.transaction_date - doc_date).days)
-    #         if date_diff == 0:
-    #             score += 10
-    #         elif date_diff <= 7:
-    #             score += 5
-
-    #         seen_row_ids.add(entry.row_identifier)
-    #         seen_journal_ids.add(str(entry.id))
-    #         idx_p2 += 1
-
-    #         raw_remarks_str = str(entry.remarks or "")[:60]
-    #         print(
-    #             f"[{idx_p2:02d}] UNMAPPED | Score: {score}% | Date: {entry.transaction_date} | "
-    #             f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-    #             f"RowID: {entry.row_identifier[:12]}... | "
-    #             f"Remarks: {raw_remarks_str}"
-    #         )
-
-    #         unmapped_candidates.append(
-    #             {
-    #                 "journal_id": str(entry.id),
-    #                 "row_identifier": entry.row_identifier,
-    #                 "account_id": entry.account_id,
-    #                 "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-    #                 "date_offset_days": (entry.transaction_date - doc_date).days,
-    #                 "debit": float(entry.debit),
-    #                 "credit": float(entry.credit),
-    #                 "remarks": entry.remarks,
-    #                 "probability_score": min(score, 100),
-    #                 "is_mapped": False,
-    #                 "is_mapped_to_this_asset": False,
-    #                 "mapping_info": None,
-    #             }
-    #         )
-
-    #     sorted_unmapped = sorted(
-    #         unmapped_candidates,
-    #         key=lambda x: (x["probability_score"], -abs(x["date_offset_days"])),
-    #         reverse=True,
-    #     )
-
-    #     total_final = len(mapped_entries) + len(sorted_unmapped)
-    #     print("\n==================================================")
-    #     print(
-    #         f"📊 Phase 1 Bound (Debits): {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-    #     )
-    #     print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-    #     print("==================================================\n")
-
-    #     return mapped_entries + sorted_unmapped
-
-
-# class AssetCandidateMatcher:
-
-#     @staticmethod
-#     def normalize_text(text: str) -> str:
-#         """
-#         Extracts narration/payee from dict/JSON string if needed,
-#         then strips all non-alphanumeric characters and converts to UPPERCASE.
-#         """
-#         if not text:
-#             return ""
-
-#         if isinstance(text, dict):
-#             text = f"{text.get('narration', '')} {text.get('payee', '')}"
-#         elif isinstance(text, str) and text.strip().startswith("{"):
-#             try:
-#                 data = json.loads(text)
-#                 if isinstance(data, dict):
-#                     text = f"{data.get('narration', '')} {data.get('payee', '')}"
-#             except Exception:
-#                 pass
-
-#         return re.sub(r"[^A-Za-z0-9]", "", str(text)).upper()
-
-#     @staticmethod
-#     def tokenize_text(text: str) -> set:
-#         """
-#         Splits text into clean, individual alphanumeric uppercase words/tokens.
-#         Useful for precise word-boundary matching.
-#         """
-#         if not text:
-#             return set()
-
-#         if isinstance(text, dict):
-#             text = f"{text.get('narration', '')} {text.get('payee', '')}"
-#         elif isinstance(text, str) and text.strip().startswith("{"):
-#             try:
-#                 data = json.loads(text)
-#                 if isinstance(data, dict):
-#                     text = f"{data.get('narration', '')} {data.get('payee', '')}"
-#             except Exception:
-#                 pass
-
-#         tokens = re.findall(r"[A-Za-z0-9]+", str(text).upper())
-#         return set(tokens)
-
-# @staticmethod
-# def find_candidate_rows(
-#     document_date,
-#     target_amount=None,
-#     account_id=None,
-#     keywords=None,
-#     day_window=30,
-#     amount_tolerance_pct=Decimal("0.05"),
-#     asset_id=None,
-#     to_date=None,
-# ):
-#     from tracker.models import JournalEntry
-#     from tracker.models.subledger import AssetSubLedger, AssetTransactionMapping
-
-#     # 🎯 Normalize document_date safely to a datetime.date instance
-#     if isinstance(document_date, str):
-#         try:
-#             doc_date = datetime.strptime(document_date, "%Y-%m-%d").date()
-#         except ValueError:
-#             doc_date = date.today()
-#     elif isinstance(document_date, datetime):
-#         doc_date = document_date.date()
-#     elif isinstance(document_date, date):
-#         doc_date = document_date
-#     else:
-#         doc_date = date.today()
-
-#     if isinstance(to_date, str):
-#         try:
-#             parsed_to_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-#         except ValueError:
-#             parsed_to_date = None
-#     elif isinstance(to_date, datetime):
-#         parsed_to_date = to_date.date()
-#     elif isinstance(to_date, date):
-#         parsed_to_date = to_date
-#     else:
-#         parsed_to_date = None
-
-#     # 🎯 AUTO-KEYWORD INHERITANCE FROM LINKED VENDOR
-#     if asset_id and not keywords:
-#         try:
-#             asset_obj = AssetSubLedger.objects.select_related("vendor").get(
-#                 id=asset_id
-#             )
-#             if asset_obj.vendor:
-#                 if asset_obj.vendor.default_keywords:
-#                     keywords = asset_obj.vendor.default_keywords
-#                 elif asset_obj.vendor.name:
-#                     keywords = [asset_obj.vendor.name]
-#         except Exception as e:
-#             print(f"⚠️ [CANDIDATE MATCHER] Failed to inherit vendor keywords: {e}")
-
-#     print("\n==================================================")
-#     print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-#     print(
-#         f"📥 Keywords: {keywords} | Target Amount: {target_amount} | Horizon Days: {day_window}"
-#     )
-#     print("==================================================")
-
-#     mapped_entries = []
-#     seen_row_ids = set()
-#     seen_journal_ids = set()
-
-#     # =========================================================================
-#     # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (EXCLUDE ZERO-DEBIT COUNTERPARTS)
-#     # =========================================================================
-#     if asset_id:
-#         bound_mappings = AssetTransactionMapping.objects.filter(
-#             asset_id=asset_id
-#         ).exclude(row_identifier__isnull=True)
-
-#         bound_row_ids = list(
-#             bound_mappings.values_list("row_identifier", flat=True)
-#         )
-
-#         if bound_row_ids:
-#             bound_staging_entries = JournalEntry.objects.filter(
-#                 row_identifier__in=bound_row_ids, debit__gt=0
-#             )
-#             mapping_map = {m.row_identifier: m for m in bound_mappings}
-
-#             print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-#             for idx, entry in enumerate(bound_staging_entries, 1):
-#                 m_obj = mapping_map.get(entry.row_identifier)
-
-#                 seen_row_ids.add(entry.row_identifier)
-#                 seen_journal_ids.add(str(entry.id))
-
-#                 raw_remarks_str = str(entry.remarks or "")[:60]
-#                 print(
-#                     f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-#                     f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#                     f"RowID: {entry.row_identifier[:12]}... | "
-#                     f"Remarks: {raw_remarks_str}"
-#                 )
-
-#                 mapped_entries.append(
-#                     {
-#                         "journal_id": str(entry.id),
-#                         "row_identifier": entry.row_identifier,
-#                         "account_id": entry.account_id,
-#                         "transaction_date": entry.transaction_date.strftime(
-#                             "%Y-%m-%d"
-#                         ),
-#                         "date_offset_days": 0,
-#                         "debit": float(entry.debit),
-#                         "credit": float(entry.credit),
-#                         "remarks": entry.remarks,
-#                         "probability_score": 100,
-#                         "is_mapped": True,
-#                         "is_mapped_to_this_asset": True,
-#                         "mapping_info": {
-#                             "mapping_id": str(m_obj.id) if m_obj else None,
-#                             "asset_id": str(asset_id),
-#                         },
-#                     }
-#                 )
-
-#     print(f"\n📌 Phase 1 Total Bound Rows (Debits Only): {len(mapped_entries)}")
-
-#     # =========================================================================
-#     # PHASE 2: UNMAPPED POOL MATCHING (TIGHTENED SCORING)
-#     # =========================================================================
-#     start_date = doc_date - timedelta(days=day_window)
-#     end_date = (
-#         parsed_to_date
-#         if parsed_to_date
-#         else (doc_date + timedelta(days=day_window))
-#     )
-
-#     all_mapped_row_ids = set(
-#         AssetTransactionMapping.objects.exclude(
-#             row_identifier__isnull=True
-#         ).values_list("row_identifier", flat=True)
-#     )
-#     all_mapped_row_ids.update(seen_row_ids)
-
-#     unmapped_query = JournalEntry.objects.filter(
-#         transaction_date__gte=start_date,
-#         transaction_date__lte=end_date,
-#         debit__gt=0,
-#     )
-
-#     if account_id:
-#         unmapped_query = unmapped_query.filter(account_id=account_id)
-
-#     if all_mapped_row_ids:
-#         unmapped_query = unmapped_query.exclude(
-#             row_identifier__in=list(all_mapped_row_ids)
-#         )
-
-#     has_target_amount = (
-#         target_amount is not None and Decimal(str(target_amount)) > 0
-#     )
-
-#     target_amt = None
-#     min_amount = None
-#     max_amount = None
-#     if has_target_amount:
-#         target_amt = Decimal(str(target_amount))
-#         min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-#         max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-#     clean_keywords = []
-#     keyword_token_sets = []
-#     if keywords:
-#         for kw in keywords:
-#             norm_kw = AssetCandidateMatcher.normalize_text(kw)
-#             tokens = AssetCandidateMatcher.tokenize_text(kw)
-#             if norm_kw:
-#                 clean_keywords.append(norm_kw)
-#             if tokens:
-#                 keyword_token_sets.append(tokens)
-
-#     exclude_self_kw = ["INTRAACCOUNT", "OWNACCOUNTTFR", "SELFTRANSFER"]
-
-#     unmapped_candidates = []
-#     print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-#     idx_p2 = 0
-
-#     for entry in unmapped_query.iterator():
-#         if (
-#             entry.row_identifier in seen_row_ids
-#             or str(entry.id) in seen_journal_ids
-#         ):
-#             continue
-
-#         eval_snapshot = entry.evaluation_matrix_snapshot or {}
-#         if isinstance(eval_snapshot, str):
-#             try:
-#                 eval_snapshot = json.loads(eval_snapshot)
-#             except Exception:
-#                 eval_snapshot = {}
-
-#         res_cat = eval_snapshot.get("resolved_category", "")
-#         res_sub = eval_snapshot.get("resolved_subcategory", "")
-
-#         if res_sub == "Self Inter-Account" or res_cat == "Income":
-#             continue
-
-#         norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-#         if any(skw in norm_remarks for skw in exclude_self_kw):
-#             continue
-
-#         # KEYWORD MATCHING
-#         matched_count = 0
-#         entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-#         if clean_keywords:
-#             for norm_kw, kw_tokens in zip(clean_keywords, keyword_token_sets):
-#                 if kw_tokens and kw_tokens.issubset(entry_tokens):
-#                     matched_count += 1
-#                     continue
-
-#                 stem = norm_kw.rstrip("S")
-#                 if norm_kw in norm_remarks or (
-#                     len(stem) >= 4 and stem in norm_remarks
-#                 ):
-#                     matched_count += 1
-
-#         # AMOUNT MATCHING
-#         entry_debit = Decimal(str(entry.debit or 0))
-#         is_amount_matched = False
-#         if has_target_amount and min_amount and max_amount:
-#             if min_amount <= entry_debit <= max_amount:
-#                 is_amount_matched = True
-
-#         # HARD GUARDRAIL: Skip if neither keyword nor amount matches
-#         if clean_keywords or has_target_amount:
-#             if matched_count == 0 and not is_amount_matched:
-#                 continue
-
-#         # PROBABILITY SCORE CALCULATION
-#         score = 0
-
-#         if matched_count > 0:
-#             score += min(30 + (matched_count * 10), 50)
-
-#         if is_amount_matched:
-#             diff = abs(entry_debit - target_amt)
-#             if diff == Decimal("0"):
-#                 score += 40
-#             else:
-#                 score += 25
-
-#         date_diff = abs((entry.transaction_date - doc_date).days)
-#         if date_diff == 0:
-#             score += 10
-#         elif date_diff <= 7:
-#             score += 5
-
-#         seen_row_ids.add(entry.row_identifier)
-#         seen_journal_ids.add(str(entry.id))
-#         idx_p2 += 1
-
-#         raw_remarks_str = str(entry.remarks or "")[:60]
-#         print(
-#             f"[{idx_p2:02d}] UNMAPPED | Score: {score}% | Date: {entry.transaction_date} | "
-#             f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#             f"RowID: {entry.row_identifier[:12]}... | "
-#             f"Remarks: {raw_remarks_str}"
-#         )
-
-#         unmapped_candidates.append(
-#             {
-#                 "journal_id": str(entry.id),
-#                 "row_identifier": entry.row_identifier,
-#                 "account_id": entry.account_id,
-#                 "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-#                 "date_offset_days": (entry.transaction_date - doc_date).days,
-#                 "debit": float(entry.debit),
-#                 "credit": float(entry.credit),
-#                 "remarks": entry.remarks,
-#                 "probability_score": min(score, 100),
-#                 "is_mapped": False,
-#                 "is_mapped_to_this_asset": False,
-#                 "mapping_info": None,
-#             }
-#         )
-
-#     sorted_unmapped = sorted(
-#         unmapped_candidates,
-#         key=lambda x: (x["probability_score"], -abs(x["date_offset_days"])),
-#         reverse=True,
-#     )
-
-#     total_final = len(mapped_entries) + len(sorted_unmapped)
-#     print("\n==================================================")
-#     print(
-#         f"📊 Phase 1 Bound (Debits): {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-#     )
-#     print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-#     print("==================================================\n")
-
-#     return mapped_entries + sorted_unmapped
-
-
-# from datetime import date, datetime, timedelta
-# from decimal import Decimal
-# from datetime import timedelta
-# from django.db import models
-
-# import json
-# import re
-
-
-# class AssetCandidateMatcher:
-
-#     @staticmethod
-#     def normalize_text(text: str) -> str:
-#         """
-#         Extracts narration/payee from dict/JSON string if needed,
-#         then strips all non-alphanumeric characters and converts to UPPERCASE.
-#         """
-#         if not text:
-#             return ""
-
-#         if isinstance(text, dict):
-#             text = f"{text.get('narration', '')} {text.get('payee', '')}"
-#         elif isinstance(text, str) and text.strip().startswith("{"):
-#             try:
-#                 data = json.loads(text)
-#                 if isinstance(data, dict):
-#                     text = f"{data.get('narration', '')} {data.get('payee', '')}"
-#             except Exception:
-#                 pass
-
-#         return re.sub(r"[^A-Za-z0-9]", "", str(text)).upper()
-
-#     @staticmethod
-#     def tokenize_text(text: str) -> set:
-#         """
-#         Splits text into clean, individual alphanumeric uppercase words/tokens.
-#         Useful for precise word-boundary matching.
-#         """
-#         if not text:
-#             return set()
-
-#         if isinstance(text, dict):
-#             text = f"{text.get('narration', '')} {text.get('payee', '')}"
-#         elif isinstance(text, str) and text.strip().startswith("{"):
-#             try:
-#                 data = json.loads(text)
-#                 if isinstance(data, dict):
-#                     text = f"{data.get('narration', '')} {data.get('payee', '')}"
-#             except Exception:
-#                 pass
-
-#         # Split on non-alphanumeric boundaries
-#         tokens = re.findall(r"[A-Za-z0-9]+", str(text).upper())
-#         return set(tokens)
-
-#     # @staticmethod
-#     # def find_candidate_rows(
-#     #     document_date,
-#     #     target_amount=None,
-#     #     account_id=None,
-#     #     keywords=None,
-#     #     day_window=30,
-#     #     amount_tolerance_pct=Decimal("0.05"),
-#     #     asset_id=None,
-#     #     to_date=None,
-#     # ):
-#     #     from tracker.models import JournalEntry
-#     #     from tracker.models.subledger import AssetTransactionMapping
-
-#     #     print("\n==================================================")
-#     #     print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-#     #     print(f"📥 Keywords: {keywords} | Horizon Days: {day_window}")
-#     #     print("==================================================")
-
-#     #     mapped_entries = []
-#     #     seen_row_ids = set()
-#     #     seen_journal_ids = set()
-
-#     #     # =========================================================================
-#     #     # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (EXCLUDE ZERO-DEBIT COUNTERPARTS)
-#     #     # =========================================================================
-#     #     if asset_id:
-#     #         bound_mappings = AssetTransactionMapping.objects.filter(
-#     #             asset_id=asset_id
-#     #         ).exclude(row_identifier__isnull=True)
-
-#     #         bound_row_ids = list(
-#     #             bound_mappings.values_list("row_identifier", flat=True)
-#     #         )
-
-#     #         if bound_row_ids:
-#     #             bound_staging_entries = JournalEntry.objects.filter(
-#     #                 row_identifier__in=bound_row_ids, debit__gt=0
-#     #             )
-#     #             mapping_map = {m.row_identifier: m for m in bound_mappings}
-
-#     #             print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-#     #             for idx, entry in enumerate(bound_staging_entries, 1):
-#     #                 m_obj = mapping_map.get(entry.row_identifier)
-
-#     #                 seen_row_ids.add(entry.row_identifier)
-#     #                 seen_journal_ids.add(str(entry.id))
-
-#     #                 raw_remarks_str = str(entry.remarks or "")[:60]
-#     #                 print(
-#     #                     f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-#     #                     f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#     #                     f"RowID: {entry.row_identifier[:12]}... | "
-#     #                     f"Remarks: {raw_remarks_str}"
-#     #                 )
-
-#     #                 mapped_entries.append(
-#     #                     {
-#     #                         "journal_id": str(entry.id),
-#     #                         "row_identifier": entry.row_identifier,
-#     #                         "account_id": entry.account_id,
-#     #                         "transaction_date": entry.transaction_date.strftime(
-#     #                             "%Y-%m-%d"
-#     #                         ),
-#     #                         "date_offset_days": 0,
-#     #                         "debit": float(entry.debit),
-#     #                         "credit": float(entry.credit),
-#     #                         "remarks": entry.remarks,
-#     #                         "probability_score": 100,
-#     #                         "is_mapped": True,
-#     #                         "is_mapped_to_this_asset": True,
-#     #                         "mapping_info": {
-#     #                             "mapping_id": str(m_obj.id) if m_obj else None,
-#     #                             "asset_id": asset_id,
-#     #                         },
-#     #                     }
-#     #                 )
-
-#     #     print(f"\n📌 Phase 1 Total Bound Rows (Debits Only): {len(mapped_entries)}")
-
-#     #     # =========================================================================
-#     #     # PHASE 2: UNMAPPED POOL MATCHING (OPTIMIZED)
-#     #     # =========================================================================
-#     #     start_date = document_date
-#     #     end_date = to_date if to_date else (document_date + timedelta(days=day_window))
-
-#     #     all_mapped_row_ids = set(
-#     #         AssetTransactionMapping.objects.exclude(
-#     #             row_identifier__isnull=True
-#     #         ).values_list("row_identifier", flat=True)
-#     #     )
-#     #     all_mapped_row_ids.update(seen_row_ids)
-
-#     #     # Base DB Query - Select only necessary fields if needed
-#     #     unmapped_query = JournalEntry.objects.filter(
-#     #         transaction_date__gte=start_date,
-#     #         transaction_date__lte=end_date,
-#     #         debit__gt=0,
-#     #     )
-
-#     #     if account_id:
-#     #         unmapped_query = unmapped_query.filter(account_id=account_id)
-
-#     #     # Exclude already bound rows at database level
-#     #     if all_mapped_row_ids:
-#     #         unmapped_query = unmapped_query.exclude(
-#     #             row_identifier__in=list(all_mapped_row_ids)
-#     #         )
-
-#     #     # ⚡ OPTIMIZATION 1: Database-Level Keyword Pre-Filtering
-#     #     # Reduces incoming record count drastically before Python processing
-#     #     has_target_amount = (
-#     #         target_amount is not None and Decimal(str(target_amount)) > 0
-#     #     )
-
-#     #     if keywords and not has_target_amount:
-#     #         phrase_q = models.Q()
-#     #         for kw in keywords:
-#     #             # Extract clean tokens >= 3 characters for DB LIKE filter
-#     #             words = re.findall(r"[A-Za-z0-9]{3,}", kw)
-#     #             if words:
-#     #                 word_q = models.Q()
-#     #                 for w in words:
-#     #                     word_q &= models.Q(remarks__icontains=w)
-#     #                 phrase_q |= word_q
-
-#     #         if len(phrase_q) > 0:
-#     #             unmapped_query = unmapped_query.filter(phrase_q)
-
-#     #     # Prepare normalized keywords & token sets for Python matcher
-#     #     clean_keywords = []
-#     #     keyword_token_sets = []
-#     #     if keywords:
-#     #         for kw in keywords:
-#     #             norm_kw = AssetCandidateMatcher.normalize_text(kw)
-#     #             tokens = AssetCandidateMatcher.tokenize_text(kw)
-#     #             if norm_kw:
-#     #                 clean_keywords.append(norm_kw)
-#     #             if tokens:
-#     #                 keyword_token_sets.append(tokens)
-
-#     #     exclude_self_kw = [
-#     #         "INTRAACCOUNT",
-#     #         "OWNACCOUNTTFR",
-#     #         "SELFTRANSFER",
-#     #     ]
-
-#     #     target_amt = None
-#     #     min_amount = None
-#     #     max_amount = None
-#     #     if has_target_amount:
-#     #         target_amt = Decimal(str(target_amount))
-#     #         min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-#     #         max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-#     #     unmapped_candidates = []
-#     #     print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-#     #     idx_p2 = 0
-
-#     #     # Execute Query with Iterator to conserve memory on large querysets
-#     #     for entry in unmapped_query.iterator():
-#     #         if (
-#     #             entry.row_identifier in seen_row_ids
-#     #             or str(entry.id) in seen_journal_ids
-#     #         ):
-#     #             continue
-
-#     #         # 🎯 FIX 1: Python-Level Rule Classification Exclusion Guardrail
-#     #         # Handles stringified or JSON-typed snapshots reliably
-#     #         eval_snapshot = entry.evaluation_matrix_snapshot or {}
-#     #         if isinstance(eval_snapshot, str):
-#     #             try:
-#     #                 eval_snapshot = json.loads(eval_snapshot)
-#     #             except Exception:
-#     #                 eval_snapshot = {}
-
-#     #         res_cat = eval_snapshot.get("resolved_category", "")
-#     #         res_sub = eval_snapshot.get("resolved_subcategory", "")
-
-#     #         # Exclude cleared self-transfers and income records instantly
-#     #         if res_sub == "Self Inter-Account" or res_cat == "Income":
-#     #             continue
-
-#     #         norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-#     #         # Exclude based on hardcoded self-transfer keywords
-#     #         if any(skw in norm_remarks for skw in exclude_self_kw):
-#     #             continue
-
-#     #         # 🎯 FIX 2: Dual-Strategy Keyword Matching (Tokenized + Normalized)
-#     #         score = 20
-#     #         matched_count = 0
-#     #         entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-#     #         if clean_keywords:
-#     #             for norm_kw, kw_tokens in zip(clean_keywords, keyword_token_sets):
-#     #                 # Strategy A: Exact Word Token Match (Highest Precision)
-#     #                 if kw_tokens and kw_tokens.issubset(entry_tokens):
-#     #                     matched_count += 1
-#     #                     continue
-
-#     #                 # Strategy B: Compact Normalized Match (Handles space/hyphen differences)
-#     #                 stem = norm_kw.rstrip("S")
-#     #                 if norm_kw in norm_remarks or (
-#     #                     len(stem) >= 4 and stem in norm_remarks
-#     #                 ):
-#     #                     matched_count += 1
-
-#     #             if matched_count == 0 and not has_target_amount:
-#     #                 continue
-
-#     #         if matched_count > 0:
-#     #             score += min(30 + (matched_count * 10), 50)
-
-#     #         # Amount Matching Logic
-#     #         if target_amt and min_amount and max_amount:
-#     #             entry_debit = Decimal(str(entry.debit))
-#     #             if min_amount <= entry_debit <= max_amount:
-#     #                 score += 30
-
-#     #         # Proximity Scoring
-#     #         date_diff = (entry.transaction_date - document_date).days
-#     #         if date_diff == 0:
-#     #             score += 20
-#     #         elif date_diff <= 30:
-#     #             score += 15
-#     #         elif date_diff <= 90:
-#     #             score += 10
-
-#     #         seen_row_ids.add(entry.row_identifier)
-#     #         seen_journal_ids.add(str(entry.id))
-#     #         idx_p2 += 1
-
-#     #         raw_remarks_str = str(entry.remarks or "")[:60]
-#     #         print(
-#     #             f"[{idx_p2:02d}] UNMAPPED | Date: {entry.transaction_date} | "
-#     #             f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#     #             f"RowID: {entry.row_identifier[:12]}... | "
-#     #             f"Remarks: {raw_remarks_str}"
-#     #         )
-
-#     #         unmapped_candidates.append(
-#     #             {
-#     #                 "journal_id": str(entry.id),
-#     #                 "row_identifier": entry.row_identifier,
-#     #                 "account_id": entry.account_id,
-#     #                 "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-#     #                 "date_offset_days": date_diff,
-#     #                 "debit": float(entry.debit),
-#     #                 "credit": float(entry.credit),
-#     #                 "remarks": entry.remarks,
-#     #                 "probability_score": min(score, 100),
-#     #                 "is_mapped": False,
-#     #                 "is_mapped_to_this_asset": False,
-#     #                 "mapping_info": None,
-#     #             }
-#     #         )
-
-#     #     sorted_unmapped = sorted(
-#     #         unmapped_candidates,
-#     #         key=lambda x: (x["transaction_date"], x["probability_score"]),
-#     #         reverse=False,
-#     #     )
-
-#     #     total_final = len(mapped_entries) + len(sorted_unmapped)
-#     #     print("\n==================================================")
-#     #     print(
-#     #         f"📊 Phase 1 Bound (Debits): {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-#     #     )
-#     #     print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-#     #     print("==================================================\n")
-
-#     #     return mapped_entries + sorted_unmapped
-
-#     @staticmethod
-#     def find_candidate_rows(
-#         document_date,
-#         target_amount=None,
-#         account_id=None,
-#         keywords=None,
-#         day_window=30,
-#         amount_tolerance_pct=Decimal("0.05"),
-#         asset_id=None,
-#         to_date=None,
-#     ):
-#         from tracker.models import JournalEntry
-#         from tracker.models.subledger import AssetTransactionMapping
-
-#         print("\n==================================================")
-#         print(f"🔍 [DEBUG CANDIDATES] STARTING MATCH FOR ASSET: {asset_id}")
-#         print(
-#             f"📥 Keywords: {keywords} | Target Amount: {target_amount} | Horizon Days: {day_window}"
-#         )
-#         print("==================================================")
-
-#         mapped_entries = []
-#         seen_row_ids = set()
-#         seen_journal_ids = set()
-
-#         # =========================================================================
-#         # PHASE 1: DIRECT LOOKUP FOR BOUND DATA (EXCLUDE ZERO-DEBIT COUNTERPARTS)
-#         # =========================================================================
-#         if asset_id:
-#             bound_mappings = AssetTransactionMapping.objects.filter(
-#                 asset_id=asset_id
-#             ).exclude(row_identifier__isnull=True)
-
-#             bound_row_ids = list(
-#                 bound_mappings.values_list("row_identifier", flat=True)
-#             )
-
-#             if bound_row_ids:
-#                 bound_staging_entries = JournalEntry.objects.filter(
-#                     row_identifier__in=bound_row_ids, debit__gt=0
-#                 )
-#                 mapping_map = {m.row_identifier: m for m in bound_mappings}
-
-#                 print("\n--- PHASE 1 BOUND ROWS PRINT ---")
-#                 for idx, entry in enumerate(bound_staging_entries, 1):
-#                     m_obj = mapping_map.get(entry.row_identifier)
-
-#                     seen_row_ids.add(entry.row_identifier)
-#                     seen_journal_ids.add(str(entry.id))
-
-#                     raw_remarks_str = str(entry.remarks or "")[:60]
-#                     print(
-#                         f"[{idx:02d}] BOUND | Date: {entry.transaction_date} | "
-#                         f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#                         f"RowID: {entry.row_identifier[:12]}... | "
-#                         f"Remarks: {raw_remarks_str}"
-#                     )
-
-#                     mapped_entries.append(
-#                         {
-#                             "journal_id": str(entry.id),
-#                             "row_identifier": entry.row_identifier,
-#                             "account_id": entry.account_id,
-#                             "transaction_date": entry.transaction_date.strftime(
-#                                 "%Y-%m-%d"
-#                             ),
-#                             "date_offset_days": 0,
-#                             "debit": float(entry.debit),
-#                             "credit": float(entry.credit),
-#                             "remarks": entry.remarks,
-#                             "probability_score": 100,
-#                             "is_mapped": True,
-#                             "is_mapped_to_this_asset": True,
-#                             "mapping_info": {
-#                                 "mapping_id": str(m_obj.id) if m_obj else None,
-#                                 "asset_id": asset_id,
-#                             },
-#                         }
-#                     )
-
-#         print(f"\n📌 Phase 1 Total Bound Rows (Debits Only): {len(mapped_entries)}")
-
-#         # =========================================================================
-#         # PHASE 2: UNMAPPED POOL MATCHING (TIGHTENED SCORING)
-#         # =========================================================================
-#         start_date = (
-#             document_date - timedelta(days=day_window)
-#             if isinstance(document_date, date)
-#             else document_date
-#         )
-#         end_date = to_date if to_date else (document_date + timedelta(days=day_window))
-
-#         all_mapped_row_ids = set(
-#             AssetTransactionMapping.objects.exclude(
-#                 row_identifier__isnull=True
-#             ).values_list("row_identifier", flat=True)
-#         )
-#         all_mapped_row_ids.update(seen_row_ids)
-
-#         unmapped_query = JournalEntry.objects.filter(
-#             transaction_date__gte=start_date,
-#             transaction_date__lte=end_date,
-#             debit__gt=0,
-#         )
-
-#         if account_id:
-#             unmapped_query = unmapped_query.filter(account_id=account_id)
-
-#         if all_mapped_row_ids:
-#             unmapped_query = unmapped_query.exclude(
-#                 row_identifier__in=list(all_mapped_row_ids)
-#             )
-
-#         has_target_amount = (
-#             target_amount is not None and Decimal(str(target_amount)) > 0
-#         )
-
-#         target_amt = None
-#         min_amount = None
-#         max_amount = None
-#         if has_target_amount:
-#             target_amt = Decimal(str(target_amount))
-#             min_amount = target_amt * (Decimal("1") - amount_tolerance_pct)
-#             max_amount = target_amt * (Decimal("1") + amount_tolerance_pct)
-
-#         # Prepare normalized keywords
-#         clean_keywords = []
-#         keyword_token_sets = []
-#         if keywords:
-#             for kw in keywords:
-#                 norm_kw = AssetCandidateMatcher.normalize_text(kw)
-#                 tokens = AssetCandidateMatcher.tokenize_text(kw)
-#                 if norm_kw:
-#                     clean_keywords.append(norm_kw)
-#                 if tokens:
-#                     keyword_token_sets.append(tokens)
-
-#         exclude_self_kw = ["INTRAACCOUNT", "OWNACCOUNTTFR", "SELFTRANSFER"]
-
-#         unmapped_candidates = []
-#         print("\n--- PHASE 2 UNMAPPED CANDIDATES PRINT ---")
-#         idx_p2 = 0
-
-#         for entry in unmapped_query.iterator():
-#             if (
-#                 entry.row_identifier in seen_row_ids
-#                 or str(entry.id) in seen_journal_ids
-#             ):
-#                 continue
-
-#             eval_snapshot = entry.evaluation_matrix_snapshot or {}
-#             if isinstance(eval_snapshot, str):
-#                 try:
-#                     eval_snapshot = json.loads(eval_snapshot)
-#                 except Exception:
-#                     eval_snapshot = {}
-
-#             res_cat = eval_snapshot.get("resolved_category", "")
-#             res_sub = eval_snapshot.get("resolved_subcategory", "")
-
-#             if res_sub == "Self Inter-Account" or res_cat == "Income":
-#                 continue
-
-#             norm_remarks = AssetCandidateMatcher.normalize_text(entry.remarks)
-
-#             if any(skw in norm_remarks for skw in exclude_self_kw):
-#                 continue
-
-#             # 🎯 1. KEYWORD MATCHING
-#             matched_count = 0
-#             entry_tokens = AssetCandidateMatcher.tokenize_text(entry.remarks)
-
-#             if clean_keywords:
-#                 for norm_kw, kw_tokens in zip(clean_keywords, keyword_token_sets):
-#                     if kw_tokens and kw_tokens.issubset(entry_tokens):
-#                         matched_count += 1
-#                         continue
-
-#                     stem = norm_kw.rstrip("S")
-#                     if norm_kw in norm_remarks or (
-#                         len(stem) >= 4 and stem in norm_remarks
-#                     ):
-#                         matched_count += 1
-
-#             # 🎯 2. AMOUNT MATCHING
-#             entry_debit = Decimal(str(entry.debit or 0))
-#             is_amount_matched = False
-#             if has_target_amount and min_amount and max_amount:
-#                 if min_amount <= entry_debit <= max_amount:
-#                     is_amount_matched = True
-
-#             # 🛑 HARD GUARDRAIL: If user specified keywords or amount,
-#             # discard rows that match NEITHER keyword NOR amount.
-#             if clean_keywords or has_target_amount:
-#                 if matched_count == 0 and not is_amount_matched:
-#                     continue  # Drops random ₹175 entries instantly!
-
-#             # 🧮 3. PROBABILITY SCORE CALCULATION
-#             score = 0
-
-#             # Keyword points (up to 50 pts)
-#             if matched_count > 0:
-#                 score += min(30 + (matched_count * 10), 50)
-
-#             # Amount points (up to 40 pts)
-#             if is_amount_matched:
-#                 diff = abs(entry_debit - target_amt)
-#                 if diff == Decimal("0"):
-#                     score += 40  # Exact amount match
-#                 else:
-#                     score += 25  # Within tolerance
-
-#             # Proximity points (up to 10 pts)
-#             date_diff = (
-#                 abs((entry.transaction_date - document_date).days)
-#                 if isinstance(document_date, date)
-#                 else 0
-#             )
-#             if date_diff == 0:
-#                 score += 10
-#             elif date_diff <= 7:
-#                 score += 5
-
-#             seen_row_ids.add(entry.row_identifier)
-#             seen_journal_ids.add(str(entry.id))
-#             idx_p2 += 1
-
-#             raw_remarks_str = str(entry.remarks or "")[:60]
-#             print(
-#                 f"[{idx_p2:02d}] UNMAPPED | Score: {score}% | Date: {entry.transaction_date} | "
-#                 f"Debit: {entry.debit:10.2f} | ID: {entry.id} | "
-#                 f"RowID: {entry.row_identifier[:12]}... | "
-#                 f"Remarks: {raw_remarks_str}"
-#             )
-
-#             unmapped_candidates.append(
-#                 {
-#                     "journal_id": str(entry.id),
-#                     "row_identifier": entry.row_identifier,
-#                     "account_id": entry.account_id,
-#                     "transaction_date": entry.transaction_date.strftime("%Y-%m-%d"),
-#                     "date_offset_days": (
-#                         (entry.transaction_date - document_date).days
-#                         if isinstance(document_date, date)
-#                         else 0
-#                     ),
-#                     "debit": float(entry.debit),
-#                     "credit": float(entry.credit),
-#                     "remarks": entry.remarks,
-#                     "probability_score": min(score, 100),
-#                     "is_mapped": False,
-#                     "is_mapped_to_this_asset": False,
-#                     "mapping_info": None,
-#                 }
-#             )
-
-#         # Sort unmapped candidates by probability score descending
-#         sorted_unmapped = sorted(
-#             unmapped_candidates,
-#             key=lambda x: (x["probability_score"], -abs(x["date_offset_days"])),
-#             reverse=True,
-#         )
-
-#         total_final = len(mapped_entries) + len(sorted_unmapped)
-#         print("\n==================================================")
-#         print(
-#             f"📊 Phase 1 Bound (Debits): {len(mapped_entries)} | Phase 2 Unmapped: {len(sorted_unmapped)}"
-#         )
-#         print(f"✅ TOTAL CLEAN CANDIDATES: {total_final}")
-#         print("==================================================\n")
-
-#         return mapped_entries + sorted_unmapped
+        return mapped_entries + unmapped_candidates

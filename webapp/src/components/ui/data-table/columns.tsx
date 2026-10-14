@@ -721,115 +721,239 @@ export const UNCATEGORIZED_VAULT_COLUMNS: ColumnConfig[] = [
   { key: 'actions', label: 'Manual Allocation', width: '10%', align: 'center' },
 ];
 
+// export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
+//   {
+//     key: 'category',
+//     label: 'Primary Class',
+//     width: '15%',
+//     align: 'left',
+//     textColor: 'text-zinc-200 font-bold',
+//   },
+//   {
+//     key: 'subcategory',
+//     label: 'Subcategory',
+//     width: '22%',
+//     align: 'left',
+//     textColor: 'text-zinc-300',
+//   },
+//   {
+//     key: 'transaction_count',
+//     label: 'Txn Count',
+//     width: '8%',
+//     align: 'center',
+//     textColor: 'text-zinc-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'total_debit',
+//     label: 'Debit (DR)',
+//     width: '13%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-amber-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'total_credit',
+//     label: 'Credit (CR)',
+//     width: '13%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-emerald-400 font-mono text-xs',
+//   },
+//   {
+//     key: 'net_balance',
+//     label: 'Net Balance',
+//     width: '17%',
+//     align: 'right',
+//     isCurrency: true,
+//     textColor: 'text-zinc-100 font-bold font-mono text-xs',
+//     renderFooter: (data: any[]) => {
+//       const net = data.reduce((acc, row) => {
+//         const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
+//         const cr = parseFloat(
+//           String(row.total_credit || '0').replace(/,/g, '')
+//         );
+//         return acc + (dr - cr);
+//       }, 0);
+
+//       return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+//     },
+//   },
+//   {
+//     key: 'actions',
+//     label: 'Actions',
+//     width: '12%',
+//     align: 'center',
+//     renderCell: (row: any, meta?: any) => {
+//       const subcategory = String(row.subcategory || '').trim();
+//       const primaryCategory = String(row.category || '')
+//         .trim()
+//         .toLowerCase();
+
+//       const capableSet: Set<string> = meta?.subledgerCapableSet || new Set();
+//       const isSubledgerCapable = Array.from(capableSet).some(
+//         (item) =>
+//           String(item).trim().toLowerCase() === subcategory.toLowerCase()
+//       );
+
+//       if (!isSubledgerCapable || !subcategory) return null;
+
+//       let buttonLabel = '📦 Subledger';
+//       let colorStyles =
+//         'bg-teal-950/80 hover:bg-teal-900 border-teal-800/80 text-teal-300';
+
+//       if (primaryCategory === 'asset') {
+//         buttonLabel = '📦 Asset Hub';
+//         colorStyles =
+//           'bg-cyan-950/80 hover:bg-cyan-900 border-cyan-800/80 text-cyan-300';
+//       } else if (primaryCategory === 'expense') {
+//         buttonLabel = '📊 Subledger';
+//         colorStyles =
+//           'bg-rose-950/80 hover:bg-rose-900 border-rose-800/80 text-rose-300';
+//       } else if (primaryCategory === 'income') {
+//         buttonLabel = '💰 Subledger';
+//         colorStyles =
+//           'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-800/80 text-emerald-300';
+//       }
+
+//       return React.createElement(
+//         'button',
+//         {
+//           type: 'button',
+//           onClick: (e: React.MouseEvent) => {
+//             e.stopPropagation();
+//             if (meta?.onOpenSubledgerDrawer) {
+//               meta.onOpenSubledgerDrawer(subcategory);
+//             }
+//           },
+//           className: `px-2 py-0.5 border font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto ${colorStyles}`,
+//           title: `Open Subledger Hub for ${subcategory}`,
+//         },
+//         buttonLabel
+//       );
+//     },
+//   },
+// ];
 export const CATEGORY_BREAKDOWN_COLUMNS: ColumnConfig[] = [
   {
     key: 'category',
-    label: 'Primary Class',
-    width: '15%',
+    label: 'Class',
+    width: '10%',
     align: 'left',
     textColor: 'text-zinc-200 font-bold',
+    renderCell: (row: any) => {
+      const cat = String(row.category || 'Uncategorized');
+      let badgeStyle = 'bg-zinc-800/80 text-zinc-400 border-zinc-700/60';
+      if (cat === 'Asset') badgeStyle = 'bg-blue-950/40 text-blue-300 border-blue-800/50';
+      else if (cat === 'Expense') badgeStyle = 'bg-rose-950/40 text-rose-300 border-rose-800/50';
+      else if (cat === 'Income') badgeStyle = 'bg-emerald-950/40 text-emerald-300 border-emerald-800/50';
+      else if (cat === 'Transfer') badgeStyle = 'bg-purple-950/40 text-purple-300 border-purple-800/50';
+      else if (cat === 'Liability') badgeStyle = 'bg-amber-950/40 text-amber-300 border-amber-800/50';
+
+      return (
+        <span className={`px-1.5 py-0.2 rounded border text-[9px] font-mono font-bold uppercase tracking-wider ${badgeStyle}`}>
+          {cat}
+        </span>
+      );
+    },
   },
   {
     key: 'subcategory',
-    label: 'Subcategory',
-    width: '22%',
+    label: 'Account Head',
+    width: '30%',
     align: 'left',
-    textColor: 'text-zinc-300',
+    textColor: 'text-zinc-200',
+    renderCell: (row: any) => {
+      const subcategory = String(row.subcategory || 'Unspecified');
+      const isSuspense = subcategory === 'Suspense Account';
+
+      return (
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-semibold ${isSuspense ? 'text-amber-400 font-bold' : 'text-zinc-200'}`}>
+            {subcategory}
+          </span>
+          {isSuspense && (
+            <span className="px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase">
+              Action
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
     key: 'transaction_count',
-    label: 'Txn Count',
-    width: '8%',
-    align: 'center',
+    label: 'Count',
+    width: '10%',
+    align: 'right',
     textColor: 'text-zinc-400 font-mono text-xs',
+    renderFooter: (data: any[]) => {
+      const total = data.reduce((acc, row) => {
+        const c = typeof row.transaction_count === 'number'
+          ? row.transaction_count
+          : parseInt(row.transaction_count || '0', 10);
+        return acc + (isNaN(c) ? 0 : c);
+      }, 0);
+      return total.toLocaleString('en-IN');
+    },
   },
   {
     key: 'total_debit',
     label: 'Debit (DR)',
-    width: '13%',
+    width: '15%',
     align: 'right',
     isCurrency: true,
-    textColor: 'text-amber-400 font-mono text-xs',
+    textColor: 'text-amber-400 font-mono text-xs font-semibold',
+    renderFooter: (data: any[]) => {
+      const total = data.reduce((acc, row) => {
+        const val = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
+        return acc + (isNaN(val) ? 0 : val);
+      }, 0);
+      return `₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    },
   },
   {
     key: 'total_credit',
     label: 'Credit (CR)',
-    width: '13%',
+    width: '15%',
     align: 'right',
     isCurrency: true,
-    textColor: 'text-emerald-400 font-mono text-xs',
+    textColor: 'text-emerald-400 font-mono text-xs font-semibold',
+    renderFooter: (data: any[]) => {
+      const total = data.reduce((acc, row) => {
+        const val = parseFloat(String(row.total_credit || '0').replace(/,/g, ''));
+        return acc + (isNaN(val) ? 0 : val);
+      }, 0);
+      return `₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    },
   },
   {
     key: 'net_balance',
     label: 'Net Balance',
-    width: '17%',
+    width: '20%',
     align: 'right',
     isCurrency: true,
     textColor: 'text-zinc-100 font-bold font-mono text-xs',
+    renderCell: (row: any) => {
+      const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
+      const cr = parseFloat(String(row.total_credit || '0').replace(/,/g, ''));
+      const net = (isNaN(cr) ? 0 : cr) - (isNaN(dr) ? 0 : dr);
+
+      return (
+        <span className={`tabular-nums font-bold font-mono text-xs ${
+          net < 0 ? 'text-rose-400' : (net > 0 ? 'text-emerald-400' : 'text-zinc-500')
+        }`}>
+          ₹{Math.abs(net).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {net < 0 ? 'DR' : (net > 0 ? 'CR' : '')}
+        </span>
+      );
+    },
     renderFooter: (data: any[]) => {
       const net = data.reduce((acc, row) => {
         const dr = parseFloat(String(row.total_debit || '0').replace(/,/g, ''));
-        const cr = parseFloat(
-          String(row.total_credit || '0').replace(/,/g, '')
-        );
-        return acc + (dr - cr);
+        const cr = parseFloat(String(row.total_credit || '0').replace(/,/g, ''));
+        return acc + ((isNaN(cr) ? 0 : cr) - (isNaN(dr) ? 0 : dr));
       }, 0);
 
-      return net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
-    },
-  },
-  {
-    key: 'actions',
-    label: 'Actions',
-    width: '12%',
-    align: 'center',
-    renderCell: (row: any, meta?: any) => {
-      const subcategory = String(row.subcategory || '').trim();
-      const primaryCategory = String(row.category || '')
-        .trim()
-        .toLowerCase();
-
-      const capableSet: Set<string> = meta?.subledgerCapableSet || new Set();
-      const isSubledgerCapable = Array.from(capableSet).some(
-        (item) =>
-          String(item).trim().toLowerCase() === subcategory.toLowerCase()
-      );
-
-      if (!isSubledgerCapable || !subcategory) return null;
-
-      let buttonLabel = '📦 Subledger';
-      let colorStyles =
-        'bg-teal-950/80 hover:bg-teal-900 border-teal-800/80 text-teal-300';
-
-      if (primaryCategory === 'asset') {
-        buttonLabel = '📦 Asset Hub';
-        colorStyles =
-          'bg-cyan-950/80 hover:bg-cyan-900 border-cyan-800/80 text-cyan-300';
-      } else if (primaryCategory === 'expense') {
-        buttonLabel = '📊 Subledger';
-        colorStyles =
-          'bg-rose-950/80 hover:bg-rose-900 border-rose-800/80 text-rose-300';
-      } else if (primaryCategory === 'income') {
-        buttonLabel = '💰 Subledger';
-        colorStyles =
-          'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-800/80 text-emerald-300';
-      }
-
-      return React.createElement(
-        'button',
-        {
-          type: 'button',
-          onClick: (e: React.MouseEvent) => {
-            e.stopPropagation();
-            if (meta?.onOpenSubledgerDrawer) {
-              meta.onOpenSubledgerDrawer(subcategory);
-            }
-          },
-          className: `px-2 py-0.5 border font-mono text-[10px] font-bold rounded-md flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-sm mx-auto ${colorStyles}`,
-          title: `Open Subledger Hub for ${subcategory}`,
-        },
-        buttonLabel
-      );
+      return `₹${Math.abs(net).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${net < 0 ? 'DR' : 'CR'}`;
     },
   },
 ];

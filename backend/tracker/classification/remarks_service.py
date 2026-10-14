@@ -1,44 +1,108 @@
-import re
-from tracker.classification.utils.upiparser import parse_upi_narration
+"""
+tracker/classification/remarks_service.py - Text Enrichment & Pattern Engine
+Encapsulates entity extraction, canonicalization, pattern generation,
+and noise-free candidate suggestions.
+"""
 
-BLACKLIST_TAGS = {
-    "TRANSFER_NACH",
-    "TRANSFER",
-    "TRANSFER_COLON",  # Handles regex-sanitized TRANSFER:
-    "NACH",
-    "IMPS",
-    "UPI",
-    "MOB",
-    "SUSPENSE_ACCOUNT",
-    "UNCLASSIFIED_OTHER",
-    "GENERAL_OPERATING_EXPENSES",
-    "OWN_ACCOUNT",
-    "NULL",
-    "UNKNOWN",
-}
+import re
+from collections import Counter
+from typing import Any, Dict, Optional, Tuple
+
+from tracker.classification.utils.upiparser import parse_upi_narration
+from tracker.constants import (
+    ALL_CANDIDATE_BLACKLIST,
+    BLACKLIST_TAGS,
+    CORPORATE_NOISE_SUFFIXES,
+    KNOWN_MERCHANTS,
+    UPI_RAIL_TOKENS,
+)
+
+
+def canonicalize_merchant_token(token: str) -> str:
+    """Dynamically canonicalizes brand variations without in-file hardcoding."""
+    if not token:
+        return "GENERAL_SUSPENSE"
+
+    raw_upper = str(token).upper().strip()
+
+    # 1. Direct match against dynamic KNOWN_MERCHANTS
+    words = [
+        w
+        for w in re.sub(r"[^A-Z0-9\s]", " ", raw_upper).split()
+        if w not in UPI_RAIL_TOKENS and not w.isdigit()
+    ]
+
+    for word in words:
+        if word in KNOWN_MERCHANTS:
+            return word
+
+    # 2. Filter corporate/legal suffixes
+    meaningful = [
+        w
+        for w in words
+        if w not in CORPORATE_NOISE_SUFFIXES and w not in BLACKLIST_TAGS
+    ]
+
+    if meaningful:
+        return "_".join(meaningful[:2])
+
+    return words[0] if words else "GENERAL_SUSPENSE"
+
+
+clean_and_canonicalize_token = canonicalize_merchant_token
+
+
+def extract_merchant_from_upi_string(text: str) -> Optional[str]:
+    """Extracts vendor tokens by splitting on rail delimiters (/ : - _)."""
+    if not text:
+        return None
+
+    raw_upper = str(text).upper()
+    segments = re.split(r"[/|:\-_]", raw_upper)
+
+    for seg in segments:
+        clean_seg = re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9\s]", " ", seg)).strip()
+        if (
+            not clean_seg
+            or clean_seg.isdigit()
+            or len(clean_seg) < 3
+            or clean_seg in BLACKLIST_TAGS
+            or clean_seg in UPI_RAIL_TOKENS
+            or sum(c.isdigit() for c in clean_seg) >= 5
+        ):
+            continue
+
+        return canonicalize_merchant_token(clean_seg)
+
+    return None
 
 
 def generate_cluster_pattern(narration: str, remarks_data: dict = None) -> str:
+    """Generates the primary clustering anchor for a transaction line."""
     remarks_data = remarks_data or {}
-    payee = remarks_data.get("payee")
+    effective_narration = remarks_data.get("universal_narration") or narration or ""
 
-    # If payee is missing or blacklisted, parse directly from raw narration
-    if (
-        not payee
-        or re.sub(r"[^A-Z0-9]+", "_", str(payee).upper()).strip("_") in BLACKLIST_TAGS
-        or str(payee).upper().startswith("TRANSFER")
-    ):
-        parsed = parse_upi_narration(narration) or {}
-        payee = parsed.get("payee")
+    merchant = extract_merchant_from_upi_string(effective_narration)
+    if merchant and merchant != "GENERAL_SUSPENSE":
+        return merchant
+
+    parsed = parse_upi_narration(effective_narration) or {}
+    payee = parsed.get("payee") or remarks_data.get("payee")
 
     if payee:
-        payee_upper = payee.upper().strip()
-        sanitized = re.sub(r"[^A-Z0-9]+", "_", payee_upper).strip("_")
+        canonical_payee = canonicalize_merchant_token(str(payee))
+        if canonical_payee and canonical_payee not in BLACKLIST_TAGS:
+            return canonical_payee
 
-        if len(sanitized) > 2 and sanitized not in BLACKLIST_TAGS:
-            return sanitized
+    words = [
+        w
+        for w in re.sub(r"[^A-Z0-9\s]", " ", effective_narration.upper()).split()
+        if len(w) >= 3 and w not in BLACKLIST_TAGS and not w.isdigit()
+    ]
+    if words:
+        return canonicalize_merchant_token(words[0])
 
-    return "UNCLASSIFIED_OTHER"
+    return "GENERAL_SUSPENSE"
 
 
 def generate_initial_remarks(
@@ -47,12 +111,11 @@ def generate_initial_remarks(
     credit: float,
     bank_name: str = "Bank A/c",
     target_category: str = "Suspense Account",
-) -> tuple[dict, dict]:
-    """
-    Builds structured JSON payload for debit and credit legs of a journal entry during staging ingestion.
-    Guarantees clean payee extraction, directional text ('By' vs 'To'), and reference numbers.
-    """
-    parsed_meta = parse_upi_narration(narration) or {}
+    universal_narration: Optional[str] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Builds structured JSON remarks payloads for debit and credit legs."""
+    effective_narration = universal_narration or narration
+    parsed_meta = parse_upi_narration(effective_narration) or {}
     payee = parsed_meta.get("payee")
     ref_no = parsed_meta.get("upi_ref")
 
@@ -76,6 +139,7 @@ def generate_initial_remarks(
     base_payload = {
         "payee": payee,
         "upi_ref": ref_no,
+        "universal_narration": universal_narration or payee or narration,
         "user_note": None,
         "rule_code": None,
         "source": "STAGING_INGEST",
@@ -110,3 +174,71 @@ def generate_initial_remarks(
     }
 
     return debit_json, credit_json
+
+
+def extract_candidate_patterns_from_narrations(
+    narrations: list[str], max_selectable: int = 15
+) -> dict:
+    """Extracts noise-free candidate patterns from transaction narrations."""
+    if not narrations:
+        return {"selectable_patterns": [], "disabled_patterns": []}
+
+    candidate_counter = Counter()
+    disabled_tokens = set()
+
+    for raw_text in narrations:
+        if not raw_text:
+            continue
+
+        clean_str = re.sub(
+            r"\s+", " ", re.sub(r"[^A-Z0-9\s]", " ", str(raw_text).upper())
+        ).strip()
+        if not clean_str:
+            continue
+
+        tokens = clean_str.split()
+        valid_tokens = []
+
+        for token in tokens:
+            if token in ALL_CANDIDATE_BLACKLIST:
+                disabled_tokens.add(token)
+                continue
+
+            if (
+                token.isdigit()
+                or len(token) > 25
+                or sum(c.isdigit() for c in token) >= 4
+            ):
+                continue
+
+            valid_tokens.append(token)
+
+        # 1. Heavily weight canonical brands
+        for token in valid_tokens:
+            if token in KNOWN_MERCHANTS:
+                candidate_counter[token] += 10
+
+        # 2. Clean compound combinations
+        if 2 <= len(valid_tokens) <= 3:
+            compound = " ".join(valid_tokens)
+            if len(compound) >= 4:
+                candidate_counter[compound] += 3
+
+        for i in range(len(valid_tokens) - 1):
+            gram_2 = f"{valid_tokens[i]} {valid_tokens[i+1]}"
+            candidate_counter[gram_2] += 2
+
+        # 3. Individual candidate tokens
+        for token in valid_tokens:
+            if len(token) >= 3:
+                candidate_counter[token] += 1
+
+    sorted_candidates = sorted(
+        candidate_counter.keys(),
+        key=lambda p: (-candidate_counter[p], -len(p.split()), -len(p)),
+    )
+
+    return {
+        "selectable_patterns": sorted_candidates[:max_selectable],
+        "disabled_patterns": sorted(list(disabled_tokens))[:12],
+    }

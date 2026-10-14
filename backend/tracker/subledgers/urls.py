@@ -32,5 +32,10 @@ urlpatterns = [
         SubledgerSubcategoryBreakdownView.as_view(),
         name="subledger-subcategory-breakdown",
     ),
+    path(
+        "check_mapped_rows/",
+        SubledgerSubcategoryBreakdownView.as_view(),
+        name="check-mapped-rows",
+    ),
     path("", include(router.urls)),
 ]

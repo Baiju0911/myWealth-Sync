@@ -254,6 +254,11 @@ class DateFormats(StrEnum):
 # =============================================================================
 
 
+# =============================================================================
+# 4. BANKING TOKENS & SYSTEM BLACKLISTS
+# =============================================================================
+
+
 class TokenCatalog:
     """Master registry of payment tokens, blacklist identifiers, and protected words."""
 
@@ -271,135 +276,77 @@ class TokenCatalog:
         "UNKNOWN VENDOR",
     }
 
+    # Consolidated Rail & Gateway Network Tokens
+    UPI_RAIL_TOKENS: Set[str] = {
+        "RRN", "UPI", "REV", "REF", "TXN", "CR", "DR", "INB", "WDLTFR",
+        "DEPTFR", "MOB", "IMPS", "NEFT", "RTGS", "NACH", "ACH", "POS",
+        "YESB", "SBIN", "HDFC", "ICIC", "ICICI", "FDRL", "CNRB", "BARB",
+        "PUNB", "UTIB", "AIRP", "AIRTEL", "PAYTM", "PYTM", "YBL", "IBL",
+        "AXIS", "KKBK", "RAZORPAY", "BIL", "TPV", "ECOM", "NAT", "OFMR",
+        "TRANSACTION", "COLLECT", "UPIINTENT", "TRANSFER",
+    }
+
+    # Corporate & Legal Suffixes to Strip from Merchant Counterparties
+    CORPORATE_NOISE_SUFFIXES: Set[str] = {
+        "LTD", "LIMITED", "PVT", "PRIVATE", "ONLINE", "ORDER", "ONLINE_ORDER",
+        "INDIA", "PAYMENTS", "SOLUTIONS", "SERVICES", "ENTERPRISES", "STORE",
+        "RESTAURANT", "FOOD", "FOODS", "CAFE", "BAKERY", "SUPERMARKET",
+    }
+
+    # Clean Anchor Brands for Direct Canonical Clustering
+    KNOWN_MERCHANTS: Set[str] = {
+        "ZOMATO",
+        "SWIGGY",
+        "BLINKIT",
+        "ZEPTO",
+        "INSTAMART",
+        "UBER",
+        "OLA",
+        "AMAZON",
+        "FLIPKART",
+        "BIGBASKET",
+        "NETFLIX",
+        "SPOTIFY",
+        "MAKEMYTRIP",
+        "IRCTC",
+        "AIRTEL",
+        "JIO",
+        "TATA",
+        "POTHY",
+        "LULU",
+        "PVR",
+        "INOX",
+        "CINEPOLIS",
+        "BHIMA",
+        "KALYAN",
+        "JOYALUKKAS",
+        "THANGAMAYIL",
+        "SKECHERS",
+    }
+
     NOISE_KEYWORDS: Set[str] = {
-        "UPI",
-        "NEFT",
-        "RTGS",
-        "IMPS",
-        "POS",
-        "ACH",
-        "NFT",
-        "TFR",
-        "TRANSFER",
-        "PAYMENT",
-        "DR",
-        "CR",
-        "BANK",
-        "INB",
-        "INF",
-        "BIL",
-        "CLG",
-        "CHQ",
-        "CHEQUE",
-        "CASH",
-        "ATM",
-        "DEBIT",
-        "CREDIT",
-        "NONE",
-        "UNDEFINED",
-        "GENERAL_OPERATING_EXPENSES",
-        "UNCLASSIFIED",
-        "SUSPENSE_ACCOUNT",
-        "INTENT",
-        "INTEN",
-        "UPIINTENT",
-        "MERCHANT",
-        "YESPAY",
-        "RAZORPAY",
-        "PAYU",
-        "RZP",
-        "COLLECT",
-        "EXPRESS",
-        "LIMITED",
-        "LTD",
-        "PVTLTD",
-        "PRIVATE",
-        "PAY",
-        "PAYING",
-        "PAYVIA",
-        "PAYFOR",
-        "PAYMENTFOR",
-        "INTENTPAY",
-        "SWIGGYPAY",
-        "SETTLEMENT",
-        "REFUND",
-        "BILL",
-        "FUND",
-        "DICT",
-        "ACCOUNT",
-        "CENTRE",
-        "UTIB",
-        "YESB",
-        "BARB",
-        "IBKL",
-        "PUNB",
-        "MAHB",
-        "IDIB",
-        "IOBA",
-        "UBIN",
-        "KKBK",
-        "RATN",
-        "PYTM",
-        "PAYTM",
-        "YBL",
-        "PTYBL",
-        "IBL",
-        "AXL",
-        "APL",
-        "IPL",
-        "OBL",
-        "OKHDFCB",
-        "OKSBI",
-        "OKAXIS",
-        "OKICICI",
-        "BARODAMPAY",
-        "ALLBANK",
-        "MAHBANK",
-        "IDFCBANK",
-        "IDBI",
-        "INDUS",
-        "RBL",
-        "UCO",
-        "UNIONBANK",
-        "REMARKS",
-        "REMARK",
-        "NOREMARKS",
-        "NOREMARK",
-        "NO_REMARKS",
-        "NO_REMARK",
-        "PAYMENT_FOR",
-        "YOU_ARE_PAYING",
-        "INGESTED_VIA_STAGING",
-        "PAYTMQR",
-        "PI",
-        "CMN",
-        "PRCR",
-        "POSTRN",
-        "TRN",
-        "TXN",
-        "REF",
-        "NO",
-        "ID",
-        "ORDER",
-        "BRANCH",
-        "TVM",
+        "UPI", "NEFT", "RTGS", "IMPS", "POS", "ACH", "NFT", "TFR", "TRANSFER",
+        "PAYMENT", "DR", "CR", "BANK", "INB", "INF", "BIL", "CLG", "CHQ",
+        "CHEQUE", "CASH", "ATM", "DEBIT", "CREDIT", "NONE", "UNDEFINED",
+        "GENERAL_OPERATING_EXPENSES", "UNCLASSIFIED", "SUSPENSE_ACCOUNT",
+        "INTENT", "INTEN", "UPIINTENT", "MERCHANT", "YESPAY", "RAZORPAY",
+        "PAYU", "RZP", "COLLECT", "EXPRESS", "LIMITED", "LTD", "PVTLTD",
+        "PRIVATE", "PAY", "PAYING", "PAYVIA", "PAYFOR", "PAYMENTFOR",
+        "INTENTPAY", "SWIGGYPAY", "SETTLEMENT", "REFUND", "BILL", "FUND",
+        "DICT", "ACCOUNT", "CENTRE", "UTIB", "YESB", "BARB", "IBKL", "PUNB",
+        "MAHB", "IDIB", "IOBA", "UBIN", "KKBK", "RATN", "PYTM", "PAYTM",
+        "YBL", "PTYBL", "IBL", "AXL", "APL", "IPL", "OBL", "OKHDFCB",
+        "OKSBI", "OKAXIS", "OKICICI", "BARODAMPAY", "ALLBANK", "MAHBANK",
+        "IDFCBANK", "IDBI", "INDUS", "RBL", "UCO", "UNIONBANK", "REMARKS",
+        "REMARK", "NOREMARKS", "NOREMARK", "NO_REMARKS", "NO_REMARK",
+        "PAYMENT_FOR", "YOU_ARE_PAYING", "INGESTED_VIA_STAGING", "PAYTMQR",
+        "PI", "CMN", "PRCR", "POSTRN", "TRN", "TXN", "REF", "NO", "ID",
+        "ORDER", "BRANCH", "TVM",
     }
 
     GENERIC_IGNORE_PATTERNS: Set[str] = {
-        "MOB",
-        "UPI",
-        "PYTM",
-        "IMPS",
-        "NEFT",
-        "RTGS",
-        "TRANSFER",
-        "BY",
-        "TO",
-        "PAID",
-        "RECEIVED",
-        "INB",
-        "INB/IMPS",
-        "OTHERS",
+        "MOB", "UPI", "PYTM", "IMPS", "NEFT", "RTGS", "TRANSFER", "BY",
+        "TO", "PAID", "RECEIVED", "INB", "INB/IMPS", "OTHERS",
     }
 
     GENERIC_PATTERNS: Set[str] = {
@@ -418,209 +365,100 @@ class TokenCatalog:
         "POSTRN",
     }
 
-    KNOWN_MERCHANTS: Set[str] = {
-        "ZOMATO",
-        "SWIGGY",
-        "BLINKIT",
-        "ZEPTO",
-        "INSTAMART",
-        "POTHY",
-        "LULU",
-        "PVR",
-        "INOX",
-        "CINEPOLIS",
-        "BHIMA",
-        "KALYAN",
-        "JOYALUKKAS",
-        "THANGAMAYIL",
-        "SKECHERS",
-    }
-
     RULE_SAFETY_BLACKLIST: Set[str] = {
-        "YBL",
-        "PTYBL",
-        "IBL",
-        "AXL",
-        "APL",
-        "IPL",
-        "OBL",
-        "OKICICI",
-        "OKHDFCBANK",
-        "OKAXIS",
-        "OKSBI",
-        "BARODAMPAY",
-        "ALLBANK",
-        "MAHBANK",
-        "IDFCBANK",
-        "YESB",
-        "PAYMENT",
-        "ORDER",
-        "TRANSFER",
-        "UPI",
-        "INTENT",
-        "FOR",
-        "THE",
-        "BY",
-        "TO",
-        "PAID",
-        "RECEIVED",
-        "BRANCH",
+        "YBL", "PTYBL", "IBL", "AXL", "APL", "IPL", "OBL", "OKICICI",
+        "OKHDFCBANK", "OKAXIS", "OKSBI", "BARODAMPAY", "ALLBANK", "MAHBANK",
+        "IDFCBANK", "YESB", "PAYMENT", "ORDER", "TRANSFER", "UPI", "INTENT",
+        "FOR", "THE", "BY", "TO", "PAID", "RECEIVED", "BRANCH",
     }
 
     ABSOLUTE_GREEDY_BLACKLIST: Set[str] = {
-        "UPI",
-        "TRANSFER",
-        "PAYMENT",
-        "BANK",
-        "PAID",
-        "RECEIVED",
-        "CARD",
+        "UPI", "TRANSFER", "PAYMENT", "BANK", "PAID", "RECEIVED", "CARD",
     }
 
     CATASTROPHIC_KEYWORDS: Set[str] = {
-        "UPI",
-        "PAYMENT",
-        "TRANSFER",
-        "BANK",
-        "PAID",
-        "RECEIVED",
-        "CARD",
-        "CASH",
-        "DEBIT",
-        "CREDIT",
-        "REMARKS",
-        "INTENT",
+        "UPI", "PAYMENT", "TRANSFER", "BANK", "PAID", "RECEIVED", "CARD",
+        "CASH", "DEBIT", "CREDIT", "REMARKS", "INTENT",
     }
 
     OK_WORD_LIST: Set[str] = {
-        "LIC",
-        "SIP",
-        "EMI",
-        "ATM",
-        "TAX",
-        "GST",
-        "POS",
-        "PF",
-        "FD",
-        "RD",
-        "NEFT",
-        "RTGS",
-        "UPI",
-        "AMAZON",
-        "SIBL",
-        "KSEB",
-        "KSFE",
-        "MILK",
-        "TEA",
-        "SBI",
-        "SIB",
-        "TO SBI",
-        "TO SIB",
-        "FED",
-        "TO FED",
-        "NACH CR",
-        "NACH",
+        "LIC", "SIP", "EMI", "ATM", "TAX", "GST", "POS", "PF", "FD", "RD",
+        "NEFT", "RTGS", "UPI", "AMAZON", "SIBL", "KSEB", "KSFE", "MILK",
+        "TEA", "SBI", "SIB", "TO SBI", "TO SIB", "FED", "TO FED",
+        "NACH CR", "NACH",
     }
 
     TAXONOMY_NOISE_KEYWORDS: Tuple[str, ...] = (
-        "TRANSFER",
-        "TRANSFERS",
-        "MB FT",
-        "MB FTO",
-        "MB FTB",
-        "SBI",
-        "SIB",
-        "SIBL",
-        "SBONR",
-        "FED-NRO",
-        "FED-NRO-1050",
-        "FED-NRE",
+        "TRANSFER", "TRANSFERS", "MB FT", "MB FTO", "MB FTB", "SBI", "SIB",
+        "SIBL", "SBONR", "FED-NRO", "FED-NRO-1050", "FED-NRE",
     )
 
     TRANSFER_BANK_NOISE: Set[str] = {
-        "TRANSFER",
-        "TRANSFERS",
-        "MB FT",
-        "MB FTO",
-        "MB FTB",
-        "SBI",
-        "SIB",
-        "SIBL",
-        "SBONR",
-        "FED-NRO",
-        "FED-NRE",
+        "TRANSFER", "TRANSFERS", "MB FT", "MB FTO", "MB FTB", "SBI", "SIB",
+        "SIBL", "SBONR", "FED-NRO", "FED-NRE",
     }
 
     VENDOR_CLEAN_STOPWORDS: Set[str] = {
-        "PVT",
-        "LTD",
-        "LIMITED",
-        "INC",
-        "PAY",
-        "INFO",
-        "PRIVATE",
-        "NO REMARK",
-        "REMARK",
-        "CARD",
-        "ON",
-        "FROM",
-        "YOUR",
-        "ACCOUNT",
-        "A/C",
-        "A C",
-        "TRV",
-        "BANGALORE",
-        "MUMBAI",
-        "CHENNAI",
-        "DEAR",
-        "CUSTOMER",
-        "THIS",
-        "IS",
-        "TO",
-        "INFORM",
-        "YOU",
-        "THAT",
-        "INFO",
-        "NO",
-        "REMAR",
-        "REMARK",
-        "NOREMAR",
-        "NOREMARKS",
+        "PVT", "LTD", "LIMITED", "INC", "PAY", "INFO", "PRIVATE", "NO REMARK",
+        "REMARK", "CARD", "ON", "FROM", "YOUR", "ACCOUNT", "A/C", "A C", "TRV",
+        "BANGALORE", "MUMBAI", "CHENNAI", "DEAR", "CUSTOMER", "THIS", "IS",
+        "TO", "INFORM", "YOU", "THAT", "NO", "REMAR", "NOREMAR", "NOREMARKS",
     }
 
     INVALID_SUB_TOKENS: Set[str] = {
-        "suspense account",
-        "none",
-        "null",
-        "unclassified",
-        "unknown",
-        "ai unclassified",
+        "suspense account", "none", "null", "unclassified", "unknown", "ai unclassified",
     }
 
     IGNORE_SLASH_TOKENS: Set[str] = {
-        "OWN",
-        "SELF",
-        "INFO",
-        "CARD",
-        "FROM",
-        "YOUR",
-        "ACCT",
-        "DR",
-        "CR",
-        "MOB",
-        "REF",
-        "NARRATION",
-        "NA",
-        "NULL",
-        "NONE",
+        "OWN", "SELF", "INFO", "CARD", "FROM", "YOUR", "ACCT", "DR", "CR",
+        "MOB", "REF", "NARRATION", "NA", "NULL", "NONE",
     }
 
     @classmethod
     def get_all_system_blacklist(cls) -> Set[str]:
-        combined = cls.RULE_SAFETY_BLACKLIST.union(cls.NOISE_KEYWORDS).union(
-            cls.CATASTROPHIC_KEYWORDS
+        combined = (
+            cls.RULE_SAFETY_BLACKLIST
+            | cls.NOISE_KEYWORDS
+            | cls.CATASTROPHIC_KEYWORDS
+            | cls.UPI_RAIL_TOKENS
+            | cls.CORPORATE_NOISE_SUFFIXES
         )
         return combined - cls.OK_WORD_LIST
+
+
+# =============================================================================
+# 7. EXPORTED COMPATIBILITY ALIASES
+# =============================================================================
+UPI_RAIL_TOKENS: Set[str] = TokenCatalog.UPI_RAIL_TOKENS
+CORPORATE_NOISE_SUFFIXES: Set[str] = TokenCatalog.CORPORATE_NOISE_SUFFIXES
+NOISE_KEYWORD_BLACKLIST: Set[str] = TokenCatalog.NOISE_KEYWORDS
+GENERIC_IGNORE_PATTERNS: Set[str] = TokenCatalog.GENERIC_IGNORE_PATTERNS
+GENERIC_PATTERNS: Set[str] = TokenCatalog.GENERIC_PATTERNS
+KNOWN_MERCHANTS: Set[str] = TokenCatalog.KNOWN_MERCHANTS
+RULE_SAFETY_BLACKLIST: Set[str] = TokenCatalog.RULE_SAFETY_BLACKLIST
+ABSOLUTE_GREEDY_BLACKLIST: Set[str] = TokenCatalog.ABSOLUTE_GREEDY_BLACKLIST
+CATASTROPHIC_KEYWORDS: Set[str] = TokenCatalog.CATASTROPHIC_KEYWORDS
+OK_WORD_LIST: Set[str] = TokenCatalog.OK_WORD_LIST
+TAXONOMY_NOISE_KEYWORDS: Tuple[str, ...] = TokenCatalog.TAXONOMY_NOISE_KEYWORDS
+TRANSFER_BANK_NOISE: Set[str] = TokenCatalog.TRANSFER_BANK_NOISE
+ALL_SYSTEM_BLACKLIST: Set[str] = TokenCatalog.get_all_system_blacklist()
+
+# Unified blacklist set for direct consumption by clustering & candidates
+BLACKLIST_TAGS: Set[str] = (
+    TokenCatalog.NOISE_KEYWORDS
+    | TokenCatalog.RULE_SAFETY_BLACKLIST
+    | TokenCatalog.ABSOLUTE_GREEDY_BLACKLIST
+    | TokenCatalog.GENERIC_PATTERNS
+    | TokenCatalog.UPI_RAIL_TOKENS
+    | TokenCatalog.CORPORATE_NOISE_SUFFIXES
+    | {
+        "TRANSFER_NACH", "TRANSFER", "TRANSFER_COLON", "SUSPENSE_ACCOUNT",
+        "UNCLASSIFIED_OTHER", "GENERAL_OPERATING_EXPENSES", "OWN_ACCOUNT",
+        "NULL", "UNKNOWN", "GENERAL_SUSPENSE", "UNLABELED_BANK_LINE",
+    }
+) - TokenCatalog.OK_WORD_LIST
+
+ALL_CANDIDATE_BLACKLIST: Set[str] = BLACKLIST_TAGS
 
 
 # =============================================================================
