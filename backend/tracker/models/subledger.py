@@ -111,6 +111,7 @@ class AssetCategoryChoices(models.TextChoices):
     DIVIDEND_FOLIO = "DIVIDEND_FOLIO", "Dividend & Yield Stream"
     VENDOR_MERCHANT = "VENDOR_MERCHANT", "Merchant / Service Provider"
     CHARITY_RECIPIENT = "CHARITY_RECIPIENT", "Charity / 80G Recipient"
+    PETTY_CASH = "PETTY_CASH", "Petty Cash & Liquid Floats"
 
 
 # 2. Define Model SECOND after choices exist
@@ -341,6 +342,10 @@ class Vendor(models.Model):
 class AcquisitionFundingSource(models.TextChoices):
     BANK_STAGING = "BANK_STAGING", "🏦 Bank Line (Reconciled via Staging)"
     DIRECT_CASH = "DIRECT_CASH", "💵 Direct Cash / Manual (Bank Row Missing)"
+    INTERNAL_TRANSFER = (
+        "INTERNAL_TRANSFER",
+        "🔄 Internal Float Transfer (Contra / PQR ➔ ABC)",
+    )
     HISTORICAL_OPENING = (
         "HISTORICAL_OPENING",
         "📜 Historical / Opening Balance (Pre-System Asset)",
@@ -477,7 +482,12 @@ class AssetSubLedger(models.Model):
 
     def save(self, *args, **kwargs):
         # Auto-toggle `is_bank_row_missing` flag based on chosen funding origin
-        if self.acquisition_funding_source != AcquisitionFundingSource.BANK_STAGING:
+        # if self.acquisition_funding_source != AcquisitionFundingSource.BANK_STAGING:
+        if self.acquisition_funding_source in [
+            AcquisitionFundingSource.DIRECT_CASH,
+            AcquisitionFundingSource.HISTORICAL_OPENING,
+            AcquisitionFundingSource.OTHER,
+        ]:
             self.is_bank_row_missing = True
         else:
             self.is_bank_row_missing = False

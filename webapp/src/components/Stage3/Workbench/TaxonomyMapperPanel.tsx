@@ -1,8 +1,9 @@
+// webapp/src/components/Stage3/Workbench/TaxonomyMapperPanel.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import type { TaxonomyOption, ExtendedCluster, Cluster, SuggestedRule } from '../../../api/api';
-import { subledgerApi, type SubcategoryBreakdownResponse } from '../../../api/subledger';
+import { subledgerApi, type SubcategoryBreakdownResponse, type AssetSubLedgerNode } from '../../../api/subledger';
 import { inrFormatter } from '../../../utils/classificationHelpers';
-import { Lightbulb, Plus, ArrowLeft, Layers, ExternalLink, ShieldCheck, Loader2 } from 'lucide-react';
+import { Lightbulb, Plus, ArrowLeft, Layers, ExternalLink, ShieldCheck, Loader2, Wallet } from 'lucide-react';
 import type { TaxonomyMatchContext } from '../../../components/subledger/CandidateMatcherModal';
 
 interface Props {
@@ -88,11 +89,28 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
     'Sundry Creditors',
   ]),
   onOpenSubledgerDrawer,
- // onOpenNewFolioModal,
+  onOpenNewFolioModal,
 }) => {
   const [subledgerInfo, setSubledgerInfo] = useState<SubcategoryBreakdownResponse | null>(null);
   const [loadingSubledgerInfo, setLoadingSubledgerInfo] = useState<boolean>(false);
   const [selectedFolioId, setSelectedFolioId] = useState<string>('');
+
+  // 🎯 Fetch all active cash float folios so you can attribute expenses to them
+  const [allCashFolios, setAllCashFolios] = useState<AssetSubLedgerNode[]>([]);
+
+  useEffect(() => {
+    subledgerApi
+      .getAssets()
+      .then((assets) => {
+        const cashFolios = assets.filter((a: any) => {
+          const cat = String(a.category || '').toUpperCase();
+          const gl = String(a.linked_gl_account || '').toLowerCase();
+          return cat.includes('CASH') || cat.includes('FLOAT') || gl.includes('cash') || gl.includes('float');
+        });
+        setAllCashFolios(cashFolios);
+      })
+      .catch((err) => console.error('Failed to load cash folios for attribution:', err));
+  }, []);
 
   useEffect(() => {
     if (activePreviewCluster?.pattern) {
@@ -126,11 +144,13 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
     );
 
     if (foundNode && Array.isArray(foundNode.subcategories) && foundNode.subcategories.length > 0) {
-      const subNames = foundNode.subcategories.map((sub: any) =>
-        typeof sub === 'object' && sub !== null
-          ? String(sub.subcategory || sub.name || sub.title || '')
-          : String(sub || '')
-      ).filter(Boolean);
+      const subNames = foundNode.subcategories
+        .map((sub: any) =>
+          typeof sub === 'object' && sub !== null
+            ? String(sub.subcategory || sub.name || sub.title || '')
+            : String(sub || '')
+        )
+        .filter(Boolean);
 
       if (targetSubcategoryContext && subNames.includes(targetSubcategoryContext)) {
         setSelectedSubcategory(targetSubcategoryContext);
@@ -235,7 +255,6 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
     };
   }, [selectedSubcategory, isSubledgerTarget, subledgerInfo]);
 
-  // Extract relevant keywords from cluster pattern or first transaction narration
   const buildContextualBridge = (): TaxonomyMatchContext => {
     let cleanKw = '';
     let txnDate = '';
@@ -254,7 +273,6 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
       }
     }
 
-    // Clean bank prefix noise
     cleanKw = cleanKw
       .replace(/TRANSFER:\s*TO\s*DEPOSIT\s*\d*/gi, '')
       .replace(/TRANSFER:\s*TO/gi, '')
@@ -446,6 +464,61 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
                 </select>
               </div>
 
+              {/* 🎯 SUBLEDGER FOLIO ATTRIBUTION (WORKS FOR BOTH CAPITAL ASSETS & EXPENSES ON CASH FLOATS) */}
+              <div className="bg-zinc-900/60 border border-emerald-500/30 rounded-xl p-3 space-y-2 mt-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-emerald-400 uppercase flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Subledger Folio Attribution (Optional)</span>
+                  </label>
+                  {onOpenNewFolioModal && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenNewFolioModal(selectedSubcategory)}
+                      className="text-[10px] text-cyan-400 hover:underline cursor-pointer"
+                    >
+                      + New Folio
+                    </button>
+                  )}
+                </div>
+
+                <select
+                  value={selectedFolioId}
+                  onChange={(e) => setSelectedFolioId(e.target.value)}
+                  className="w-full bg-zinc-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-emerald-300 font-bold outline-none focus:border-emerald-400 cursor-pointer"
+                >
+                  <option value="">-- Direct General Ledger (No Folio Deducted) --</option>
+                  
+                  {/* Category-specific folios (e.g. Real estate, Gold) */}
+                  {subledgerInfo?.assets && subledgerInfo.assets.length > 0 && (
+                    <optgroup label={`${selectedSubcategory} Folios`}>
+                      {subledgerInfo.assets.map((ast: any) => (
+                        <option key={ast.id} value={ast.id}>
+                          [{ast.asset_code}] {ast.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+
+                  {/* Cash Float Folios (Always available to attribute expenses) */}
+                  {allCashFolios.length > 0 && (
+                    <optgroup label="Operating Floats & Cash Pools">
+                      {allCashFolios.map((folio: any) => (
+                        <option key={folio.id} value={folio.id}>
+                          [{folio.asset_code}] {folio.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+
+                <p className="text-[10px] text-zinc-400 leading-normal">
+                  {selectedFolioId
+                    ? `⚡ Reclassifies line to ${selectedSubcategory} AND binds outflow directly to this folio.`
+                    : 'Filing as a normal General Ledger expense will not affect any cash float balance.'}
+                </p>
+              </div>
+
               {/* SUBLEDGER BRIDGE CARD */}
               {isSubledgerTarget && (
                 <div className="bg-zinc-900/60 border border-cyan-800/50 rounded-xl p-3 space-y-2.5 mt-2 shadow-xs">
@@ -464,7 +537,6 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {/* Operations Hub Drawer Button */}
                     {onOpenSubledgerDrawer && (
                       <button
                         type="button"
@@ -478,7 +550,6 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
                     )}
                   </div>
 
-                  {/* Telemetry row */}
                   <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-2 flex items-center justify-between text-[10px]">
                     <div className="flex items-center gap-1.5 text-zinc-400">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
@@ -498,70 +569,6 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
                       </div>
                     )}
                   </div>
-
-                  {/* Direct Folio Binding Dropdown
-                  {!loadingSubledgerInfo && subledgerInfo?.assets && subledgerInfo.assets.length > 0 ? (
-                    <div className="space-y-1 pt-1 border-t border-zinc-800/80">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[10px] font-bold text-emerald-400 uppercase block">
-                          🎯 Bind Directly to Folio (Optional)
-                        </label>
-                        {onOpenNewFolioModal && (
-                          <button
-                            type="button"
-                            onClick={() => onOpenNewFolioModal(selectedSubcategory)}
-                            className="text-[10px] text-cyan-400 hover:underline cursor-pointer"
-                          >
-                            + New Folio
-                          </button>
-                        )}
-                      </div>
-                      <select
-                        value={selectedFolioId}
-                        onChange={(e) => setSelectedFolioId(e.target.value)}
-                        className="w-full bg-zinc-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-emerald-300 font-bold outline-none focus:border-emerald-400 cursor-pointer"
-                      >
-                        <option value="">-- General GL Reclassification Only (Unbound) --</option>
-                        {subledgerInfo.assets.map((ast: any) => {
-                          const vName = ast.vendor_name || ast.vendor_detail?.name || (typeof ast.vendor === 'string' ? ast.vendor : null);
-                          return (
-                            <option key={ast.id} value={ast.id}>
-                              [{ast.asset_code}] {ast.name} {vName ? `[${vName}]` : ''} · {inrFormatter.format(Number(ast.current_valuation || 0))}
-                            </option>
-                          );
-                        })}
-                      </select>
-                      {selectedFolioId && (
-                        <p className="text-[9px] text-emerald-400/90 italic">
-                          ⚡ Submitting will reclassify to {selectedSubcategory} AND bind selected transactions directly to this folio.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    onOpenNewFolioModal && (
-                      <div className="pt-1 flex items-center justify-between text-[10px]">
-                        <span className="text-zinc-500">No active folios found.</span>
-                        <button
-                          type="button"
-                          onClick={() => onOpenNewFolioModal(selectedSubcategory)}
-                          className="text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                        >
-                          + Register New Folio
-                        </button>
-                      </div>
-                    )
-                  )} */}
-
-                  <p className="text-[10px] text-zinc-400 font-sans leading-relaxed">
-                    Attribution to specific meters/accounts can also be refined in the Subledger Hub via{' '}
-                    <button
-                      type="button"
-                      onClick={handleLaunchScanOutflows}
-                      className="text-cyan-400 hover:text-cyan-300 underline font-bold cursor-pointer inline"
-                    >
-                      Scan Outflows
-                    </button>.
-                  </p>
                 </div>
               )}
             </div>
@@ -618,7 +625,7 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
           {saveRule &&
             vectorType === 'Debit' &&
             selectedSummary.totalTxns > 0 &&
-            isUpiSelection(activePreviewCluster, activePreviewCluster?.items) && (
+            isUpiSelection(activePreviewCluster, (activePreviewCluster as any)?.items) && (
               <div className="border-t border-zinc-800 pt-2 flex flex-col gap-1.5">
                 <span className="text-[10px] text-zinc-400 font-bold uppercase">
                   UPI Rule Matching Strategy

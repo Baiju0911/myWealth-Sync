@@ -9,6 +9,53 @@ export const CATEGORY_DYNAMIC_SCHEMAS: Record<string, FieldDefinition[]> = {
   // ==========================================
   // 📦 ASSET SUB-LEDGER SCHEMAS
   // ==========================================
+  PETTY_CASH: [
+    {
+      key: 'float_type',
+      label: 'Float Channel Type',
+      placeholder: 'e.g. Digital Bank / UPI Float or Physical Cash Box',
+    },
+    {
+      key: 'bank_account_hint',
+      label: 'Linked Account / Last 4 Digits',
+      placeholder: 'e.g. SIB NRO ••0081 or Desk Cash Box #1',
+    },
+    {
+      key: 'custodian_holder',
+      label: 'Float Custodian / Handler',
+      placeholder: 'e.g. Self / Property Manager',
+    },
+    {
+      key: 'imprest_cap',
+      label: 'Target Imprest Float Cap (₹)',
+      placeholder: 'e.g. 50000',
+      type: 'number',
+    },
+    {
+      key: 'auto_replenish_threshold',
+      label: 'Replenish Threshold Alert (₹)',
+      placeholder: 'e.g. 5000',
+      type: 'number',
+    },
+  ],
+  CASH_FLOAT: [
+    {
+      key: 'float_type',
+      label: 'Float Channel Type',
+      placeholder: 'e.g. Digital Bank / UPI Float or Physical Cash Box',
+    },
+    {
+      key: 'bank_account_hint',
+      label: 'Linked Account / Last 4 Digits',
+      placeholder: 'e.g. SIB NRO ••0081 or Desk Cash Box #1',
+    },
+    {
+      key: 'custodian_holder',
+      label: 'Float Custodian / Handler',
+      placeholder: 'e.g. Self / Property Manager',
+    },
+  ],
+
   REAL_ESTATE: [
     {
       key: 'sro_name',

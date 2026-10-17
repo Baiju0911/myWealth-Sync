@@ -1,11 +1,12 @@
 // webapp/src/components/subledger/CandidateMatcherModal.tsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AssetComplianceSchedule,
   AssetSubLedgerNode,
   AssetOperationalAccount,
 } from '../../api/subledger';
+import { accountApi } from '../../api/api';
 import { CandidateFilterBar } from './candidatematcher/CandidateFilterbar';
 import { CandidateBatchToolbar } from './candidatematcher/CandidateBatchToolbar';
 import { CandidateCardItem } from './candidatematcher/CandidateCardItem';
@@ -62,7 +63,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
     selectedBindingAsset,
     selectedTotalSum,
     handleFolioChange,
-    handleSearchSubmit,
     handleUnmap,
     handleSaveAndSync,
     toggleSelectRow,
@@ -70,6 +70,58 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
     handleBatchBind,
     runScan,
   } = useCandidateMatching(props);
+
+  const activeNode = selectedBindingAsset || asset;
+
+  // 1. Check if active folio is a Cash Float
+  const isCashDomain = useMemo(() => {
+    const cat = String(activeNode?.category || '').toUpperCase();
+    const gl = String(activeNode?.linked_gl_account || '').toLowerCase();
+    const name = String(activeNode?.name || '').toLowerCase();
+    return (
+      cat.includes('CASH') ||
+      cat.includes('FLOAT') ||
+      gl.includes('cash') ||
+      gl.includes('float') ||
+      name.includes('float') ||
+      name.includes('petty')
+    );
+  }, [activeNode]);
+
+  // 2. Dynamic user accounts from ledger_account table
+  const [userAccounts, setUserAccounts] = useState<
+    Array<{ id: number | string; name: string; account_number?: string; account_type?: string }>
+  >([]);
+
+  useEffect(() => {
+    if (isOpen && isCashDomain) {
+      accountApi
+        .getAccounts()
+        .then((data: any) => {
+          const list = Array.isArray(data)
+            ? data
+            : data?.results || data?.accounts || [];
+          setUserAccounts(list);
+        })
+        .catch((err) => console.error('Failed to load ledger_account list:', err));
+    }
+  }, [isOpen, isCashDomain]);
+
+  // 3. Initial bank hint extracted from folio metadata payload
+  const defaultBankHint = useMemo(() => {
+    if (activeNode?.metadata_payload && typeof activeNode.metadata_payload === 'object') {
+      const hint = String(activeNode.metadata_payload.bank_account_hint || '');
+      const match = hint.match(/\d+/g);
+      return match ? match[match.length - 1] : hint.trim();
+    }
+    return '';
+  }, [activeNode]);
+
+  const [selectedBankHint, setSelectedBankHint] = useState<string>(defaultBankHint);
+
+  useEffect(() => {
+    setSelectedBankHint(defaultBankHint);
+  }, [defaultBankHint]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -84,7 +136,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
 
   if (!isOpen) return null;
 
-  const activeNode = selectedBindingAsset || asset;
   const activeVendorName =
     (typeof activeNode?.vendor === 'object' && activeNode?.vendor !== null
       ? (activeNode.vendor as { name?: string }).name
@@ -93,21 +144,46 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
       : '') ||
     (activeNode ? extractVendorTokenFromNode(activeNode) : '');
 
+  const handleBankFilterChange = (newHint: string) => {
+    setSelectedBankHint(newHint);
+    runScan(
+      selectedBindingAsset?.id,
+      documentDate,
+      targetAmount,
+      keywords,
+      dayWindow,
+      newHint
+    );
+  };
+
+  // Explicit search submit wrapper that guarantees selectedBankHint is preserved
+  const handleSearchSubmitWithBank = (e: React.FormEvent) => {
+    e.preventDefault();
+    runScan(
+      selectedBindingAsset?.id,
+      documentDate,
+      targetAmount,
+      keywords,
+      dayWindow,
+      isCashDomain ? selectedBankHint : undefined
+    );
+  };
+
   return createPortal(
     <div
-      className="fixed inset-0 z-10000 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+      className="fixed inset-0 z-10000 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md font-sans"
       onClick={(e) => {
         e.stopPropagation();
         onClose();
       }}
     >
       <div
-        className="w-full max-w-4xl rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl text-slate-100 font-sans max-h-[92vh] flex flex-col"
+        className="w-full max-w-4xl rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-2xl text-slate-100 max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-800 pb-3 shrink-0">
-          <div>
+          <div className="flex-1">
             <span className="text-xs font-semibold tracking-wider text-emerald-400 uppercase font-mono">
               Subledger Attribution & Reconciliation
             </span>
@@ -127,13 +203,14 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
               )}
             </div>
 
-            {displayedNodes.length > 0 && (
-              <div className="mt-2 flex items-center gap-2 text-xs">
-                <span className="text-slate-400 font-mono">Target Folio:</span>
+            {/* Target Folio & Conditional Account Selector (Cash Only) */}
+            <div className="mt-3 flex items-center gap-3 text-xs">
+              <div className={`flex items-center gap-2 ${isCashDomain ? 'w-7/12' : 'w-full'}`}>
+                <span className="text-slate-400 font-mono shrink-0">Target Folio:</span>
                 <select
                   value={selectedBindingAsset?.id || ''}
                   onChange={(e) => handleFolioChange(e.target.value)}
-                  className="rounded border border-slate-700 bg-slate-800 px-2.5 py-1 text-emerald-300 font-bold font-mono focus:border-emerald-500 focus:outline-none cursor-pointer"
+                  className="w-full rounded border border-slate-700 bg-slate-800 px-2.5 py-1 text-emerald-300 font-bold font-mono focus:border-emerald-500 focus:outline-none cursor-pointer"
                 >
                   {!asset && <option value="">── All Folios (Unfiltered) ──</option>}
                   {displayedNodes.map((n) => {
@@ -147,7 +224,37 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
                   })}
                 </select>
               </div>
-            )}
+
+              {/* RENDERED STRICTLY FOR PETTY CASH / LIQUID FLOATS */}
+              {isCashDomain && (
+                <div className="w-5/12 flex items-center gap-2">
+                  <span className="text-amber-400 font-mono shrink-0 font-semibold">Account:</span>
+                  <select
+                        value={selectedBankHint}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedBankHint(val);
+                          handleBankFilterChange(val);
+                        }}
+                        className="w-full rounded border border-amber-500/30 bg-slate-800 px-2.5 py-1 text-amber-300 font-mono text-xs focus:border-amber-400 focus:outline-none cursor-pointer"
+                      >
+                        <option value="">-- All Accounts (Global Node 99) --</option>
+                        {userAccounts
+                          .filter((acc) => String(acc.id) !== '99' && String(acc.id) !== '8')
+                          .map((acc) => {
+                            const rawNum = String(acc.account_number || '');
+                            const last4 = rawNum.length >= 4 ? rawNum.slice(-4) : rawNum;
+                            // Pass the clean last4 or account id so it matches accurately
+                            return (
+                              <option key={acc.id} value={last4 || String(acc.id)}>
+                                {acc.name} {last4 ? `(••${last4})` : ''}
+                              </option>
+                            );
+                          })}
+                      </select>
+                </div>
+              )}
+            </div>
           </div>
 
           <button
@@ -173,14 +280,21 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
           dayWindow={dayWindow}
           onSelectHorizon={(d) => {
             setDayWindow(d);
-            runScan(selectedBindingAsset?.id, documentDate, targetAmount, keywords, d);
+            runScan(
+              selectedBindingAsset?.id,
+              documentDate,
+              targetAmount,
+              keywords,
+              d,
+              isCashDomain ? selectedBankHint : undefined
+            );
           }}
           syncAcquisitionCost={syncAcquisitionCost}
           setSyncAcquisitionCost={setSyncAcquisitionCost}
           isCash={isCash}
           setIsCash={setIsCash}
           loading={loading}
-          onSearch={handleSearchSubmit}
+          onSearch={handleSearchSubmitWithBank}
         />
 
         {error && (
@@ -189,7 +303,7 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
           </div>
         )}
 
-        {/* Results Body: Scrollable container holding sticky toolbar and list */}
+        {/* Results Body */}
         <div className="mt-3 flex-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950 min-h-0 relative">
           {isCash ? (
             <div className="p-4 text-center font-mono">
@@ -212,11 +326,10 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
             </div>
           ) : candidates.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-400 font-mono">
-              No matching bank staging rows found for "{keywords}" within the selected window.
+              No matching bank staging rows found{keywords ? ` for "${keywords}"` : ''} within the selected window.
             </div>
           ) : (
             <div>
-              {/* Sticky Batch Toolbar */}
               <CandidateBatchToolbar
                 unmappedCount={unmappedCandidates.length}
                 selectedCount={
@@ -234,7 +347,6 @@ export const CandidateMatcherModal: React.FC<CandidateMatcherModalProps> = (prop
                 onBatchBind={() => handleBatchBind()}
               />
 
-              {/* Scrollable Candidate Cards */}
               <div className="p-3 space-y-1.5">
                 {candidates.map((cand) => (
                   <CandidateCardItem

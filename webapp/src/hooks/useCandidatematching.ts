@@ -49,7 +49,6 @@ export function useCandidateMatching({
   const [loading, setLoading] = useState<boolean>(false);
   const [binding, setBinding] = useState<boolean>(false);
 
-  // Dual candidate buckets: workbench stays pinned, deep search results append below
   const [workbenchCandidates, setWorkbenchCandidates] = useState<
     CandidateMatchResult[]
   >([]);
@@ -173,7 +172,6 @@ export function useCandidateMatching({
         const incomingMap = res?.mapped_map || {};
 
         setGlobalBoundMap((prev) => {
-          // Guard: Avoid triggering a state update if the mapping keys and IDs are identical
           const incomingKeys = Object.keys(incomingMap);
           if (prev.size === incomingKeys.length) {
             let identical = true;
@@ -213,7 +211,6 @@ export function useCandidateMatching({
     });
   }, [availableNodes, asset]);
 
-  // Combined candidates: Workbench entries stay pinned, Re-Scan results follow
   const candidates = useMemo(() => {
     return deduplicateAndAnnotateCandidates(
       workbenchCandidates,
@@ -236,7 +233,6 @@ export function useCandidateMatching({
     [candidates]
   );
 
-  // STABILITY FIX: Trigger mapping checks only when underlying list lengths change
   useEffect(() => {
     const rawPool = [...workbenchCandidates, ...scannedCandidates];
     if (rawPool.length > 0) {
@@ -248,7 +244,6 @@ export function useCandidateMatching({
     checkCandidateMappings,
   ]);
 
-  // Evict already-bound rows from active selection
   useEffect(() => {
     if (selectedRowIds.length > 0) {
       const allowedUnmappedKeys = new Set(
@@ -266,7 +261,8 @@ export function useCandidateMatching({
     docDate: string,
     amt: number | string,
     kwString: string,
-    windowDays: number
+    windowDays: number,
+    bankHint?: string
   ) => {
     setLoading(true);
     setError(null);
@@ -291,6 +287,10 @@ export function useCandidateMatching({
         account_id: accountId ? Number(accountId) : undefined,
       };
 
+      if (bankHint !== undefined && bankHint !== '') {
+        payload.bank_account_hint = bankHint;
+      }
+
       if (targetAssetId) {
         payload.asset_id = targetAssetId;
         fetchMappedTransactions(targetAssetId);
@@ -299,7 +299,6 @@ export function useCandidateMatching({
       }
 
       const response = await subledgerApi.findCandidates(payload);
-      // Append deep scan rows to scanned candidates without clearing workbench items
       setScannedCandidates(response.candidates || []);
     } catch (err: any) {
       console.error('Candidate fetch failed:', err.response?.data || err);
@@ -310,7 +309,6 @@ export function useCandidateMatching({
     }
   };
 
-  // Lifecycle Initialization: Sets up default Workbench state
   useEffect(() => {
     if (!isOpen) return;
 
@@ -328,10 +326,26 @@ export function useCandidateMatching({
 
     const initialAmount =
       schedule?.expected_amount || taxonomyContext?.defaultAmount || '';
-    const initialKeywords = asset
-      ? extractSpecificTerm(asset) ||
-        cleanVendorKeyword(taxonomyContext?.defaultKeyword || '')
-      : '';
+
+    // Check if asset is a cash float to suppress defaulting to generic vendor strings
+    const isCashAsset =
+      String(asset?.category || '')
+        .toUpperCase()
+        .includes('CASH') ||
+      String(asset?.category || '')
+        .toUpperCase()
+        .includes('FLOAT') ||
+      String(asset?.linked_gl_account || '')
+        .toLowerCase()
+        .includes('cash');
+
+    const initialKeywords = isCashAsset
+      ? ''
+      : asset
+        ? extractSpecificTerm(asset) ||
+          cleanVendorKeyword(taxonomyContext?.defaultKeyword || '')
+        : '';
+
     const existingAssetNote =
       (asset as any)?.user_note || asset?.metadata_payload?.user_note || '';
 
@@ -344,7 +358,6 @@ export function useCandidateMatching({
     setSyncAcquisitionCost(true);
     setDayWindow(1825);
 
-    // 1. Hydrate Workbench pool
     const rawStaged = taxonomyContext?.stagedItems || [];
     const hasWorkbenchPool = rawStaged.length > 0;
 
@@ -360,7 +373,6 @@ export function useCandidateMatching({
       setWorkbenchCandidates([]);
     }
 
-    // 2. Fetch folios for subcategory
     if (activeSubcategory) {
       subledgerApi
         .getAssets(activeSubcategory)
@@ -377,7 +389,6 @@ export function useCandidateMatching({
 
           setSelectedBindingAsset((prev) => prev || activeNode);
 
-          // Deep search only if no Workbench items were forwarded
           if (!hasWorkbenchPool && activeNode?.id) {
             runScan(
               activeNode.id,
@@ -411,7 +422,6 @@ export function useCandidateMatching({
     isOpen,
     asset?.id,
     activeSubcategory,
-    // STABILITY FIX: Depend on primitive length rather than unstable array reference
     taxonomyContext?.stagedItems?.length,
     taxonomyContext?.defaultKeyword,
     taxonomyContext?.defaultAmount,
@@ -437,10 +447,17 @@ export function useCandidateMatching({
       fetchMappedTransactions(found.id);
     }
 
-    const newKw = found ? extractSpecificTerm(found) : '';
+    const isCashTarget =
+      String(found?.category || '')
+        .toUpperCase()
+        .includes('CASH') ||
+      String(found?.linked_gl_account || '')
+        .toLowerCase()
+        .includes('cash');
+
+    const newKw = isCashTarget ? '' : found ? extractSpecificTerm(found) : '';
     setKeywords(newKw);
 
-    // Deep search for newly selected folio only if no Workbench context was forwarded
     const rawStaged = taxonomyContext?.stagedItems || [];
     if (rawStaged.length === 0) {
       runScan(found?.id, documentDate, targetAmount, newKw, dayWindow);

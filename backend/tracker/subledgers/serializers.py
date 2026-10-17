@@ -383,6 +383,9 @@ class CandidateMatchRequestSerializer(serializers.Serializer):
     asset_id = serializers.CharField(required=False, allow_null=True)
     subcategory = serializers.CharField(required=False, allow_null=True)
     unmapped_only = serializers.BooleanField(required=False, default=False)
+    bank_account_hint = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True, default=None
+    )
 
 
 class BindRowRequestSerializer(serializers.Serializer):

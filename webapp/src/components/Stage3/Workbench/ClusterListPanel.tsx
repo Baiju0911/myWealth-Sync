@@ -291,7 +291,7 @@ export const ClusterListPanel: React.FC<Props> = ({
         </div>
 
         {/* ROW 2: Wide Narration String */}
-        <div className="pl-5 text-zinc-300 font-mono text-[10px] leading-relaxed break-words">
+        <div className="pl-5 text-zinc-300 font-mono text-[10px] leading-relaxed wrap-break-words">
           {item.narration || 'Unlabeled Bank Line'}
         </div>
 

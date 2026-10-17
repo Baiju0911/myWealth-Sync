@@ -42,6 +42,15 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
   // Track open/close state for nested vendors inside this GL Head
   const [expandedVendors, setExpandedVendors] = useState<Record<string, boolean>>({});
 
+  // Safe cash domain resolution directly from group metadata
+  const isCashDomain =
+    group.isCashDomain ||
+    group.groupKey.toLowerCase().includes('cash') ||
+    group.groupKey.toLowerCase().includes('float') ||
+    group.rootAssets.some((item: any) => item.code === 'PETTY_CASH');
+
+  const metricTitle = isCashDomain ? 'CURRENT FLOAT BALANCE' : metricLabel;
+
   // Group this GL head's assets by their Vendor / Merchant / Counterparty
   const vendorSubClusters = useMemo(() => {
     const map: Record<string, VendorSubCluster> = {};
@@ -53,7 +62,7 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
         (typeof (asset as any).vendor === 'string' && (asset as any).vendor.trim().length > 0
           ? (asset as any).vendor
           : null) ||
-        'Direct / Independent';
+        (isCashDomain ? 'Float Account' : 'Direct / Independent');
 
       const vKey = vName.toLowerCase().replace(/[^a-z0-9]/g, '_');
 
@@ -75,7 +84,7 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
       if (b.vendorName === 'Direct / Independent') return -1;
       return b.totalValuation - a.totalValuation;
     });
-  }, [group.rootAssets]);
+  }, [group.rootAssets, isCashDomain]);
 
   const toggleVendorCluster = (vendorKey: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -87,7 +96,7 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
 
   return (
     <div className="rounded-xl border border-slate-800/90 bg-slate-900/60 overflow-hidden shadow-xl font-mono">
-      {/* 🏛️️ LEVEL 1: Master GL Head Accordion Header */}
+      {/* 🏛 LEVEL 1: Master GL Head Accordion Header */}
       <div
         onClick={() => onToggleExpand(group.groupKey)}
         className="flex items-center justify-between bg-slate-800/90 px-4 py-3 cursor-pointer hover:bg-slate-800 transition-colors select-none border-b border-slate-800/60"
@@ -97,7 +106,8 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
             {isExpanded ? '▼' : '▶'}
           </span>
           <h3 className="text-xs font-bold text-white flex items-center gap-2">
-            🏛️ {group.groupTitle}
+            <span>{isCashDomain ? '💵' : '🏛️'}</span>
+            <span>{group.groupTitle}</span>
             <span className="text-[10px] text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-700/80">
               {group.totalNodeCount} {group.totalNodeCount === 1 ? 'Folio' : 'Folios'}
             </span>
@@ -107,7 +117,7 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
         <div className="flex items-center gap-6 text-xs">
           <div className="text-right">
             <span className="text-slate-500 block text-[9px] uppercase tracking-wider">
-              TOTAL {metricLabel}
+              {metricTitle}
             </span>
             <span className="text-emerald-400 font-bold text-xs">
               {inrFormatter.format(group.totalValuation)}
@@ -120,7 +130,6 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
       {isExpanded && (
         <div className="p-3.5 space-y-3 bg-slate-950/60">
           {vendorSubClusters.map((cluster) => {
-            // Default to expanded, or use explicit toggled state
             const isVendorOpen = expandedVendors[cluster.vendorKey] !== false;
 
             return (
@@ -138,7 +147,8 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
                       {isVendorOpen ? '▼' : '▶'}
                     </span>
                     <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-                      🏬 {cluster.vendorName}
+                      <span>{isCashDomain ? '🏦' : '🏬'}</span>
+                      <span>{cluster.vendorName}</span>
                       <span className="text-[9px] text-teal-400 bg-teal-950/80 px-2 py-0.5 rounded-full border border-teal-500/30">
                         {cluster.assets.length} {cluster.assets.length === 1 ? 'Item' : 'Items'}
                       </span>
@@ -159,7 +169,7 @@ export const AssetGroupContainer: React.FC<AssetGroupContainerProps> = ({
                       <AssetNodeCard
                         key={asset.id}
                         asset={asset}
-                        metricLabel={metricLabel}
+                        metricLabel={metricTitle}
                         onOpenMatcher={onOpenMatcher}
                         onOpenHistory={onOpenHistory}
                         onEditAsset={onEditAsset}

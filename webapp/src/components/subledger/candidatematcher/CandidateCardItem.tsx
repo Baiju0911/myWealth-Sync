@@ -1,16 +1,18 @@
+// webapp/src/components/subledger/candidatematcher/CandidateCardItem.tsx
 import React from 'react';
 import type { CandidateMatchResult } from '../../../api/subledger';
-import {
-  resolveCandidateNarration,
-  highlightKeywords,
-} from '../../../utils/classificationHelpers';
+import { resolveCandidateNarration } from '../../../utils/classificationHelpers';
 
 interface CandidateCardItemProps {
-  cand: CandidateMatchResult;
+  cand: CandidateMatchResult & {
+    bank_name?: string;
+    bank_last4?: string;
+    bank_account_id?: number | string;
+  };
   isSelected: boolean;
   keywords: string;
   binding: boolean;
-  onToggleSelect: (id: string) => void;
+  onToggleSelect: (rowId: string) => void;
   onSingleBind: (cand: CandidateMatchResult) => void;
   onUnmap: (cand: CandidateMatchResult) => void;
 }
@@ -18,145 +20,125 @@ interface CandidateCardItemProps {
 export const CandidateCardItem: React.FC<CandidateCardItemProps> = ({
   cand,
   isSelected,
-  keywords,
   binding,
   onToggleSelect,
   onSingleBind,
   onUnmap,
 }) => {
-  const isBoundToCurrentAsset = Boolean(cand.is_mapped_to_this_asset);
-  
-  // Bound to another asset if mapped, but not to the current active asset
-  const isBoundToOtherAsset =
-    !isBoundToCurrentAsset &&
-    Boolean(cand.is_mapped || (cand.mapping_info && cand.mapping_info.mapping_id));
+  const isBoundToAnotherAsset = cand.is_mapped && !cand.is_mapped_to_this_asset;
 
-  const vendorTag = cand.mapping_info?.vendor_name ? ` [${cand.mapping_info.vendor_name}]` : '';
-  const boundFolioName = cand.mapping_info?.asset_name
-    ? `${cand.mapping_info.asset_name}${vendorTag}`
-    : cand.mapping_info?.asset_code || 'Another Folio';
-
-  const amountVal = Number(cand.debit || cand.credit || 0);
-  const cleanNarration = resolveCandidateNarration(cand.remarks);
-  const highlightedParts = highlightKeywords(cleanNarration, keywords);
-
-  console.log(`🔎 [CARD RENDER] ${cand.row_identifier?.slice(0, 10)}:`, {
-    debit: cand.debit,
-    is_mapped: cand.is_mapped,
-    is_mapped_to_this_asset: cand.is_mapped_to_this_asset,
-    boundAssetName: cand.mapping_info?.asset_name,
-    status: isBoundToCurrentAsset
-      ? 'BOUND TO CURRENT FOLIO'
-      : isBoundToOtherAsset
-      ? `LOCKED TO ${boundFolioName}`
-      : 'AVAILABLE FOR BINDING',
-  });
+  // Safely resolve displayable string from remarks payload or string
+  const displayNarration =
+    typeof cand.remarks === 'string'
+      ? cand.remarks
+      : resolveCandidateNarration(cand.remarks, (cand as any).narration || '');
 
   return (
     <div
-      className={`flex items-center justify-between gap-3 rounded border p-2 transition-colors ${
-        isBoundToCurrentAsset
-          ? 'border-cyan-500/50 bg-cyan-500/5'
-          : isBoundToOtherAsset
-          ? 'border-slate-800 bg-slate-900/40 opacity-70'
+      onClick={() => {
+        if (!cand.is_mapped) onToggleSelect(cand.row_identifier);
+      }}
+      className={`group relative rounded-lg border p-3 font-mono transition-all select-none ${
+        cand.is_mapped_to_this_asset
+          ? 'border-emerald-500/40 bg-emerald-950/20 shadow-sm'
+          : isBoundToAnotherAsset
+          ? 'border-amber-500/20 bg-amber-950/10 opacity-75'
           : isSelected
-          ? 'border-emerald-500 bg-emerald-500/5'
-          : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+          ? 'border-emerald-500/80 bg-slate-900 shadow-md ring-1 ring-emerald-500/30 cursor-pointer'
+          : 'border-slate-800 bg-slate-900/60 hover:border-slate-700 hover:bg-slate-900 cursor-pointer'
       }`}
     >
-      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-        {/* Checkbox enabled only for unmapped items */}
-        {!isBoundToCurrentAsset && !isBoundToOtherAsset && (
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={() => onToggleSelect(cand.row_identifier)}
-            className="mt-1 rounded accent-emerald-500 cursor-pointer"
-          />
-        )}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2.5 flex-1 min-w-0">
+          {!cand.is_mapped && (
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect(cand.row_identifier)}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-0.5 rounded accent-emerald-500 cursor-pointer w-3.5 h-3.5 shrink-0"
+            />
+          )}
 
-        {isBoundToOtherAsset && (
-          <span className="mt-1 text-slate-500 text-xs">🔒</span>
-        )}
-
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex items-center gap-2">
-            {isBoundToCurrentAsset ? (
-              <span className="rounded px-1.5 py-0.5 font-mono text-[10px] font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-                BOUND TO THIS FOLIO
-              </span>
-            ) : isBoundToOtherAsset ? (
-              <span className="rounded px-1.5 py-0.5 font-mono text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                LOCKED: BOUND TO {boundFolioName.toUpperCase()}
-              </span>
-            ) : (
-              <span
-                className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${
-                  cand.probability_score >= 80
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                }`}
-              >
+          <div className="flex-1 min-w-0">
+            {/* Top Row: Probability, Date, Originating Bank Badge, and Offset */}
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-400 border border-amber-500/20 font-mono">
                 {cand.probability_score}% MATCH
               </span>
-            )}
 
-            <span className="font-mono text-[11px] font-semibold text-slate-300">
-              {cand.transaction_date}
-            </span>
-
-            {!isBoundToCurrentAsset && !isBoundToOtherAsset && cand.date_offset_days !== 0 && (
-              <span className="text-[10px] text-slate-500 font-mono">
-                ({cand.date_offset_days > 0 ? `+${cand.date_offset_days}` : cand.date_offset_days}d offset)
+              <span className="text-[10px] font-mono text-zinc-300 font-semibold">
+                {cand.transaction_date}
               </span>
-            )}
+
+              {/* 🏦 Originating Bank Account Badge */}
+              {cand.bank_name ? (
+                <span className="inline-flex items-center gap-1 rounded bg-sky-950/80 border border-sky-700/60 px-1.5 py-0.2 text-[9px] font-mono text-sky-300 font-bold shrink-0">
+                  <span>🏦</span>
+                  <span>{cand.bank_name}</span>
+                  {cand.bank_last4 && (
+                    <span className="text-sky-400/80 font-normal">••{cand.bank_last4}</span>
+                  )}
+                </span>
+              ) : cand.bank_account_id ? (
+                <span className="inline-flex items-center rounded bg-zinc-800 border border-zinc-700 px-1 py-0.2 text-[9px] font-mono text-zinc-300 shrink-0">
+                  Acc #{cand.bank_account_id}
+                </span>
+              ) : null}
+
+              {cand.date_offset_days !== 0 && (
+                <span className="text-[9px] text-zinc-500 font-mono">
+                  ({cand.date_offset_days > 0 ? `+${cand.date_offset_days}` : cand.date_offset_days}d offset)
+                </span>
+              )}
+            </div>
+
+            {/* Narration String with canonical Tailwind class */}
+            <p className="text-xs text-slate-200 font-mono leading-relaxed wrap-break-word">
+              {displayNarration || 'Unlabeled Bank Line'}
+            </p>
           </div>
-
-          <p
-            className="font-mono text-[11px] text-slate-200 line-clamp-2 break-all leading-tight"
-            title={cleanNarration}
-          >
-            {highlightedParts.map((part, index) =>
-              part.isMatch ? (
-                <mark key={index} className="bg-amber-400 text-slate-950 px-0.5 rounded font-bold">
-                  {part.text}
-                </mark>
-              ) : (
-                <React.Fragment key={index}>{part.text}</React.Fragment>
-              )
-            )}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 flex-col items-end justify-between pl-3 border-l border-slate-800">
-        <div className="font-mono text-xs font-bold text-emerald-400">
-          ₹{amountVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
         </div>
 
-        {isBoundToCurrentAsset ? (
-          <button
-            type="button"
-            onClick={() => onUnmap(cand)}
-            disabled={binding}
-            className="mt-1 rounded bg-rose-600/80 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-rose-500 disabled:opacity-50 cursor-pointer font-mono"
-          >
-            {binding ? '...' : 'Disconnect'}
-          </button>
-        ) : isBoundToOtherAsset ? (
-          <span className="mt-1 font-mono text-[10px] font-bold text-slate-500 uppercase">
-            Unavailable
+        {/* Right Column: Amount & Action Button */}
+        <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
+          <span className="text-xs font-bold text-emerald-400 font-mono tabular-nums">
+            ₹{Number(cand.debit || cand.credit).toLocaleString('en-IN', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => onSingleBind(cand)}
-            disabled={binding}
-            className="mt-1 rounded bg-emerald-600 px-2.5 py-0.5 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 cursor-pointer font-mono"
-          >
-            {binding ? '...' : '⚡ Bind'}
-          </button>
-        )}
+
+          {cand.is_mapped_to_this_asset ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnmap(cand);
+              }}
+              disabled={binding}
+              className="rounded bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-rose-400 hover:bg-rose-500/20 cursor-pointer"
+            >
+              Unmap
+            </button>
+          ) : isBoundToAnotherAsset ? (
+            <span className="text-[10px] text-amber-400/80 font-bold">
+              Bound to {cand.mapping_info?.asset_code}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSingleBind(cand);
+              }}
+              disabled={binding}
+              className="rounded bg-emerald-600 hover:bg-emerald-500 px-2.5 py-0.5 text-[10px] font-bold text-white transition-colors cursor-pointer"
+            >
+              ⚡ Bind
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

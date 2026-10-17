@@ -245,15 +245,29 @@ class AssetSubLedgerViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        # Read from validated_data, with safety fallback to raw request.data and query_params
+        bank_account_hint = (
+            data.get("bank_account_hint")
+            or request.data.get("bank_account_hint")
+            or request.query_params.get("bank_account_hint")
+        )
+
+        asset_id = data.get("asset_id") or request.data.get("asset_id")
+
+        # If the user chose "-- All Accounts --", bank_account_hint is "" -> treat as None
+        if bank_account_hint == "":
+            bank_account_hint = None
+
         candidates = AssetCandidateMatcher.find_candidate_rows(
-            document_date=data["document_date"],
+            document_date=data.get("document_date"),
             target_amount=data.get("target_amount"),
             account_id=data.get("account_id"),
             keywords=data.get("keywords", []),
-            day_window=data.get("day_window", 10),
-            asset_id=data.get("asset_id"),
+            day_window=data.get("day_window", 1825),
+            asset_id=asset_id,
             subcategory=data.get("subcategory"),
             unmapped_only=data.get("unmapped_only", False),
+            bank_account_hint=bank_account_hint,
         )
         return Response(
             {
@@ -546,82 +560,486 @@ class AssetSubLedgerViewSet(viewsets.ModelViewSet):
     #         status=status.HTTP_200_OK,
     #     )
 
+    # @action(detail=True, methods=["get"], url_path="mapped-transactions")
+    # def mapped_transactions(self, request, pk=None):
+    #     asset = self.get_object()
+    #     print(f"\n================ [MAPPED TRANSACTIONS DEBUG] ================")
+    #     print(
+    #         f"|| Target Asset: ID={asset.id} | Code={asset.asset_code} | Name={asset.name}"
+    #     )
+
+    #     # 1. Inspect raw mappings in database for this asset
+    #     mappings = list(AssetTransactionMapping.objects.filter(asset=asset))
+    #     print(f"|| Total AssetTransactionMapping rows for this asset: {len(mappings)}")
+    #     for idx, m in enumerate(mappings):
+    #         print(
+    #             f"   [{idx+1}] mapping_id={m.id} | row_identifier={m.row_identifier} | amount={m.amount} | is_cash={m.is_cash_entry}"
+    #         )
+
+    #     # Check if ANY mappings exist across other assets (in case bound to another asset)
+    #     all_mappings_count = AssetTransactionMapping.objects.count()
+    #     print(
+    #         f"|| Total AssetTransactionMapping rows ACROSS ALL ASSETS in DB: {all_mappings_count}"
+    #     )
+
+    #     # 2. Extract bank row identifiers
+    #     bank_row_ids = [m.row_identifier for m in mappings if m.row_identifier]
+    #     print(f"|| bank_row_ids to look up: {bank_row_ids}")
+
+    #     # 3. Inspect JournalEntry lookup
+    #     journal_entries = list(
+    #         JournalEntry.objects.filter(row_identifier__in=bank_row_ids).values(
+    #             "id",
+    #             "row_identifier",
+    #             "transaction_date",
+    #             "debit",
+    #             "credit",
+    #             "remarks",
+    #         )
+    #     )
+    #     print(f"|| Matched JournalEntry rows found: {len(journal_entries)}")
+    #     journal_lookup = {e["row_identifier"]: e for e in journal_entries}
+
+    #     results = []
+    #     for m in mappings:
+    #         entry = journal_lookup.get(m.row_identifier) if m.row_identifier else None
+    #         payload_item = {
+    #             "mapping_id": str(m.id),
+    #             "journal_id": str(entry["id"]) if entry else f"MAP-{m.id}",
+    #             "row_identifier": m.row_identifier,
+    #             "transaction_date": (
+    #                 entry["transaction_date"].strftime("%Y-%m-%d")
+    #                 if entry and entry.get("transaction_date")
+    #                 else m.transaction_date.strftime("%Y-%m-%d")
+    #             ),
+    #             "debit": float(entry["debit"]) if entry else float(m.amount),
+    #             "credit": float(entry["credit"]) if entry else 0.0,
+    #             "remarks": (
+    #                 entry["remarks"]
+    #                 if entry
+    #                 else (m.user_note or "Mapped Subledger Payment")
+    #             ),
+    #             "user_note": m.user_note or "",
+    #             "is_cash_entry": m.is_cash_entry,
+    #             "mapped_at": (
+    #                 m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else None
+    #             ),
+    #         }
+    #         results.append(payload_item)
+
+    #     print(f"|| Final results array count being returned: {len(results)}")
+    #     print(f"============================================================\n")
+
+    #     return Response(
+    #         {
+    #             "status": "success",
+    #             "asset_id": str(asset.id),
+    #             "asset_code": asset.asset_code,
+    #             "asset_name": asset.name,
+    #             "mapped_transactions": results,
+    #         },
+    #         status=status.HTTP_200_OK,
+    #     )
+
+    # @action(detail=True, methods=["get"], url_path="mapped-transactions")
+    # def mapped_transactions(self, request, pk=None):
+    #     from decimal import Decimal
+    #     from django.apps import apps
+
+    #     AssetTransactionMapping = apps.get_model("ledger", "AssetTransactionMapping")
+    #     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+    #     JournalEntry = apps.get_model("ledger", "JournalEntry")
+    #     Account = apps.get_model("ledger", "Account")
+
+    #     asset = self.get_object()
+
+    #     # 1. Fetch raw mapping records for this asset
+    #     mappings = list(
+    #         AssetTransactionMapping.objects.filter(asset=asset)
+    #         .order_by("-transaction_date")
+    #         .values(
+    #             "id",
+    #             "row_identifier",
+    #             "transaction_date",
+    #             "amount",
+    #             "transaction_purpose",
+    #             "user_note",
+    #             "is_cash_entry",
+    #             "created_at",
+    #         )
+    #     )
+
+    #     bank_row_ids = [m["row_identifier"] for m in mappings if m["row_identifier"]]
+
+    #     # 2. Fetch raw statement narrations from StatementStagingLine SSOT
+    #     staging_map = dict(
+    #         StatementStagingLine.objects.filter(
+    #             row_identifier__in=bank_row_ids
+    #         ).values_list("row_identifier", "narration")
+    #     )
+
+    #     # 3. Fetch pairing bank account legs from JournalEntry (where account_id != 99)
+    #     pairing_legs = list(
+    #         JournalEntry.objects.filter(row_identifier__in=bank_row_ids)
+    #         .exclude(account_id=99)
+    #         .values("id", "row_identifier", "account_id", "debit", "credit", "remarks")
+    #     )
+
+    #     row_to_bank_leg = {p["row_identifier"]: p for p in pairing_legs}
+    #     all_bank_ids = set(p["account_id"] for p in pairing_legs)
+
+    #     # 4. Lookup Account metadata (name + last 4)
+    #     account_lookup = {}
+    #     if all_bank_ids:
+    #         for acc in Account.objects.filter(id__in=all_bank_ids):
+    #             acc_num = str(getattr(acc, "account_number", "") or "")
+    #             last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+    #             account_lookup[acc.id] = {
+    #                 "bank_name": getattr(acc, "name", "Bank"),
+    #                 "bank_last4": last4,
+    #                 "account_id": acc.id,
+    #             }
+
+    #     # 5. Domain identification (Cash Float vs Capital Asset)
+    #     cat_code = str(getattr(asset, "category", "")).upper()
+    #     gl_head = ""
+    #     if hasattr(asset.linked_gl_account, "subcategory"):
+    #         gl_head = str(asset.linked_gl_account.subcategory).lower()
+    #     else:
+    #         gl_head = str(asset.linked_gl_account or "").lower()
+
+    #     is_cash_domain = (
+    #         "CASH" in cat_code
+    #         or "FLOAT" in cat_code
+    #         or "petty cash" in gl_head
+    #         or "float" in gl_head
+    #     )
+
+    #     # 6. Aggregate metrics and assemble results
+    #     cumulative_inflows = Decimal("0.00")
+    #     operating_outflows = Decimal("0.00")
+    #     results = []
+
+    #     for m in mappings:
+    #         amt = Decimal(str(m["amount"] or 0))
+    #         purpose = str(m["transaction_purpose"] or "").upper()
+    #         paired_leg = row_to_bank_leg.get(m["row_identifier"])
+
+    #         # Determine direction:
+    #         # For Cash Floats, top-ups are Inflows.
+    #         # Otherwise, evaluate standard capital/income markers.
+    #         is_inflow = (
+    #             purpose
+    #             in [
+    #                 "CAPITAL_CONTRIBUTION",
+    #                 "SUB_LEDGER_PAYMENT",
+    #                 "ACQUISITION_PAYMENT",
+    #                 "INFLOW",
+    #             ]
+    #             or is_cash_domain
+    #         )
+
+    #         if is_inflow:
+    #             cumulative_inflows += amt
+    #         else:
+    #             operating_outflows += amt
+
+    #         bank_id = paired_leg["account_id"] if paired_leg else None
+    #         bank_meta = account_lookup.get(bank_id, {})
+
+    #         # Resolve statement narration with fallback
+    #         raw_narration = staging_map.get(m["row_identifier"])
+    #         if not raw_narration and paired_leg and paired_leg.get("remarks"):
+    #             raw_rem = paired_leg["remarks"]
+    #             raw_narration = (
+    #                 raw_rem.get("display_text")
+    #                 or raw_rem.get("narration")
+    #                 or raw_rem.get("payee")
+    #                 if isinstance(raw_rem, dict)
+    #                 else str(raw_rem)
+    #             )
+
+    #         results.append(
+    #             {
+    #                 "mapping_id": str(m["id"]),
+    #                 "journal_id": (
+    #                     str(paired_leg["id"]) if paired_leg else f"MAP-{m['id']}"
+    #                 ),
+    #                 "row_identifier": m["row_identifier"],
+    #                 "transaction_date": (
+    #                     m["transaction_date"].strftime("%Y-%m-%d")
+    #                     if m.get("transaction_date")
+    #                     else ""
+    #                 ),
+    #                 "amount": float(amt),
+    #                 "debit": (
+    #                     float(paired_leg["debit"])
+    #                     if paired_leg
+    #                     else (0.0 if is_inflow else float(amt))
+    #                 ),
+    #                 "credit": (
+    #                     float(paired_leg["credit"])
+    #                     if paired_leg
+    #                     else (float(amt) if is_inflow else 0.0)
+    #                 ),
+    #                 "direction": "INFLOW" if is_inflow else "OUTFLOW",
+    #                 "transaction_purpose": m["transaction_purpose"]
+    #                 or "SUB_LEDGER_PAYMENT",
+    #                 "narration": raw_narration
+    #                 or m["user_note"]
+    #                 or "Mapped Subledger Payment",
+    #                 "remarks": raw_narration
+    #                 or m["user_note"]
+    #                 or "Mapped Subledger Payment",
+    #                 "user_note": m["user_note"] or "",
+    #                 "is_cash_entry": m["is_cash_entry"],
+    #                 "bank_account_id": bank_id,
+    #                 "bank_name": bank_meta.get("bank_name"),
+    #                 "bank_last4": bank_meta.get("bank_last4"),
+    #                 "mapped_at": (
+    #                     m["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+    #                     if m.get("created_at")
+    #                     else None
+    #                 ),
+    #             }
+    #         )
+
+    #     # 7. Carrying valuation computation
+    #     if is_cash_domain:
+    #         # Float balance equation: Total Inflows - Outflows
+    #         carrying_valuation = cumulative_inflows - operating_outflows
+    #     else:
+    #         # Capital asset equation: Acquisition Cost + Inflows - Outflows
+    #         carrying_valuation = (
+    #             Decimal(str(asset.acquisition_cost or 0))
+    #             + cumulative_inflows
+    #             - operating_outflows
+    #         )
+
+    #     db_valuation = Decimal(str(asset.current_valuation or 0))
+    #     is_out_of_sync = abs(carrying_valuation - db_valuation) > Decimal("0.01")
+
+    #     return Response(
+    #         {
+    #             "status": "success",
+    #             "asset_id": str(asset.id),
+    #             "asset_code": asset.asset_code,
+    #             "asset_name": asset.name,
+    #             "acquisition_cost": float(asset.acquisition_cost or 0),
+    #             "current_valuation": float(asset.current_valuation or 0),
+    #             "carrying_valuation": float(carrying_valuation),
+    #             "cumulative_inflows": float(cumulative_inflows),
+    #             "operating_outflows": float(operating_outflows),
+    #             "net_yield": (
+    #                 float(cumulative_inflows)
+    #                 if is_cash_domain
+    #                 else float(cumulative_inflows - operating_outflows)
+    #             ),
+    #             "is_out_of_sync": is_out_of_sync,
+    #             "mapped_transactions": results,
+    #         },
+    #         status=status.HTTP_200_OK,
+    #     )
+
     @action(detail=True, methods=["get"], url_path="mapped-transactions")
     def mapped_transactions(self, request, pk=None):
+        from decimal import Decimal
+        from django.apps import apps
+
+        AssetTransactionMapping = apps.get_model("ledger", "AssetTransactionMapping")
+        StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+        JournalEntry = apps.get_model("ledger", "JournalEntry")
+        Account = apps.get_model("ledger", "Account")
+
         asset = self.get_object()
-        print(f"\n================ [MAPPED TRANSACTIONS DEBUG] ================")
-        print(
-            f"|| Target Asset: ID={asset.id} | Code={asset.asset_code} | Name={asset.name}"
-        )
 
-        # 1. Inspect raw mappings in database for this asset
-        mappings = list(AssetTransactionMapping.objects.filter(asset=asset))
-        print(f"|| Total AssetTransactionMapping rows for this asset: {len(mappings)}")
-        for idx, m in enumerate(mappings):
-            print(
-                f"   [{idx+1}] mapping_id={m.id} | row_identifier={m.row_identifier} | amount={m.amount} | is_cash={m.is_cash_entry}"
-            )
-
-        # Check if ANY mappings exist across other assets (in case bound to another asset)
-        all_mappings_count = AssetTransactionMapping.objects.count()
-        print(
-            f"|| Total AssetTransactionMapping rows ACROSS ALL ASSETS in DB: {all_mappings_count}"
-        )
-
-        # 2. Extract bank row identifiers
-        bank_row_ids = [m.row_identifier for m in mappings if m.row_identifier]
-        print(f"|| bank_row_ids to look up: {bank_row_ids}")
-
-        # 3. Inspect JournalEntry lookup
-        journal_entries = list(
-            JournalEntry.objects.filter(row_identifier__in=bank_row_ids).values(
+        # 1. Fetch raw mapping records for this asset
+        mappings = list(
+            AssetTransactionMapping.objects.filter(asset=asset)
+            .order_by("-transaction_date")
+            .values(
                 "id",
                 "row_identifier",
                 "transaction_date",
-                "debit",
-                "credit",
-                "remarks",
+                "amount",
+                "transaction_purpose",
+                "user_note",
+                "is_cash_entry",
+                "created_at",
             )
         )
-        print(f"|| Matched JournalEntry rows found: {len(journal_entries)}")
-        journal_lookup = {e["row_identifier"]: e for e in journal_entries}
 
+        bank_row_ids = [m["row_identifier"] for m in mappings if m["row_identifier"]]
+
+        # 2. Fetch raw statement narrations from StatementStagingLine SSOT
+        staging_map = dict(
+            StatementStagingLine.objects.filter(
+                row_identifier__in=bank_row_ids
+            ).values_list("row_identifier", "narration")
+        )
+
+        # 3. Fetch pairing bank account legs from JournalEntry (where account_id != 99)
+        pairing_legs = list(
+            JournalEntry.objects.filter(row_identifier__in=bank_row_ids)
+            .exclude(account_id=99)
+            .values("id", "row_identifier", "account_id", "debit", "credit", "remarks")
+        )
+
+        row_to_bank_leg = {p["row_identifier"]: p for p in pairing_legs}
+        all_bank_ids = set(p["account_id"] for p in pairing_legs)
+
+        # 4. Lookup Account metadata (name + last 4)
+        account_lookup = {}
+        if all_bank_ids:
+            for acc in Account.objects.filter(id__in=all_bank_ids):
+                acc_num = str(getattr(acc, "account_number", "") or "")
+                last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+                account_lookup[acc.id] = {
+                    "bank_name": getattr(acc, "name", "Bank"),
+                    "bank_last4": last4,
+                    "account_id": acc.id,
+                }
+
+        # 5. Domain identification (Cash Float vs Capital Asset)
+        cat_code = str(getattr(asset, "category", "")).upper()
+        gl_head = ""
+        if hasattr(asset.linked_gl_account, "subcategory"):
+            gl_head = str(asset.linked_gl_account.subcategory).lower()
+        else:
+            gl_head = str(asset.linked_gl_account or "").lower()
+
+        is_cash_domain = (
+            "CASH" in cat_code
+            or "FLOAT" in cat_code
+            or "petty cash" in gl_head
+            or "float" in gl_head
+        )
+
+        # 6. Aggregate metrics and assemble results
+        cumulative_inflows = Decimal("0.00")
+        operating_outflows = Decimal("0.00")
         results = []
+
         for m in mappings:
-            entry = journal_lookup.get(m.row_identifier) if m.row_identifier else None
-            payload_item = {
-                "mapping_id": str(m.id),
-                "journal_id": str(entry["id"]) if entry else f"MAP-{m.id}",
-                "row_identifier": m.row_identifier,
-                "transaction_date": (
-                    entry["transaction_date"].strftime("%Y-%m-%d")
-                    if entry and entry.get("transaction_date")
-                    else m.transaction_date.strftime("%Y-%m-%d")
-                ),
-                "debit": float(entry["debit"]) if entry else float(m.amount),
-                "credit": float(entry["credit"]) if entry else 0.0,
-                "remarks": (
-                    entry["remarks"]
-                    if entry
-                    else (m.user_note or "Mapped Subledger Payment")
-                ),
-                "user_note": m.user_note or "",
-                "is_cash_entry": m.is_cash_entry,
-                "mapped_at": (
-                    m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else None
-                ),
-            }
-            results.append(payload_item)
+            amt = Decimal(str(m["amount"] or 0))
+            purpose = str(m["transaction_purpose"] or "").upper()
+            paired_leg = row_to_bank_leg.get(m["row_identifier"])
 
-        print(f"|| Final results array count being returned: {len(results)}")
-        print(f"============================================================\n")
+            # 🎯 STRICT MATHEMATICAL DIRECTION RESOLUTION:
+            if any(
+                term in purpose
+                for term in ["SPEND", "EXPENSE", "OUTFLOW", "OPERATING_SPEND"]
+            ):
+                is_inflow = False
+            elif any(
+                term in purpose
+                for term in ["TOPUP", "CAPITAL_CONTRIBUTION", "INFLOW", "CONTRIBUTION"]
+            ):
+                is_inflow = True
+            elif paired_leg:
+                # Bank debit > 0 means money came IN (Top-up / Inflow)
+                # Bank credit > 0 means money went OUT (Spend / Outflow)
+                is_inflow = Decimal(str(paired_leg.get("debit") or 0)) > 0
+            else:
+                is_inflow = not is_cash_domain
 
+            if is_inflow:
+                cumulative_inflows += amt
+            else:
+                operating_outflows += amt
+
+            bank_id = paired_leg["account_id"] if paired_leg else None
+            bank_meta = account_lookup.get(bank_id, {})
+
+            # Resolve statement narration with fallback
+            raw_narration = staging_map.get(m["row_identifier"])
+            if not raw_narration and paired_leg and paired_leg.get("remarks"):
+                raw_rem = paired_leg["remarks"]
+                raw_narration = (
+                    raw_rem.get("display_text")
+                    or raw_rem.get("narration")
+                    or raw_rem.get("payee")
+                    if isinstance(raw_rem, dict)
+                    else str(raw_rem)
+                )
+
+            leg_debit = (
+                float(paired_leg["debit"])
+                if paired_leg
+                else (0.0 if is_inflow else float(amt))
+            )
+            leg_credit = (
+                float(paired_leg["credit"])
+                if paired_leg
+                else (float(amt) if is_inflow else 0.0)
+            )
+
+            results.append(
+                {
+                    "mapping_id": str(m["id"]),
+                    "journal_id": (
+                        str(paired_leg["id"]) if paired_leg else f"MAP-{m['id']}"
+                    ),
+                    "row_identifier": m["row_identifier"],
+                    "transaction_date": (
+                        m["transaction_date"].strftime("%Y-%m-%d")
+                        if m.get("transaction_date")
+                        else ""
+                    ),
+                    "amount": float(amt),
+                    "debit": leg_debit,
+                    "credit": leg_credit,
+                    "direction": "INFLOW" if is_inflow else "OUTFLOW",
+                    "transaction_purpose": m["transaction_purpose"]
+                    or ("FLOAT_TOPUP" if is_inflow else "OPERATING_SPEND"),
+                    "narration": raw_narration
+                    or m["user_note"]
+                    or "Mapped Subledger Payment",
+                    "remarks": raw_narration
+                    or m["user_note"]
+                    or "Mapped Subledger Payment",
+                    "user_note": m["user_note"] or "",
+                    "is_cash_entry": m["is_cash_entry"],
+                    "bank_account_id": bank_id,
+                    "bank_name": bank_meta.get("bank_name"),
+                    "bank_last4": bank_meta.get("bank_last4"),
+                    "mapped_at": (
+                        m["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+                        if m.get("created_at")
+                        else None
+                    ),
+                }
+            )
+
+        # 7. Carrying valuation computation
+        if is_cash_domain:
+            carrying_valuation = cumulative_inflows - operating_outflows
+        else:
+            carrying_valuation = (
+                Decimal(str(asset.acquisition_cost or 0))
+                + cumulative_inflows
+                - operating_outflows
+            )
+
+        db_valuation = Decimal(str(asset.current_valuation or 0))
+        is_out_of_sync = abs(carrying_valuation - db_valuation) > Decimal("0.01")
+        # Inside mapped_transactions in subledgerViews.py
+        print(
+            f"🟢 [DEBUG MAPPING]: ID={m['id']} | Amount={amt} | Purpose={purpose} | Inflow={is_inflow}"
+        )
         return Response(
             {
                 "status": "success",
                 "asset_id": str(asset.id),
                 "asset_code": asset.asset_code,
                 "asset_name": asset.name,
+                "acquisition_cost": float(asset.acquisition_cost or 0),
+                "current_valuation": float(asset.current_valuation or 0),
+                "carrying_valuation": float(carrying_valuation),
+                "cumulative_inflows": float(cumulative_inflows),
+                "operating_outflows": float(operating_outflows),
+                "net_yield": float(cumulative_inflows - operating_outflows),
+                "is_out_of_sync": is_out_of_sync,
                 "mapped_transactions": results,
             },
             status=status.HTTP_200_OK,

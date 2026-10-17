@@ -9,7 +9,7 @@ import json
 from django.db import transaction
 from collections import Counter
 from django.core.paginator import Paginator
-
+from decimal import Decimal
 
 from urllib.parse import parse_qs, unquote
 from django.http import JsonResponse
@@ -357,6 +357,44 @@ def get_cluster_line_items(request):
     )
 
 
+# @api_view(["POST"])
+# def apply_reclassification_and_learn(request):
+#     transaction_ids = (
+#         request.data.get("transaction_ids")
+#         or request.data.get("row_identifiers")
+#         or request.data.get("ids")
+#         or []
+#     )
+#     target_category = request.data.get("target_category")
+#     target_subcategory = request.data.get("target_subcategory")
+
+#     patterns = request.data.get("patterns", [])
+#     single_pattern = request.data.get("pattern")
+
+#     if not patterns and single_pattern:
+#         patterns = [single_pattern]
+
+#     save_rule = request.data.get("save_rule", True)
+
+#     if not transaction_ids or not target_category or not target_subcategory:
+#         return Response(
+#             {
+#                 "error": "transaction_ids (or row_identifiers), target_category, and target_subcategory are required."
+#             },
+#             status=status.HTTP_400_BAD_REQUEST,
+#         )
+
+#     result = reclassify_and_learn(
+#         transaction_ids=transaction_ids,
+#         target_category=target_category,
+#         target_subcategory=target_subcategory,
+#         patterns=patterns,
+#         save_rule=save_rule,
+#     )
+
+#     return Response(result, status=status.HTTP_200_OK)
+
+
 @api_view(["POST"])
 def apply_reclassification_and_learn(request):
     transaction_ids = (
@@ -376,6 +414,9 @@ def apply_reclassification_and_learn(request):
 
     save_rule = request.data.get("save_rule", True)
 
+    # 🎯 1. Receive the optional Subledger Folio ID from the Workbench
+    subledger_asset_id = request.data.get("subledger_asset_id")
+
     if not transaction_ids or not target_category or not target_subcategory:
         return Response(
             {
@@ -384,6 +425,7 @@ def apply_reclassification_and_learn(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # 2. Run standard classification & rule training
     result = reclassify_and_learn(
         transaction_ids=transaction_ids,
         target_category=target_category,
@@ -391,6 +433,55 @@ def apply_reclassification_and_learn(request):
         patterns=patterns,
         save_rule=save_rule,
     )
+
+    # 🎯 3. If the user intentionally chose a Subledger Folio (e.g. Petty Cash Float), bind it!
+    if subledger_asset_id:
+        try:
+            from django.apps import apps
+
+            AssetSubLedger = apps.get_model("ledger", "AssetSubLedger")
+            AssetTransactionMapping = apps.get_model(
+                "ledger", "AssetTransactionMapping"
+            )
+
+            target_asset = AssetSubLedger.objects.filter(id=subledger_asset_id).first()
+            if target_asset:
+                # Query the journal entries that were just reclassified
+                entries_to_map = JournalEntry.objects.filter(
+                    Q(id__in=transaction_ids) | Q(row_identifier__in=transaction_ids)
+                )
+
+                created_mappings = 0
+                for entry in entries_to_map:
+                    if not entry.row_identifier:
+                        continue
+
+                    # Avoid duplicate mappings
+                    mapping, created = AssetTransactionMapping.objects.get_or_create(
+                        asset=target_asset,
+                        row_identifier=entry.row_identifier,
+                        defaults={
+                            "amount": entry.debit or entry.credit or Decimal("0.00"),
+                            "transaction_date": entry.transaction_date,
+                            "transaction_purpose": "OPERATING_SPEND",
+                            "is_cash_entry": False,
+                            "user_note": f"Classified via Workbench to {target_subcategory}",
+                        },
+                    )
+                    if created:
+                        created_mappings += 1
+
+                logger.info(
+                    f"Bound {created_mappings} transaction(s) to Subledger Folio [{target_asset.asset_code}]"
+                )
+                result["subledger_bound"] = True
+                result["subledger_asset_code"] = target_asset.asset_code
+                result["mappings_created"] = created_mappings
+        except Exception as e:
+            logger.error(
+                f"Failed to attribute transactions to subledger {subledger_asset_id}: {e}"
+            )
+            result["subledger_error"] = str(e)
 
     return Response(result, status=status.HTTP_200_OK)
 
