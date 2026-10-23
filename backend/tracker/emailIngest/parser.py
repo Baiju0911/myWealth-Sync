@@ -445,7 +445,10 @@ def extract_stream_identifiers(raw_text: str) -> Dict[str, Any]:
 
 
 def parse_term_deposit_advice(
-    clean_body: str, sender: str = "", inherited_bank: str = ""
+    clean_body: str,
+    sender: str = "",
+    inherited_bank: str = "",
+    email_date_hint: str = None,
 ) -> Optional[dict]:
     clean_lower = clean_body.lower()
 
@@ -490,22 +493,44 @@ def parse_term_deposit_advice(
         },
     }
 
-    # 2. Extract Date
+    # 2. Extract Date (with multiple formats & email header fallback)
+    extracted_date = None
     date_match = re.search(ParserRegex.TD_DATE_CLOSED, clean_body, re.IGNORECASE)
     if not date_match:
         date_match = re.search(ParserRegex.DATE_GENERAL, clean_body)
 
     if date_match:
-        raw_cdate = date_match.group(1).replace("/", "-")
+        raw_cdate = date_match.group(1).replace("/", "-").strip()
+        for fmt in (
+            DateFormats.DMY_FOUR.value,
+            "%d-%m-%Y",
+            "%Y-%m-%d",
+            "%d-%b-%Y",
+            "%d-%B-%Y",
+        ):
+            try:
+                parsed_dt = datetime.strptime(raw_cdate, fmt)
+                extracted_date = parsed_dt.strftime(DateFormats.ISO_DATE.value)
+                break
+            except (ValueError, TypeError):
+                continue
+
+    # Fallback to email envelope header date if body regex failed
+    if not extracted_date and email_date_hint:
         try:
-            result["date"] = datetime.strptime(
-                raw_cdate, DateFormats.DMY_FOUR.value
-            ).strftime(DateFormats.ISO_DATE.value)
-            result["full_datetime"] = f"{result['date']}{DateFormats.TIME_ZERO.value}"
-        except ValueError:
-            result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
-    else:
-        result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+            from tracker.backendViewModel.emailViewsutils.emailViewhelper import (
+                safe_parse_datetime,
+            )
+
+            dt = safe_parse_datetime(email_date_hint)
+            if dt:
+                extracted_date = dt.strftime(DateFormats.ISO_DATE.value)
+        except Exception:
+            extracted_date = None
+
+    result["date"] = extracted_date
+    if extracted_date:
+        result["full_datetime"] = f"{extracted_date}{DateFormats.TIME_ZERO.value}"
 
     # 3. Extract Principal Amount
     amt_match = re.search(ParserRegex.TD_PRINCIPAL_IN_TABLE, clean_body, re.IGNORECASE)
@@ -535,13 +560,422 @@ def parse_term_deposit_advice(
     return result
 
 
+# def parse_term_deposit_advice(
+#     clean_body: str, sender: str = "", inherited_bank: str = ""
+# ) -> Optional[dict]:
+#     clean_lower = clean_body.lower()
+
+#     if not any(
+#         trigger.lower() in clean_lower for trigger in IngestTriggers.TERM_DEPOSIT
+#     ):
+#         return None
+
+#     # 1. Resolve Bank & Full Account Number
+#     acct_match = re.search(ParserRegex.ACCOUNT_NUMBER_STRICT, clean_body)
+#     full_acct = acct_match.group(1) if acct_match else None
+#     last4 = full_acct[-4:] if full_acct else None
+
+#     acc_id, acc_name, resolved_bank, meta = resolve_account_and_bank(
+#         full_acct, clean_body, sender=sender, default_bank=inherited_bank
+#     )
+
+#     result = {
+#         "bank_name": resolved_bank,
+#         "amount": None,
+#         "balance": None,
+#         "txn_type": TxnType.CREDIT.value,
+#         "merchant": f"{resolved_bank} {NarrativeLabels.FD_PROCEEDS_SUFFIX.value}".strip(),
+#         "account_last4": last4 or (full_acct[-4:] if full_acct else None),
+#         "account_display_name": acc_name,
+#         "account_id": acc_id,
+#         "upi_ref": f"{NarrativeLabels.UPI_REF_PREFIX.value}{last4 or NarrativeLabels.PROCEEDS.value}",
+#         "date": None,
+#         "full_datetime": None,
+#         "full_narration": NarrativeLabels.TD_NARRATION_TEMPLATE.value.format(
+#             full_acct or SystemDefaults.NOT_AVAILABLE.value
+#         ),
+#         "txn_fingerprint": None,
+#         "is_parsed": False,
+#         "is_noise": False,
+#         "payment_rail": PaymentRail.INTERNAL_TRANSFER.value,
+#         "is_self_transfer": True,
+#         "metadata_json": {
+#             "is_term_deposit": True,
+#             "full_account_number": full_acct,
+#             "account_match": meta,
+#         },
+#     }
+
+#     # 2. Extract Date
+#     date_match = re.search(ParserRegex.TD_DATE_CLOSED, clean_body, re.IGNORECASE)
+#     if not date_match:
+#         date_match = re.search(ParserRegex.DATE_GENERAL, clean_body)
+
+#     if date_match:
+#         raw_cdate = date_match.group(1).replace("/", "-")
+#         try:
+#             result["date"] = datetime.strptime(
+#                 raw_cdate, DateFormats.DMY_FOUR.value
+#             ).strftime(DateFormats.ISO_DATE.value)
+#             result["full_datetime"] = f"{result['date']}{DateFormats.TIME_ZERO.value}"
+#         except ValueError:
+#             result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+#     else:
+#         result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+
+#     # 3. Extract Principal Amount
+#     amt_match = re.search(ParserRegex.TD_PRINCIPAL_IN_TABLE, clean_body, re.IGNORECASE)
+#     if not amt_match:
+#         amt_match = re.search(r"\b(\d{5,8})\b", clean_body)
+
+#     if amt_match:
+#         try:
+#             raw_amt = amt_match.group(1).replace(SystemDefaults.COMMA.value, "")
+#             parsed_amt = float(raw_amt)
+#             if parsed_amt > 0:
+#                 result["amount"] = f"{parsed_amt:.2f}"
+#                 result["is_parsed"] = True
+#         except ValueError:
+#             pass
+
+#     # 4. Fingerprint
+#     b_key = result["bank_name"]
+#     acct_key = full_acct or SystemDefaults.UNREGISTERED.value
+#     amt_key = result["amount"] or SystemDefaults.ZERO_AMOUNT.value
+#     dt_key = result["date"] or SystemDefaults.NODATE.value
+#     raw_key = NarrativeLabels.TD_FINGERPRINT_PREFIX.value.format(
+#         b_key, acct_key, amt_key, dt_key
+#     ).upper()
+#     result["txn_fingerprint"] = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+#     return result
+
+
+# def parse_bank_email_body(
+#     body_text: str, sender: str = "", inherited_bank: str = ""
+# ) -> dict:
+#     """
+#     Parses bank transaction emails and SMS alerts across institutions.
+#     Extracts debit/credit, amounts, masked account numbers, dynamic slash streams,
+#     SMS text patterns, RRN/reference codes, and resolves ledger accounts.
+#     """
+#     result = {
+#         "bank_name": inherited_bank or SystemDefaults.BANK.value,
+#         "amount": None,
+#         "balance": None,
+#         "txn_type": TxnType.DEBIT.value,
+#         "merchant": SystemDefaults.VENDOR.value,
+#         "account_last4": None,
+#         "account_id": None,
+#         "account_display_name": NarrativeLabels.ACCOUNT_NOT_FOUND.value,
+#         "upi_ref": None,
+#         "date": None,
+#         "full_datetime": None,
+#         "full_narration": None,
+#         "txn_fingerprint": None,
+#         "is_parsed": False,
+#         "is_noise": False,
+#         "payment_rail": PaymentRail.UNKNOWN.value,
+#         "is_self_transfer": False,
+#         "metadata_json": {},
+#     }
+
+#     if not body_text:
+#         return result
+
+#     clean_body = clean_html_to_text(body_text)
+
+#     # 0. Term Deposit Check
+#     td_result = parse_term_deposit_advice(
+#         clean_body, sender=sender, inherited_bank=inherited_bank
+#     )
+#     if td_result and td_result.get("is_parsed"):
+#         return td_result
+
+#     # 1. Non-Transactional Noise Filter
+#     clean_lower = clean_body.lower()
+#     if any(kw in clean_lower for kw in IngestTriggers.AMB_NOISE):
+#         result["txn_type"] = TxnType.NOISE.value
+#         result["merchant"] = NarrativeLabels.AMB_NOTICE_MERCHANT.value
+#         result["full_narration"] = NarrativeLabels.AMB_NOTICE_NARRATION.value
+#         result["is_noise"] = True
+#         result["is_parsed"] = False
+#         return result
+
+#     # 2. Transaction Direction
+#     if any(trig in clean_lower for trig in IngestTriggers.TXN_CREDIT):
+#         result["txn_type"] = TxnType.CREDIT.value
+#     elif any(trig in clean_lower for trig in IngestTriggers.TXN_DEBIT):
+#         result["txn_type"] = TxnType.DEBIT.value
+
+#     # 3. Amount Extraction
+#     amt_match = re.search(ParserRegex.AMOUNT_INR_CAPTURE, clean_body, re.IGNORECASE)
+#     if amt_match:
+#         try:
+#             raw_amt = amt_match.group(1).replace(SystemDefaults.COMMA.value, "").strip()
+#             result["amount"] = f"{float(raw_amt):.2f}"
+#         except ValueError:
+#             pass
+
+#     # 4. Running Balance Extraction
+#     bal_match = re.search(ParserRegex.BALANCE_CAPTURE, clean_body, re.IGNORECASE)
+#     if bal_match:
+#         try:
+#             raw_bal = bal_match.group(1).replace(SystemDefaults.COMMA.value, "").strip()
+#             result["balance"] = f"{float(raw_bal):.2f}"
+#         except ValueError:
+#             pass
+
+#     # 5. Masked Account Extraction
+#     acc_match = re.search(ParserRegex.ACCOUNT_MASKED_PRIMARY, clean_body)
+#     if not acc_match:
+#         acc_match = re.search(
+#             ParserRegex.ACCOUNT_MASKED_SECONDARY, clean_body, re.IGNORECASE
+#         )
+
+#     raw_account_captured = None
+#     if acc_match:
+#         raw_account_captured = acc_match.group(1)
+#         result["account_last4"] = raw_account_captured[-4:]
+
+#     # 6. Resolve Account & Bank
+#     acc_id, acc_name, resolved_bank, meta = resolve_account_and_bank(
+#         raw_account_captured or result["account_last4"],
+#         clean_body,
+#         sender=sender,
+#         default_bank=inherited_bank,
+#     )
+#     result["bank_name"] = resolved_bank
+#     result["account_id"] = acc_id
+#     result["account_display_name"] = acc_name
+#     if meta:
+#         result["metadata_json"]["account_match"] = meta
+
+#     # 7. Date Parsing
+#     date_match = re.search(ParserRegex.DATE_GENERAL, clean_body)
+#     if date_match:
+#         raw_date_str = date_match.group(1)
+#         try:
+#             parts = raw_date_str.replace("/", "-").split("-")
+#             if len(parts) == 3:
+#                 day, month, year = parts[0], parts[1], parts[2]
+#                 if len(year) == 2:
+#                     year = f"20{year}"
+#                 result["date"] = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+#         except Exception:
+#             result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+#     else:
+#         result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+
+#     # 8. Universal Stream Tokenizer (Handles Beneficiary Pattern & SIB Slash Stream)
+#     sms_upi_match = re.search(
+#         ParserRegex.SMS_BENEFICIARY_VIA, clean_body, re.IGNORECASE
+#     )
+
+#     if sms_upi_match:
+#         result["payment_rail"] = sms_upi_match.group(1).upper()
+#         raw_merchant_cand = sms_upi_match.group(2).strip()
+
+#         ref_match = re.search(ParserRegex.UPI_RRN, clean_body, re.IGNORECASE)
+#         if ref_match:
+#             result["upi_ref"] = ref_match.group(1)
+
+#         result["merchant"] = clean_sms_merchant(
+#             raw_merchant_cand,
+#             upi_ref=result["upi_ref"],
+#             payment_rail=result["payment_rail"],
+#         )
+
+#         result["full_narration"] = (
+#             NarrativeLabels.SLASH_NARRATION_TEMPLATE.value.format(
+#                 result["payment_rail"],
+#                 result["upi_ref"] or NarrativeLabels.FALLBACK_REF.value,
+#                 result["merchant"],
+#             )
+#         )
+#     else:
+#         info_idx = clean_body.lower().find("info")
+#         if info_idx != -1 and SystemDefaults.SLASH.value in clean_body[info_idx:]:
+#             stream_snippet = clean_body[info_idx:]
+#             stream_snippet = re.sub(
+#                 ParserRegex.STREAM_STRIP_TAIL,
+#                 SystemDefaults.EMPTY_STRING.value,
+#                 stream_snippet,
+#                 flags=re.IGNORECASE,
+#             ).strip()
+
+#             after_prefix = re.sub(
+#                 ParserRegex.INFO_PREFIX_STRIP,
+#                 SystemDefaults.EMPTY_STRING.value,
+#                 stream_snippet,
+#                 flags=re.IGNORECASE,
+#             ).strip()
+#             tokens = [
+#                 t.strip()
+#                 for t in after_prefix.split(SystemDefaults.SLASH.value)
+#                 if t.strip()
+#             ]
+
+#             if len(tokens) >= 1:
+#                 cand_rail = tokens[0].upper()
+#                 if (
+#                     PaymentRail.contains(cand_rail)
+#                     or cand_rail in TokenCatalog.INTERMEDIARY_RAIL_CODES
+#                 ):
+#                     result["payment_rail"] = (
+#                         PaymentRail.IMPS.value if cand_rail == "MOB" else cand_rail
+#                     )
+
+#             # Filter tokens: timestamp vs 12-digit UPI RRN vs IMPS/NEFT
+#             for t in tokens:
+#                 if len(t) == 14 and t.startswith(TokenCatalog.YEAR_PREFIXES_TIMESTAMP):
+#                     result["metadata_json"]["bank_txn_timestamp"] = t
+#                     continue
+
+#                 if re.fullmatch(ParserRegex.TWELVE_DIGIT_MATCH, t):
+#                     result["upi_ref"] = t
+#                     break
+#                 elif re.fullmatch(r"[A-Za-z0-9]{8,16}", t) and not t.isalpha():
+#                     result["upi_ref"] = t
+#                     break
+
+#             is_own_account = any(
+#                 "OWN ACCOUNT" in t.upper() or "SELF" in t.upper() for t in tokens
+#             )
+#             if is_own_account:
+#                 result["is_self_transfer"] = True
+#                 result["merchant"] = NarrativeLabels.OWN_ACCOUNT_TRANSFER.value
+#             elif result["upi_ref"] and result["upi_ref"] in tokens:
+#                 ref_idx = tokens.index(result["upi_ref"])
+#                 if len(tokens) > ref_idx + 1:
+#                     cand_m = tokens[ref_idx + 1]
+#                     if PaymentRail.contains(cand_m.upper()):
+#                         cand_m = tokens[ref_idx - 1] if ref_idx > 0 else cand_m
+#                     cand_m = re.sub(
+#                         ParserRegex.MERCHANT_NOISE_PHRASES,
+#                         SystemDefaults.EMPTY_STRING.value,
+#                         cand_m,
+#                         flags=re.IGNORECASE,
+#                     ).strip()
+#                     if cand_m:
+#                         result["merchant"] = clean_sms_merchant(
+#                             cand_m,
+#                             upi_ref=result["upi_ref"],
+#                             payment_rail=result["payment_rail"],
+#                         )
+#             elif len(tokens) >= 3:
+#                 if not tokens[2].isdigit():
+#                     result["merchant"] = clean_sms_merchant(
+#                         tokens[2],
+#                         upi_ref=result["upi_ref"],
+#                         payment_rail=result["payment_rail"],
+#                     )
+
+#             result["full_narration"] = (
+#                 NarrativeLabels.SLASH_NARRATION_TEMPLATE.value.format(
+#                     result["payment_rail"],
+#                     result["upi_ref"] or NarrativeLabels.FALLBACK_REF.value,
+#                     result["merchant"],
+#                 )
+#             )
+
+#     # 9. Fallback for SMS alerts without standard stream formats (Handles SIB debit micro-alerts)
+#     if (
+#         result["merchant"]
+#         in [
+#             SystemDefaults.VENDOR.value,
+#             "SOUTH INDIAN BANK",
+#             result["bank_name"],
+#         ]
+#         or "UPI DEBIT" in (result["merchant"] or "").upper()
+#     ):
+#         # Look for explicit payee markers in SMS (e.g., "to <Merchant>", "at <Merchant>")
+#         sms_merchant_match = re.search(
+#             r"\b(?:to|at)\s+([A-Za-z][A-Za-z0-9\s\.\-_&]{2,30}?)(?:\s+on|\s+Ref|\s+RRN|\.|$)",
+#             clean_body,
+#             re.IGNORECASE,
+#         )
+#         if sms_merchant_match:
+#             cand = sms_merchant_match.group(1).strip()
+#             if not any(
+#                 b in cand.upper() for b in ["SOUTH INDIAN", "BANK", "CALL", "SMS"]
+#             ):
+#                 result["merchant"] = clean_sms_merchant(
+#                     cand,
+#                     upi_ref=result["upi_ref"],
+#                     payment_rail=result["payment_rail"],
+#                 )
+#             else:
+#                 result["merchant"] = NarrativeLabels.FALLBACK_DIRECT_PAYMENT.value
+#         else:
+#             result["merchant"] = NarrativeLabels.FALLBACK_DIRECT_PAYMENT.value
+
+#         # Re-sync full narration
+#         result["full_narration"] = (
+#             NarrativeLabels.SLASH_NARRATION_TEMPLATE.value.format(
+#                 (
+#                     result["payment_rail"]
+#                     if result["payment_rail"] != PaymentRail.UNKNOWN.value
+#                     else PaymentRail.UPI.value
+#                 ),
+#                 result["upi_ref"] or NarrativeLabels.FALLBACK_REF.value,
+#                 result["merchant"],
+#             )
+#         )
+
+#     # 10. Fallback to generic stream identifiers if rail or upi_ref is missing
+#     if result["payment_rail"] == PaymentRail.UNKNOWN.value or not result["upi_ref"]:
+#         stream_meta = extract_stream_identifiers(clean_body)
+#         if result["payment_rail"] == PaymentRail.UNKNOWN.value:
+#             result["payment_rail"] = stream_meta.get("rail", PaymentRail.UNKNOWN.value)
+#         result["is_self_transfer"] = result["is_self_transfer"] or stream_meta.get(
+#             "is_self_transfer", False
+#         )
+
+#         if not result["upi_ref"] and stream_meta.get("reference_id"):
+#             ref_val = stream_meta["reference_id"]
+#             if not (
+#                 len(ref_val) == 14
+#                 and ref_val.startswith(TokenCatalog.YEAR_PREFIXES_TIMESTAMP)
+#             ):
+#                 result["upi_ref"] = ref_val
+
+#         if result["merchant"] in [
+#             SystemDefaults.VENDOR.value,
+#             NarrativeLabels.FALLBACK_DIRECT_PAYMENT.value,
+#         ] and stream_meta.get("extracted_merchant"):
+#             result["merchant"] = clean_sms_merchant(
+#                 stream_meta["extracted_merchant"],
+#                 upi_ref=result["upi_ref"],
+#                 payment_rail=result["payment_rail"],
+#             )
+
+#     # 11. Deterministic Transaction Fingerprint
+#     if result["amount"]:
+#         result["is_parsed"] = True
+#         acc = result["account_last4"] or SystemDefaults.ACCOUNT_FALLBACK_LAST4.value
+#         ref = result["upi_ref"] or f"TXN_{result['date']}_{result['amount']}"
+
+#         raw_key = NarrativeLabels.STANDARD_FINGERPRINT_PREFIX.value.format(
+#             result["bank_name"], acc, result["amount"], ref
+#         ).upper()
+#         result["txn_fingerprint"] = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+#     return result
+
+
 def parse_bank_email_body(
-    body_text: str, sender: str = "", inherited_bank: str = ""
+    body_text: str,
+    sender: str = "",
+    inherited_bank: str = "",
+    email_date_hint: str = None,
 ) -> dict:
-    """
-    Parses bank transaction emails and SMS alerts across institutions.
-    Extracts debit/credit, amounts, masked account numbers, dynamic slash streams,
-    SMS text patterns, RRN/reference codes, and resolves ledger accounts.
+    """Parses bank transaction emails and SMS alerts across institutions.
+
+    Extracts debit/credit, amounts, masked account numbers, dynamic slash
+    streams, SMS text patterns, RRN/reference codes, and resolves ledger
+    accounts. Falls back to the email envelope header date instead of today's
+    timestamp.
     """
     result = {
         "bank_name": inherited_bank or SystemDefaults.BANK.value,
@@ -571,7 +1005,10 @@ def parse_bank_email_body(
 
     # 0. Term Deposit Check
     td_result = parse_term_deposit_advice(
-        clean_body, sender=sender, inherited_bank=inherited_bank
+        clean_body,
+        sender=sender,
+        inherited_bank=inherited_bank,
+        email_date_hint=email_date_hint,
     )
     if td_result and td_result.get("is_parsed"):
         return td_result
@@ -635,7 +1072,8 @@ def parse_bank_email_body(
     if meta:
         result["metadata_json"]["account_match"] = meta
 
-    # 7. Date Parsing
+    # 7. Date Parsing (Prioritizes body date -> email header date hint -> None)
+    extracted_date = None
     date_match = re.search(ParserRegex.DATE_GENERAL, clean_body)
     if date_match:
         raw_date_str = date_match.group(1)
@@ -645,11 +1083,23 @@ def parse_bank_email_body(
                 day, month, year = parts[0], parts[1], parts[2]
                 if len(year) == 2:
                     year = f"20{year}"
-                result["date"] = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                extracted_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
         except Exception:
-            result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
-    else:
-        result["date"] = datetime.now().strftime(DateFormats.ISO_DATE.value)
+            extracted_date = None
+
+    if not extracted_date and email_date_hint:
+        try:
+            from tracker.backendViewModel.emailViewsutils.emailViewhelper import (
+                safe_parse_datetime,
+            )
+
+            dt = safe_parse_datetime(email_date_hint)
+            if dt:
+                extracted_date = dt.strftime("%Y-%m-%d")
+        except Exception:
+            extracted_date = None
+
+    result["date"] = extracted_date
 
     # 8. Universal Stream Tokenizer (Handles Beneficiary Pattern & SIB Slash Stream)
     sms_upi_match = re.search(
@@ -710,7 +1160,6 @@ def parse_bank_email_body(
                         PaymentRail.IMPS.value if cand_rail == "MOB" else cand_rail
                     )
 
-            # Filter tokens: timestamp vs 12-digit UPI RRN vs IMPS/NEFT
             for t in tokens:
                 if len(t) == 14 and t.startswith(TokenCatalog.YEAR_PREFIXES_TIMESTAMP):
                     result["metadata_json"]["bank_txn_timestamp"] = t
@@ -763,7 +1212,7 @@ def parse_bank_email_body(
                 )
             )
 
-    # 9. Fallback for SMS alerts without standard stream formats (Handles SIB debit micro-alerts)
+    # 9. Micro-alert Payee Fallback
     if (
         result["merchant"]
         in [
@@ -773,7 +1222,6 @@ def parse_bank_email_body(
         ]
         or "UPI DEBIT" in (result["merchant"] or "").upper()
     ):
-        # Look for explicit payee markers in SMS (e.g., "to <Merchant>", "at <Merchant>")
         sms_merchant_match = re.search(
             r"\b(?:to|at)\s+([A-Za-z][A-Za-z0-9\s\.\-_&]{2,30}?)(?:\s+on|\s+Ref|\s+RRN|\.|$)",
             clean_body,
@@ -794,7 +1242,6 @@ def parse_bank_email_body(
         else:
             result["merchant"] = NarrativeLabels.FALLBACK_DIRECT_PAYMENT.value
 
-        # Re-sync full narration
         result["full_narration"] = (
             NarrativeLabels.SLASH_NARRATION_TEMPLATE.value.format(
                 (
@@ -807,7 +1254,7 @@ def parse_bank_email_body(
             )
         )
 
-    # 10. Fallback to generic stream identifiers if rail or upi_ref is missing
+    # 10. Fallback to Generic Stream Identifiers
     if result["payment_rail"] == PaymentRail.UNKNOWN.value or not result["upi_ref"]:
         stream_meta = extract_stream_identifiers(clean_body)
         if result["payment_rail"] == PaymentRail.UNKNOWN.value:
@@ -834,11 +1281,12 @@ def parse_bank_email_body(
                 payment_rail=result["payment_rail"],
             )
 
-    # 11. Deterministic Transaction Fingerprint
+    # 11. Deterministic Fingerprint
     if result["amount"]:
         result["is_parsed"] = True
         acc = result["account_last4"] or SystemDefaults.ACCOUNT_FALLBACK_LAST4.value
-        ref = result["upi_ref"] or f"TXN_{result['date']}_{result['amount']}"
+        date_for_fp = result["date"] or "UNKNOWN_DATE"
+        ref = result["upi_ref"] or f"TXN_{date_for_fp}_{result['amount']}"
 
         raw_key = NarrativeLabels.STANDARD_FINGERPRINT_PREFIX.value.format(
             result["bank_name"], acc, result["amount"], ref

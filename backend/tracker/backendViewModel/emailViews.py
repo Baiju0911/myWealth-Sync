@@ -10,6 +10,8 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
+
 
 from tracker.models.emailModels import RawEmailPayload
 from tracker.models.models import Account as LedgerAccount
@@ -30,6 +32,7 @@ from tracker.emailIngest.services import (
 )
 from tracker.emailIngest.watermark import get_latest_transaction_watermark
 from .emailViewsutils.emailViewhelper import safe_parse_datetime
+from tracker.parsers.parsers_v1.inbox.inbox_service import BatchRevokeService
 
 
 class EmailIngestStagingViewSet(viewsets.ViewSet):
@@ -545,3 +548,22 @@ class EmailIngestStagingViewSet(viewsets.ViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class RevokeIngestBatchView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, registry_id=None):
+        try:
+            result = BatchRevokeService.revoke_inbox_registry(registry_id)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as ve:
+            return Response(
+                {"status": "NOT_FOUND", "message": str(ve)},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            return Response(
+                {"status": "ERROR", "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )

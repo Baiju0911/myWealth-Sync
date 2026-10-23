@@ -94,8 +94,21 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     # 4. Sweep Engine (Node 99 Automation)
     # -------------------------------------------------------------------------
+    path(
+        "staging/validate_pattern/",
+        validate_pattern_anchor,
+        name="compat-staging-validate-pattern",
+    ),
     path("sweep/preview/", sweep_preview_summary, name="sweep-preview"),
+    path(
+        "staging/sweep-preview/", sweep_preview_summary, name="staging-sweep-preview"
+    ),  # Added compatibility alias
     path("sweep/execute/", execute_bulk_sweep, name="sweep-execute"),
+    path(
+        "staging/execute-bulk-sweep/",
+        execute_bulk_sweep,
+        name="staging-execute-bulk-sweep",
+    ),  # Added compatibility alias
     # -------------------------------------------------------------------------
     # 5. Classification Rules CRUD
     # -------------------------------------------------------------------------
@@ -125,6 +138,11 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     # Compatibility Aliases (Retain only active frontend callers)
     # -------------------------------------------------------------------------
+    path(
+        "staging/get_candidate_patterns/",
+        get_candidate_patterns_view,
+        name="compat-staging-get-candidate-patterns",
+    ),
     path(
         "suggest_rule_for_cluster/",
         suggest_rule_for_cluster,

@@ -358,6 +358,35 @@ def get_cluster_line_items(request):
 
 
 # @api_view(["POST"])
+# def get_cluster_line_items(request):
+#     """
+#     Lazy fetch endpoint. Called on-demand when an accordion is expanded.
+#     """
+#     entry_ids = request.data.get("entry_ids") or request.data.get("transaction_ids", [])
+
+#     if not entry_ids:
+#         return Response(
+#             {
+#                 "status": "success",
+#                 "count": 0,
+#                 "items": [],
+#             },
+#             status=status.HTTP_200_OK,
+#         )
+
+#     items = fetch_cluster_line_items(entry_ids)
+
+#     return Response(
+#         {
+#             "status": "success",
+#             "count": len(items),
+#             "items": items,
+#         },
+#         status=status.HTTP_200_OK,
+#     )
+
+
+# @api_view(["POST"])
 # def apply_reclassification_and_learn(request):
 #     transaction_ids = (
 #         request.data.get("transaction_ids")

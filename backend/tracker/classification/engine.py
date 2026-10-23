@@ -728,12 +728,125 @@ def get_suspense_clusters(
 #     return items
 
 
+# def fetch_cluster_line_items(entry_ids: list) -> list:
+#     """
+#     Fetches and prepares granular line items for an expanded cluster.
+#     Resolves the true originating Bank Account using StatementStagingLine.account_id
+#     mapped directly to Account.id (strictly ignoring Suspense Node 99 and bank institution IDs).
+#     """
+#     if not entry_ids:
+#         return []
+
+#     from django.apps import apps
+
+#     JournalEntry = apps.get_model("ledger", "JournalEntry")
+#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+#     Account = apps.get_model("ledger", "Account")
+
+#     entries = list(
+#         JournalEntry.objects.filter(id__in=entry_ids)
+#         .only(
+#             "id",
+#             "row_identifier",
+#             "account_id",
+#             "debit",
+#             "credit",
+#             "remarks",
+#             "transaction_date",
+#         )
+#         .order_by("-transaction_date")
+#     )
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+
+#     # SSOT staging lines for narration and account resolution
+#     staging_rows = StatementStagingLine.objects.filter(
+#         row_identifier__in=row_ids
+#     ).values("row_identifier", "narration", "account_id")
+#     staging_map = {s["row_identifier"]: s for s in staging_rows}
+
+#     # Extract target account IDs (StatementStagingLine.account_id -> Account.id)
+#     target_acc_ids = set()
+#     for e in entries:
+#         stg = staging_map.get(e.row_identifier) or {}
+#         stg_acc_id = stg.get("account_id")
+#         je_acc_id = e.account_id
+
+#         if stg_acc_id and int(stg_acc_id) != 99:
+#             target_acc_ids.add(int(stg_acc_id))
+#         elif je_acc_id and int(je_acc_id) != 99:
+#             target_acc_ids.add(int(je_acc_id))
+
+#     account_lookup = {}
+#     if target_acc_ids:
+#         for acc in Account.objects.filter(id__in=target_acc_ids):
+#             acc_name = getattr(acc, "name", None) or getattr(acc, "bank_name", "Bank")
+#             acc_num = str(getattr(acc, "account_number", "") or "")
+#             last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+#             account_lookup[acc.id] = {
+#                 "bank_name": acc_name,
+#                 "bank_last4": last4,
+#             }
+
+#     items = []
+#     for entry in entries:
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         stg = staging_map.get(entry.row_identifier) or {}
+
+#         narration = (
+#             stg.get("narration")
+#             or remarks.get("universal_narration")
+#             or remarks.get("narration")
+#             or remarks.get("display_text")
+#             or "Statement Line"
+#         )
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+#         is_outflow = debit_val > 0
+#         amount = debit_val if is_outflow else credit_val
+
+#         # Prioritize staging line account_id; fallback to JournalEntry leg
+#         stg_acc_id = stg.get("account_id")
+#         resolved_acc_id = None
+#         if stg_acc_id and int(stg_acc_id) != 99:
+#             resolved_acc_id = int(stg_acc_id)
+#         elif entry.account_id and int(entry.account_id) != 99:
+#             resolved_acc_id = int(entry.account_id)
+
+#         bank_meta = account_lookup.get(resolved_acc_id) or {}
+
+#         items.append(
+#             {
+#                 "id": str(entry.id),
+#                 "row_identifier": entry.row_identifier,
+#                 "narration": narration,
+#                 "universal_narration": remarks.get("universal_narration") or narration,
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "amount": amount,
+#                 "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                 "transaction_date": (
+#                     entry.transaction_date.strftime("%d-%m-%Y")
+#                     if entry.transaction_date
+#                     else None
+#                 ),
+#                 "account_id": resolved_acc_id,
+#                 "bank_name": bank_meta.get("bank_name"),
+#                 "bank_last4": bank_meta.get("bank_last4"),
+#                 "remarks": {
+#                     **remarks,
+#                     "universal_narration": narration,
+#                     "bank_name": bank_meta.get("bank_name"),
+#                     "bank_last4": bank_meta.get("bank_last4"),
+#                 },
+#             }
+#         )
+
+#     return items
+
+
 def fetch_cluster_line_items(entry_ids: list) -> list:
-    """
-    Fetches and prepares granular line items for an expanded cluster.
-    Resolves the true originating Bank Account using StatementStagingLine.account_id
-    mapped directly to Account.id (strictly ignoring Suspense Node 99 and bank institution IDs).
-    """
     if not entry_ids:
         return []
 
@@ -743,6 +856,14 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
     Account = apps.get_model("ledger", "Account")
 
+    # 🛡️ Dynamic lookup to avoid LookupError if app label is not 'subledger'
+    AssetTransactionMapping = None
+    for model in apps.get_models():
+        if model.__name__ == "AssetTransactionMapping":
+            AssetTransactionMapping = model
+            break
+
+    # 1. Fetch entries
     entries = list(
         JournalEntry.objects.filter(id__in=entry_ids)
         .only(
@@ -759,27 +880,48 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
 
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
 
-    # SSOT staging lines for narration and account resolution
+    # 2. Query Asset mappings by row_identifier
+    mapping_map = {}
+    if row_ids and AssetTransactionMapping:
+        mappings = AssetTransactionMapping.objects.filter(
+            row_identifier__in=row_ids
+        ).select_related("asset")
+        for m in mappings:
+            asset = getattr(m, "asset", None)
+            mapping_map[m.row_identifier] = {
+                "is_mapped": True,
+                "mapping_id": str(m.id),
+                "asset_id": str(asset.id) if asset else None,
+                "asset_code": getattr(asset, "asset_code", "FLT"),
+                "asset_name": getattr(asset, "name", "Petty Cash Float"),
+            }
+
+    # 3. Fetch staging lines
     staging_rows = StatementStagingLine.objects.filter(
         row_identifier__in=row_ids
-    ).values("row_identifier", "narration", "account_id")
+    ).values("row_identifier", "narration", "account_id", "raw_statement_date")
     staging_map = {s["row_identifier"]: s for s in staging_rows}
 
-    # Extract target account IDs (StatementStagingLine.account_id -> Account.id)
-    target_acc_ids = set()
-    for e in entries:
-        stg = staging_map.get(e.row_identifier) or {}
-        stg_acc_id = stg.get("account_id")
-        je_acc_id = e.account_id
+    # 4. Fetch pairing bank account legs
+    pairing_legs = list(
+        JournalEntry.objects.filter(row_identifier__in=row_ids)
+        .exclude(account_id=99)
+        .values("id", "row_identifier", "account_id", "debit", "credit", "remarks")
+    )
 
-        if stg_acc_id and int(stg_acc_id) != 99:
-            target_acc_ids.add(int(stg_acc_id))
-        elif je_acc_id and int(je_acc_id) != 99:
-            target_acc_ids.add(int(je_acc_id))
+    row_to_bank_leg = {}
+    bank_acc_ids = set()
+    for p in pairing_legs:
+        acc_id = p["account_id"]
+        if acc_id:
+            bank_acc_ids.add(int(acc_id))
+            if p["row_identifier"] not in row_to_bank_leg:
+                row_to_bank_leg[p["row_identifier"]] = p
 
+    # 5. Account metadata lookup
     account_lookup = {}
-    if target_acc_ids:
-        for acc in Account.objects.filter(id__in=target_acc_ids):
+    if bank_acc_ids:
+        for acc in Account.objects.filter(id__in=bank_acc_ids):
             acc_name = getattr(acc, "name", None) or getattr(acc, "bank_name", "Bank")
             acc_num = str(getattr(acc, "account_number", "") or "")
             last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
@@ -792,12 +934,22 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
     for entry in entries:
         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
         stg = staging_map.get(entry.row_identifier) or {}
+        bank_leg = row_to_bank_leg.get(entry.row_identifier) or {}
+        mapping_info = mapping_map.get(entry.row_identifier) or {}
+
+        raw_txn_date = (
+            stg.get("raw_statement_date")
+            or remarks.get("raw_statement_date")
+            or remarks.get("transaction_date")
+            or entry.transaction_date
+        )
 
         narration = (
             stg.get("narration")
             or remarks.get("universal_narration")
             or remarks.get("narration")
             or remarks.get("display_text")
+            or bank_leg.get("remarks", {}).get("display_text")
             or "Statement Line"
         )
 
@@ -806,15 +958,15 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
         is_outflow = debit_val > 0
         amount = debit_val if is_outflow else credit_val
 
-        # Prioritize staging line account_id; fallback to JournalEntry leg
-        stg_acc_id = stg.get("account_id")
-        resolved_acc_id = None
-        if stg_acc_id and int(stg_acc_id) != 99:
-            resolved_acc_id = int(stg_acc_id)
-        elif entry.account_id and int(entry.account_id) != 99:
-            resolved_acc_id = int(entry.account_id)
+        resolved_acc_id = bank_leg.get("account_id")
+        if not resolved_acc_id:
+            stg_acc_id = stg.get("account_id")
+            if stg_acc_id and int(stg_acc_id) != 99:
+                resolved_acc_id = int(stg_acc_id)
+            elif entry.account_id and int(entry.account_id) != 99:
+                resolved_acc_id = int(entry.account_id)
 
-        bank_meta = account_lookup.get(resolved_acc_id) or {}
+        bank_meta = account_lookup.get(int(resolved_acc_id)) if resolved_acc_id else {}
 
         items.append(
             {
@@ -827,13 +979,19 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
                 "amount": amount,
                 "direction": "OUTFLOW" if is_outflow else "INFLOW",
                 "transaction_date": (
-                    entry.transaction_date.strftime("%d-%m-%Y")
-                    if entry.transaction_date
-                    else None
+                    raw_txn_date.strftime("%Y-%m-%d")
+                    if hasattr(raw_txn_date, "strftime")
+                    else str(raw_txn_date) if raw_txn_date else None
                 ),
                 "account_id": resolved_acc_id,
                 "bank_name": bank_meta.get("bank_name"),
                 "bank_last4": bank_meta.get("bank_last4"),
+                # Mapping metadata for UI badges & unmapping
+                "is_mapped": bool(mapping_info.get("is_mapped")),
+                "mapping_id": mapping_info.get("mapping_id"),
+                "asset_id": mapping_info.get("asset_id"),
+                "asset_code": mapping_info.get("asset_code"),
+                "asset_name": mapping_info.get("asset_name"),
                 "remarks": {
                     **remarks,
                     "universal_narration": narration,

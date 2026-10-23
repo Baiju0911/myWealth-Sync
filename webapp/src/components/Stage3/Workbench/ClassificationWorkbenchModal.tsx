@@ -97,6 +97,7 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
             toggleClusterTxns={actions.toggleClusterTxns}
             toggleSelectAllVisible={actions.toggleSelectAllVisible}
             clearAllSelections={actions.clearAllSelections}
+            lastAppliedMapping={state.lastAppliedMapping}
           />
 
           <TaxonomyMapperPanel

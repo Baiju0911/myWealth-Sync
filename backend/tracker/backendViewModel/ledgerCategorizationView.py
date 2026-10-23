@@ -1,4 +1,6 @@
 # Double Entry from Staging Queue to WIP to Journal entry
+# Stage 2 WIP => Stage 3 Journal Entry
+
 import sys
 import time
 import re

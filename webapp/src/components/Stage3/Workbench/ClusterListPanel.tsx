@@ -1,6 +1,7 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import type { ExtendedCluster, Cluster } from '../../../api/api';
 import { updateEntryUserNote, getClusterLineItems } from '../../../api/api';
+import { subledgerApi, type UnmapTransactionRequest } from '../../../api/subledger';
 import {
   inrFormatter,
   parseRemarks,
@@ -30,6 +31,14 @@ interface Props {
   toggleClusterTxns: (clusterTxnIds: string[], e: React.MouseEvent) => void;
   toggleSelectAllVisible: () => void;
   clearAllSelections: () => void;
+  // 🚀 New Props to synchronize mapping updates in-place without modal reload
+  lastAppliedMapping?: {
+    txnIds: string[];
+    asset_id?: string | number;
+    asset_code?: string;
+    asset_name?: string;
+  } | null;
+  onUnmapSuccess?: (unmappedId: string) => void;
 }
 
 export const ClusterListPanel: React.FC<Props> = ({
@@ -45,6 +54,8 @@ export const ClusterListPanel: React.FC<Props> = ({
   toggleClusterTxns,
   toggleSelectAllVisible,
   clearAllSelections,
+  lastAppliedMapping,
+  onUnmapSuccess,
 }) => {
   const [remarksModalItem, setRemarksModalItem] = useState<{ id: string; narration?: string; remarks?: any } | null>(null);
   const [userNoteInput, setUserNoteInput] = useState<string>('');
@@ -53,9 +64,43 @@ export const ClusterListPanel: React.FC<Props> = ({
   // Map to store dynamically fetched items per cluster
   const [clusterItemsMap, setClusterItemsMap] = useState<Record<string, any[]>>({});
   const [loadingClusterKeys, setLoadingClusterKeys] = useState<Record<string, boolean>>({});
+  const [unmappingItemIds, setUnmappingItemIds] = useState<Record<string, boolean>>({});
 
   const [expandedClusterKeys, setExpandedClusterKeys] = useState<Record<string, boolean>>({});
   const [expandedVendorKeys, setExpandedVendorKeys] = useState<Record<string, boolean>>({});
+
+  // 🔄 Instantly reflect newly mapped items across all active clusters in state
+  useEffect(() => {
+    if (!lastAppliedMapping || !lastAppliedMapping.txnIds?.length) return;
+
+    const { txnIds, asset_id, asset_code, asset_name } = lastAppliedMapping;
+
+    setClusterItemsMap((prev) => {
+      const updated = { ...prev };
+      let changed = false;
+
+      Object.keys(updated).forEach((key) => {
+        const list = updated[key];
+        if (Array.isArray(list) && list.some((it) => txnIds.includes(it.id))) {
+          changed = true;
+          updated[key] = list.map((it) => {
+            if (txnIds.includes(it.id)) {
+              return {
+                ...it,
+                is_mapped: true,
+                asset_id: asset_id ? String(asset_id) : it.asset_id,
+                asset_code: asset_code || it.asset_code || 'FLT',
+                asset_name: asset_name || it.asset_name || 'Petty Cash Float',
+              };
+            }
+            return it;
+          });
+        }
+      });
+
+      return changed ? updated : prev;
+    });
+  }, [lastAppliedMapping]);
 
   const isClusterExpanded = useCallback(
     (clusterKey: string) => expandedClusterKeys[clusterKey] === true,
@@ -82,7 +127,7 @@ export const ClusterListPanel: React.FC<Props> = ({
         const fetched = await getClusterLineItems(cluster.transaction_ids);
         setClusterItemsMap((prev) => ({
           ...prev,
-          [clusterKey]: fetched,
+          [clusterKey]: Array.isArray(fetched) ? fetched : [],
         }));
       } catch (err) {
         console.error('Failed to lazy load cluster items:', err);
@@ -140,28 +185,76 @@ export const ClusterListPanel: React.FC<Props> = ({
     }
   };
 
+  const handleUnmapSubledger = async (e: React.MouseEvent, item: any, clusterKey: string) => {
+    e.stopPropagation();
+    const itemId = String(item.id);
+    if (!item.mapping_id && !item.row_identifier) return;
+
+    setUnmappingItemIds((prev) => ({ ...prev, [itemId]: true }));
+
+    try {
+      const payload: UnmapTransactionRequest = item.mapping_id
+        ? { mapping_id: item.mapping_id }
+        : { row_identifier: item.row_identifier, asset_id: item.asset_id };
+
+      const res = await subledgerApi.unmapTransaction(payload);
+      if (res?.status === 'success') {
+        // Optimistically mutate item in local cluster cache
+        setClusterItemsMap((prev) => {
+          const list = prev[clusterKey];
+          if (!list) return prev;
+          return {
+            ...prev,
+            [clusterKey]: list.map((it) =>
+              String(it.id) === itemId
+                ? {
+                    ...it,
+                    is_mapped: false,
+                    mapping_id: null,
+                    asset_id: null,
+                    asset_code: null,
+                    asset_name: null,
+                  }
+                : it
+            ),
+          };
+        });
+
+        if (onUnmapSuccess) {
+          onUnmapSuccess(itemId);
+        }
+      } else {
+        alert(res?.message || 'Failed to unmap item.');
+      }
+    } catch (err) {
+      console.error('Failed to unmap transaction from subledger:', err);
+      alert('Error unmapping transaction.');
+    } finally {
+      setUnmappingItemIds((prev) => ({ ...prev, [itemId]: false }));
+    }
+  };
+
   const groupItemsByVendor = (items: any[] = []): VendorGroup[] => {
     const groupsMap: Record<string, VendorGroup> = {};
 
     items.forEach((item) => {
       const remarksObj = parseRemarks(item.remarks);
       const rawPayee = extractCleanPayee(item.narration) || remarksObj.payee;
-
-      // Avoid using giant 80-char statement strings as group names
       const cleanPayee = rawPayee && rawPayee.trim().length <= 40 ? rawPayee.trim() : '';
 
       const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
-      const isOut = dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR'
-        ? true
-        : dirStr === 'INFLOW' || dirStr === 'CREDIT' || dirStr === 'CR'
-        ? false
-        : item.debit != null && Number(item.debit) > 0
-        ? true
-        : item.credit != null && Number(item.credit) > 0
-        ? false
-        : (item.narration || '').toUpperCase().startsWith('DEP TFR NEFT')
-        ? false
-        : (item.amount ?? 0) < 0;
+      const isOut =
+        dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR'
+          ? true
+          : dirStr === 'INFLOW' || dirStr === 'CREDIT' || dirStr === 'CR'
+          ? false
+          : item.debit != null && Number(item.debit) > 0
+          ? true
+          : item.credit != null && Number(item.credit) > 0
+          ? false
+          : (item.narration || '').toUpperCase().startsWith('DEP TFR NEFT')
+          ? false
+          : (item.amount ?? 0) < 0;
 
       const directionTag = isOut ? 'OUT' : 'IN';
       const displayName = cleanPayee || 'Transactions';
@@ -190,8 +283,16 @@ export const ClusterListPanel: React.FC<Props> = ({
   };
 
   // Helper to render an individual transaction card
-  const renderTransactionCard = (item: any, cluster: ExtendedCluster, clusterIdx: number, vIdx: number, itemIdx: number) => {
+  const renderTransactionCard = (
+    item: any,
+    cluster: ExtendedCluster,
+    clusterIdx: number,
+    vIdx: number,
+    itemIdx: number,
+    clusterKey: string
+  ) => {
     const isItemChecked = selectedTxnIds.includes(item.id);
+    const isUnmapping = !!unmappingItemIds[String(item.id)];
 
     const isOutflow = (() => {
       const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
@@ -232,9 +333,9 @@ export const ClusterListPanel: React.FC<Props> = ({
           isItemChecked ? 'bg-zinc-800/90' : 'bg-zinc-950/80 hover:bg-zinc-900/60'
         } ${isOutflow ? 'border-rose-500' : 'border-emerald-500'}`}
       >
-        {/* ROW 1: Controls, Date, Bank Badge, Vector Tag, and Right-Aligned Amount */}
+        {/* ROW 1: Controls, Date, Bank Badge, Vector Tag, Mapped Status, and Right-Aligned Amount */}
         <div className="w-full flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
             <input
               type="checkbox"
               checked={isItemChecked}
@@ -278,6 +379,22 @@ export const ClusterListPanel: React.FC<Props> = ({
             >
               {isOutflow ? 'OUT' : 'IN'}
             </span>
+
+            {/* 🏷️ MAPPED STATUS INDICATOR & QUICK UNMAP BUTTON */}
+            {item.is_mapped && (
+              <span className="inline-flex items-center gap-1 rounded bg-emerald-950/90 border border-emerald-500/50 px-1.5 py-0.2 text-[9px] font-mono text-emerald-300 font-bold shrink-0 shadow-xs">
+                <span>Mapped: {item.asset_code || 'Float'}</span>
+                <button
+                  type="button"
+                  disabled={isUnmapping}
+                  onClick={(e) => handleUnmapSubledger(e, item, clusterKey)}
+                  className="text-zinc-400 hover:text-rose-400 underline decoration-dotted transition-colors text-[9px] cursor-pointer disabled:opacity-40"
+                  title="Unmap this transaction from the cash float"
+                >
+                  {isUnmapping ? '...' : '(Unmap)'}
+                </button>
+              </span>
+            )}
           </div>
 
           {/* 💰 Transaction Amount (pinned to the right) */}
@@ -406,7 +523,7 @@ export const ClusterListPanel: React.FC<Props> = ({
             const clusterOutflow = (cluster as ExtendedCluster).total_outflow ?? cluster.total_amount ?? 0;
             const clusterInflow = (cluster as ExtendedCluster).total_inflow ?? 0;
             const displayTag = (cluster.pattern || 'GENERAL_SUSPENSE').replace(/^#+/, '');
-            
+
             const activeItems = clusterItemsMap[clusterKey] || cluster.items || [];
             const vendorGroups = groupItemsByVendor(activeItems);
 
@@ -428,7 +545,9 @@ export const ClusterListPanel: React.FC<Props> = ({
                     <input
                       type="checkbox"
                       checked={isClusterFullySelected}
-                      ref={(el) => { if (el) el.indeterminate = isClusterPartiallySelected; }}
+                      ref={(el) => {
+                        if (el) el.indeterminate = isClusterPartiallySelected;
+                      }}
                       onClick={(e) => {
                         setActivePreviewCluster(cluster);
                         toggleClusterTxns(clusterTxnIds, e);
@@ -487,16 +606,17 @@ export const ClusterListPanel: React.FC<Props> = ({
                       vendorGroups.map((vGroup, vIdx) => {
                         const vendorKey = `${clusterKey}-vendor-${vGroup.vendorName}-${vIdx}`;
                         const selectedInVendorCount = vGroup.txnIds.filter((id) => selectedTxnIds.includes(id)).length;
-                        const isVendorFullySelected = vGroup.txnIds.length > 0 && selectedInVendorCount === vGroup.txnIds.length;
+                        const isVendorFullySelected =
+                          vGroup.txnIds.length > 0 && selectedInVendorCount === vGroup.txnIds.length;
                         const isVendorPartiallySelected = selectedInVendorCount > 0 && !isVendorFullySelected;
                         const isVendorOpen = isVendorExpanded(vendorKey);
                         const isGroupOutflow = vGroup.vendorName.endsWith('(OUT)');
 
-                        // If vendor group only has 1 item and no dedicated vendor title, flatten it
-                        const isSingleItemGeneric = vGroup.items.length === 1 && vGroup.vendorName.startsWith('Granular Transactions');
+                        const isSingleItemGeneric =
+                          vGroup.items.length === 1 && vGroup.vendorName.startsWith('Granular Transactions');
 
                         if (isSingleItemGeneric) {
-                          return renderTransactionCard(vGroup.items[0], cluster, clusterIdx, vIdx, 0);
+                          return renderTransactionCard(vGroup.items[0], cluster, clusterIdx, vIdx, 0, clusterKey);
                         }
 
                         return (
@@ -509,7 +629,9 @@ export const ClusterListPanel: React.FC<Props> = ({
                                 <input
                                   type="checkbox"
                                   checked={isVendorFullySelected}
-                                  ref={(el) => { if (el) el.indeterminate = isVendorPartiallySelected; }}
+                                  ref={(el) => {
+                                    if (el) el.indeterminate = isVendorPartiallySelected;
+                                  }}
                                   onClick={(e) => {
                                     setActivePreviewCluster(cluster);
                                     toggleClusterTxns(vGroup.txnIds, e);
@@ -523,7 +645,11 @@ export const ClusterListPanel: React.FC<Props> = ({
                                   onClick={(e) => toggleExpandVendor(vendorKey, e)}
                                   className="text-zinc-500 hover:text-zinc-300 p-0.5 cursor-pointer shrink-0"
                                 >
-                                  {isVendorOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                  {isVendorOpen ? (
+                                    <ChevronDown className="w-3 h-3" />
+                                  ) : (
+                                    <ChevronRight className="w-3 h-3" />
+                                  )}
                                 </button>
 
                                 <span className="text-[11px] font-bold text-zinc-200 truncate" title={vGroup.vendorName}>
@@ -535,7 +661,11 @@ export const ClusterListPanel: React.FC<Props> = ({
                                 <span className="text-[9px] text-zinc-400 bg-zinc-800 px-1.5 py-0.2 rounded font-bold">
                                   {vGroup.items.length} {vGroup.items.length === 1 ? 'item' : 'items'}
                                 </span>
-                                <span className={`text-[10px] font-bold tabular-nums ${isGroupOutflow ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                <span
+                                  className={`text-[10px] font-bold tabular-nums ${
+                                    isGroupOutflow ? 'text-rose-400' : 'text-emerald-400'
+                                  }`}
+                                >
                                   {isGroupOutflow ? '-' : '+'}₹{Math.abs(vGroup.totalAmount).toLocaleString('en-IN')}
                                 </span>
                               </div>
@@ -545,7 +675,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                             {isVendorOpen && (
                               <div className="pl-4 pt-1 flex flex-col gap-1.5">
                                 {vGroup.items.map((item, itemIdx) =>
-                                  renderTransactionCard(item, cluster, clusterIdx, vIdx, itemIdx)
+                                  renderTransactionCard(item, cluster, clusterIdx, vIdx, itemIdx, clusterKey)
                                 )}
                               </div>
                             )}

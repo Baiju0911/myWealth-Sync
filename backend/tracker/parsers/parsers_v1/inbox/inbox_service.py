@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import fitz  # PyMuPDF
 from django.utils import timezone
 from django.db import transaction
+from django.apps import apps
 
 from tracker.models import (
     Account,
@@ -16,10 +17,8 @@ from tracker.models import (
     StatementStagingLine,
     UserStatementTemplate,
 )
-from tracker.models.emailModels import RawEmailPayload
 from tracker.parsers.parsers_v1.orchestrator import process_bank_statement
 from tracker.parsers.parsers_v1.utils import validator
-from tracker.parsers.utils import generate_live_collision_hash  # SSOT Hash
 
 logger = logging.getLogger(__name__)
 
@@ -344,13 +343,62 @@ class InboxStatementService:
                     update_count += 1
 
                 elif action == "INSERT":
-                    raw_date = tx.get("raw_statement_date") or tx.get("post_date")
-                    parsed_date = (
-                        raw_date
-                        if isinstance(raw_date, timezone.datetime)
-                        or hasattr(raw_date, "strftime")
-                        else now_ts.date()
+                    # 🔍 DIAGNOSTIC LOG FOR ROW 0
+                    if len(create_pool) == 0:
+                        logger.warning(f"🔍 [DEBUG TX KEYS]: {list(tx.keys())}")
+                        logger.warning(
+                            f"🔍 [DEBUG RAW_DATE VALUES]: "
+                            f"raw_statement_date={repr(tx.get('raw_statement_date'))}, "
+                            f"post_date={repr(tx.get('post_date'))}, "
+                            f"date={repr(tx.get('date'))}, "
+                            f"value_date={repr(tx.get('value_date'))}"
+                        )
+
+                    # Exhaustive check across all potential strategy date keys
+                    raw_date = (
+                        tx.get("raw_statement_date")
+                        or tx.get("post_date")
+                        or tx.get("date")
+                        or tx.get("value_date")
+                        or tx.get("txn_date")
                     )
+
+                    parsed_date = None
+
+                    # 1. Date or Datetime objects
+                    if hasattr(raw_date, "date"):
+                        parsed_date = raw_date.date()
+                    elif isinstance(raw_date, timezone.datetime) or hasattr(
+                        raw_date, "strftime"
+                    ):
+                        parsed_date = raw_date
+
+                    # 2. String Dates with broad format parsing
+                    elif (
+                        isinstance(raw_date, str)
+                        and raw_date.strip()
+                        and raw_date.strip() != "-"
+                    ):
+                        clean_d = raw_date.strip().replace("/", "-")
+                        for fmt in (
+                            "%Y-%m-%d",
+                            "%d-%m-%Y",
+                            "%d-%m-%y",
+                            "%d-%b-%Y",
+                            "%d-%b-%y",
+                            "%d-%B-%Y",
+                        ):
+                            try:
+                                parsed_date = timezone.datetime.strptime(
+                                    clean_d, fmt
+                                ).date()
+                                break
+                            except (ValueError, TypeError):
+                                continue
+
+                    # 3. Fallback: Statement period start date before defaulting to today
+                    if not parsed_date:
+                        parsed_date = inbox_item.period_start or now_ts.date()
 
                     debit_val = (
                         Decimal(str(tx.get("debit")))
@@ -400,6 +448,110 @@ class InboxStatementService:
             "registry_id": str(registry.id),
             "inserted_lines": len(create_pool),
             "updated_lines": update_count,
+        }
+
+
+class BatchRevokeService:
+    @classmethod
+    @transaction.atomic
+    def revoke_inbox_registry(cls, registry_id: str) -> Dict[str, Any]:
+        """
+        One-click atomic rollback:
+        Unwinds an entire committed statement batch by StatementIngestRegistry ID,
+        safely purging WIP matrix items, subledger mappings, journal entries,
+        and resetting the DocumentInboxItem status back to 'INBOX'.
+        """
+        registry = StatementIngestRegistry.objects.filter(id=registry_id).first()
+        if not registry:
+            raise ValueError(f"StatementIngestRegistry '{registry_id}' not found.")
+
+        # Dynamically load related models with resilient app fallbacks
+        def resolve_model(model_name: str):
+            for app_label in ("ledger", "tracker"):
+                try:
+                    return apps.get_model(app_label, model_name)
+                except LookupError:
+                    continue
+            return None
+
+        JournalEntry = resolve_model("JournalEntry")
+        AssetTransactionMapping = resolve_model("AssetTransactionMapping")
+        WipEvaluationMatrix = resolve_model("WipEvaluationMatrix")
+
+        # 1. Fetch related staging IDs and row identifiers
+        staging_lines = StatementStagingLine.objects.filter(ingest_registry=registry)
+        staging_ids = list(staging_lines.values_list("id", flat=True))
+        row_ids = [
+            str(r).strip()
+            for r in staging_lines.values_list("row_identifier", flat=True)
+            if r
+        ]
+
+        counts = {
+            "staging_deleted": len(staging_ids),
+            "wip_deleted": 0,
+            "journal_entries_deleted": 0,
+            "subledger_mappings_deleted": 0,
+        }
+
+        # 2. Delete WIP evaluation records (Linked via staging_line_id)
+        if staging_ids and WipEvaluationMatrix:
+            try:
+                deleted = WipEvaluationMatrix.objects.filter(
+                    staging_line_id__in=staging_ids
+                ).delete()
+                counts["wip_deleted"] = deleted[0] if deleted else 0
+            except Exception as e:
+                logger.warning(f"Error purging WipEvaluationMatrix: {e}")
+
+        # 3. Delete Subledger Mappings (Linked via row_identifier)
+        if row_ids and AssetTransactionMapping:
+            try:
+                deleted = AssetTransactionMapping.objects.filter(
+                    row_identifier__in=row_ids
+                ).delete()
+                counts["subledger_mappings_deleted"] = deleted[0] if deleted else 0
+            except Exception as e:
+                logger.warning(f"Error purging AssetTransactionMapping: {e}")
+
+        # 4. Delete Journal Entries (Linked via row_identifier)
+        if row_ids and JournalEntry:
+            try:
+                deleted = JournalEntry.objects.filter(
+                    row_identifier__in=row_ids
+                ).delete()
+                counts["journal_entries_deleted"] = deleted[0] if deleted else 0
+            except Exception as e:
+                logger.warning(f"Error purging JournalEntry: {e}")
+
+        # 5. Delete Statement Staging Lines
+        staging_lines.delete()
+
+        # 6. Reset DocumentInboxItem status back to 'INBOX'
+        clean_file_basename = os.path.basename(str(registry.file_name or "")).strip()
+        inbox_item = DocumentInboxItem.objects.filter(
+            filename__iexact=clean_file_basename
+        ).first()
+
+        if not inbox_item and registry.file_name:
+            inbox_item = DocumentInboxItem.objects.filter(
+                filename__icontains=clean_file_basename
+            ).first()
+
+        if inbox_item:
+            inbox_item.status = "INBOX"
+            inbox_item.updated_at = timezone.now()
+            inbox_item.save(update_fields=["status", "updated_at"])
+
+        # 7. Delete the registry record itself
+        registry.delete()
+
+        logger.info(f"✅ Revoked batch {registry_id} ({clean_file_basename}): {counts}")
+
+        return {
+            "status": "SUCCESS",
+            "message": f"Successfully revoked registry batch '{registry_id}'",
+            "details": counts,
         }
 
 

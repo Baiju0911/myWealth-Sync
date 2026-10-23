@@ -566,19 +566,47 @@ export interface ClusterLineItemsResponse {
   items: any[];
 }
 
+// export const getClusterLineItems = async (
+//   entryIds: string[]
+// ): Promise<any[]> => {
+//   if (!entryIds || entryIds.length === 0) return [];
+//   try {
+//     const response = await api.post<ClusterLineItemsResponse>(
+//       '/classification/get_cluster_line_items/',
+//       { entry_ids: entryIds }
+//     );
+//     return response.data?.status === 'success' ? response.data.items || [] : [];
+//   } catch (err) {
+//     console.error('Failed to fetch cluster line items:', err);
+//     return [];
+//   }
+// };
+
 export const getClusterLineItems = async (
   entryIds: string[]
 ): Promise<any[]> => {
   if (!entryIds || entryIds.length === 0) return [];
   try {
+    // Uses the primary workbench route
     const response = await api.post<ClusterLineItemsResponse>(
-      '/classification/get_cluster_line_items/',
+      '/classification/workbench/cluster-items/',
       { entry_ids: entryIds }
     );
     return response.data?.status === 'success' ? response.data.items || [] : [];
   } catch (err) {
-    console.error('Failed to fetch cluster line items:', err);
-    return [];
+    // Fallback to compat route if needed
+    try {
+      const fallbackRes = await api.post<ClusterLineItemsResponse>(
+        '/classification/get_cluster_line_items/',
+        { entry_ids: entryIds }
+      );
+      return fallbackRes.data?.status === 'success'
+        ? fallbackRes.data.items || []
+        : [];
+    } catch (e) {
+      console.error('Failed to fetch cluster line items:', e);
+      return [];
+    }
   }
 };
 

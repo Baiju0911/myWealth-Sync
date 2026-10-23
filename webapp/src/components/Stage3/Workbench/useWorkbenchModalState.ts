@@ -71,6 +71,13 @@ export function useWorkbenchModalState({
   const lastExecutedSearchRef = useRef<string>('');
   const isFirstMountRef = useRef<boolean>(true);
 
+  const [lastAppliedMapping, setLastAppliedMapping] = useState<{
+    txnIds: string[];
+    asset_id?: string | number;
+    asset_code?: string;
+    asset_name?: string;
+  } | null>(null);
+
   const loadClusters = useCallback(
     async (
       subcategoryName: string,
@@ -253,6 +260,7 @@ export function useWorkbenchModalState({
     () => clusters.flatMap((c) => c.transaction_ids || []),
     [clusters]
   );
+
   const selectedSummary = useMemo(
     () => calculateSelectedMetrics(clusters, selectedTxnIds),
     [clusters, selectedTxnIds]
@@ -339,6 +347,68 @@ export function useWorkbenchModalState({
     }
   };
 
+  // const handleFinalReclassificationSubmit = async (
+  //   chosenPatterns: string[]
+  // ) => {
+  //   if (selectedSummary.allTxnIds.length === 0) return;
+  //   setSubmitting(true);
+
+  //   try {
+  //     const data = await applyReclassification({
+  //       transaction_ids: selectedSummary.allTxnIds,
+  //       target_category: selectedCategory,
+  //       target_subcategory: selectedSubcategory,
+  //       patterns: chosenPatterns,
+  //       save_rule: saveRule && chosenPatterns.length > 0,
+  //       entry_type: vectorType,
+  //       upi_strategy: vectorType === 'Debit' ? upiStrategy : 'vendor',
+  //       subledger_asset_id: selectedSubledgerFolioId || undefined,
+  //     } as any);
+
+  //     // If user selected a folio, bind transactions directly to it
+  //     if (data?.status === 'success' && selectedSubledgerFolioId) {
+  //       try {
+  //         const selectedItems = clusters
+  //           .flatMap((c) => (c as any).items || (c as any).transactions || [])
+  //           .filter((item) =>
+  //             selectedSummary.allTxnIds.includes(
+  //               String(item.id || item.row_identifier)
+  //             )
+  //           );
+
+  //         for (const item of selectedItems) {
+  //           await subledgerApi.bindTransaction({
+  //             asset_id: selectedSubledgerFolioId,
+  //             row_identifier: item.row_identifier || item.id,
+  //             transaction_date:
+  //               item.transaction_date ||
+  //               item.date ||
+  //               new Date().toISOString().split('T')[0],
+  //             amount: Number(item.debit || item.credit || item.amount || 0),
+  //             transaction_purpose: 'OPERATING_SPEND',
+  //             user_note: `Classified & Bound via Workbench (${selectedSubcategory})`,
+  //           });
+  //         }
+  //         clearSubledgerBreakdownCache(selectedSubcategory);
+  //       } catch (bindErr) {
+  //         console.error('Folio direct auto-binding failed:', bindErr);
+  //       }
+  //     }
+
+  //     if (data?.status === 'success') {
+  //       setIsPatternModalOpen(false);
+  //       setSelectedTxnIds([]);
+  //       setSelectedSubledgerFolioId('');
+  //       await loadClusters(targetSubcategory, accountId, searchQuery);
+  //       onSuccess();
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to apply reclassification:', err);
+  //   } finally {
+  //     setSubmitting(false);
+  //   }
+  // };
+
   const handleFinalReclassificationSubmit = async (
     chosenPatterns: string[]
   ) => {
@@ -346,31 +416,45 @@ export function useWorkbenchModalState({
     setSubmitting(true);
 
     try {
+      const appliedTxnIds = [...selectedSummary.allTxnIds];
+      const folioIdToBind = selectedSubledgerFolioId;
+
       const data = await applyReclassification({
-        transaction_ids: selectedSummary.allTxnIds,
+        transaction_ids: appliedTxnIds,
         target_category: selectedCategory,
         target_subcategory: selectedSubcategory,
         patterns: chosenPatterns,
         save_rule: saveRule && chosenPatterns.length > 0,
         entry_type: vectorType,
         upi_strategy: vectorType === 'Debit' ? upiStrategy : 'vendor',
-        subledger_asset_id: selectedSubledgerFolioId || undefined,
+        subledger_asset_id: folioIdToBind || undefined,
       } as any);
 
-      // If user selected a folio, bind transactions directly to it
-      if (data?.status === 'success' && selectedSubledgerFolioId) {
+      let boundAssetMeta: {
+        id?: string;
+        asset_code?: string;
+        name?: string;
+      } | null = null;
+
+      if (data?.status === 'success' && folioIdToBind) {
         try {
           const selectedItems = clusters
             .flatMap((c) => (c as any).items || (c as any).transactions || [])
             .filter((item) =>
-              selectedSummary.allTxnIds.includes(
-                String(item.id || item.row_identifier)
-              )
+              appliedTxnIds.includes(String(item.id || item.row_identifier))
             );
+
+          // Fetch asset info for immediate optimistic badge display
+          try {
+            const assetObj = await subledgerApi.getAssetById(folioIdToBind);
+            boundAssetMeta = assetObj;
+          } catch {
+            boundAssetMeta = { id: folioIdToBind, asset_code: 'FLT' };
+          }
 
           for (const item of selectedItems) {
             await subledgerApi.bindTransaction({
-              asset_id: selectedSubledgerFolioId,
+              asset_id: folioIdToBind,
               row_identifier: item.row_identifier || item.id,
               transaction_date:
                 item.transaction_date ||
@@ -391,7 +475,20 @@ export function useWorkbenchModalState({
         setIsPatternModalOpen(false);
         setSelectedTxnIds([]);
         setSelectedSubledgerFolioId('');
-        await loadClusters(targetSubcategory, accountId, searchQuery);
+
+        // 🎯 Dispatch in-place update so the row stays and turns green!
+        if (boundAssetMeta) {
+          setLastAppliedMapping({
+            txnIds: appliedTxnIds,
+            asset_id: boundAssetMeta.id,
+            asset_code: boundAssetMeta.asset_code,
+            asset_name: boundAssetMeta.name,
+          });
+        } else {
+          // Only reload if we didn't map in-place
+          await loadClusters(targetSubcategory, accountId, searchQuery);
+        }
+
         onSuccess();
       }
     } catch (err) {
@@ -428,6 +525,7 @@ export function useWorkbenchModalState({
       savingNewTaxonomy,
       isFolioModalOpen,
       pendingTargetSubcategory,
+      lastAppliedMapping,
     },
     actions: {
       setSearchQuery,
