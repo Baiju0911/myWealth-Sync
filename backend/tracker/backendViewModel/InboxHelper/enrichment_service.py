@@ -229,7 +229,7 @@ class LiveStreamEnrichmentService:
         if lines_to_update:
             StatementStagingLine.objects.bulk_update(
                 lines_to_update,
-                ["is_enriched_from_live", "live_upi_rrn", "live_metadata"],
+                ["is_enriched_from_live", "live_upi_rrn", "live_metadata", "narration"],
                 batch_size=MatchingRules.BULK_UPDATE_BATCH_SIZE,
             )
 
@@ -461,6 +461,16 @@ class LiveStreamEnrichmentService:
         synthesized_narration = (
             f"{final_merchant} ({remark})" if remark else final_merchant
         )
+
+        # 🎯 FIX: Replace boilerplate greeting in statement line narration with clean entity
+        current_narr = target_line.narration or ""
+        if (
+            "Dear Customer" in current_narr
+            or current_narr.strip().lower().startswith("alert:")
+            or not current_narr.strip()
+        ):
+            if synthesized_narration:
+                target_line.narration = synthesized_narration
 
         current_meta.update(
             {

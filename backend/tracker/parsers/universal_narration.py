@@ -5,45 +5,141 @@ from typing import Any, Dict, Optional
 class UniversalNarrationExtractor:
     """
     100% additive narration engine.
-    Retains the exact bank statement narration untouched while layering
-    full protocol decomposition and live alert stream telemetry.
+    Retains the authentic bank statement narration while layering
+    protocol decomposition, noise classification, and live alert stream telemetry.
     """
 
-    RRN_PATTERN = re.compile(r"^(?:RRN|REF|UTR)?\s*[:.-]?\s*(\d{8,18})$", re.IGNORECASE)
-    BANK_CODE_PATTERN = re.compile(r"^[A-Z]{3,5}$")
+    RRN_PATTERN = re.compile(
+        r"^(?:RRN|REF|UTR)?\s*[:.-]?\s*([A-Z0-9]{8,22})$", re.IGNORECASE
+    )
+    BANK_CODE_PATTERN = re.compile(r"^[A-Z]{3,6}$")
+
+    # Generic patterns for document deliveries, legal notices, and password instructions
+    STATEMENT_NOTICE_PATTERN = re.compile(
+        r"(?:e-?statement|monthly\s+statement|account\s+statement|password-protected|"
+        r"to\s+view\s+your\s+statement|password\s+to\s+view|salutations\s+to\s+be\s+used)",
+        re.IGNORECASE,
+    )
+
+    # Generic salutation and header boilerplate
+    BOILERPLATE_PATTERN = re.compile(
+        r"^(?:Dear\s+(?:Customer|Cardholder|User|Valued\s+Customer|Sir|Madam)|Greetings|Notice)[,\s:-]*",
+        re.IGNORECASE,
+    )
+
+    # Delimiter indicating start of actual financial transaction payload
+    INFO_PREFIX_PATTERN = re.compile(
+        r"^.*?(?:Info|Txn\s*Info|Details)(?:\s*:\s*|\s*-\s*)",
+        re.IGNORECASE,
+    )
+
+    # Core NEFT / RTGS Wire Pattern:
+    # Captures: NEFT UTR: <REF>//<SENDER_BANK>/NEFT TO:<REF>:<BENEFICIARY>/<BRANCH>
+    NEFT_COMPLEX_PATTERN = re.compile(
+        r"(?:NEFT|RTGS)\s*(?:UTR\s*:\s*)?([A-Z0-9\s]+?)\s*//\s*(.*?)\s*/(?:NEFT|RTGS)\s*TO\s*:\s*(?:[^:]+:)?([^/]+)(?:/(.*))?$",
+        re.IGNORECASE,
+    )
+
+    # Simpler NEFT Pattern:
+    # NEFT/<REF>/<BENEFICIARY>/... or NEFT-<REF>-<BENEFICIARY>
+    NEFT_SIMPLE_PATTERN = re.compile(
+        r"(?:NEFT|RTGS)[/-](?:UTR[:\s]*)?([A-Z0-9]+)[/-](?:TO[:\s]*)?([^/]+)(?:/(.*))?$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def is_statement_or_notice(cls, text: str) -> bool:
+        """Detects whether content is a statement delivery/advice rather than a real-time txn."""
+        if not text:
+            return False
+        return bool(cls.STATEMENT_NOTICE_PATTERN.search(text))
+
+    @classmethod
+    def clean_boilerplate_header(cls, text: str) -> str:
+        """Strips institutional salutations and extracts payload starting at standard info delimiters."""
+        if not text:
+            return ""
+
+        cleaned = text.strip()
+
+        # If info boundary exists, extract everything subsequent
+        if cls.INFO_PREFIX_PATTERN.search(cleaned):
+            cleaned = cls.INFO_PREFIX_PATTERN.sub("", cleaned).strip()
+        elif cls.BOILERPLATE_PATTERN.match(cleaned):
+            cleaned = cls.BOILERPLATE_PATTERN.sub("", cleaned).strip()
+
+        return cleaned
 
     @classmethod
     def resolve_from_staging_line(cls, line: Any) -> Dict[str, Any]:
         """
-        Takes a StatementStagingLine and returns the authentic bank statement
-        narration verbatim, enriched with decomposed segments and live stream data.
+        Takes a StatementStagingLine and returns authentic bank data enriched
+        with protocol decomposition, noise classification, and telemetry.
         """
-        # 1. Authentic Statement String (Zero Modification)
+        # 1. Authentic Statement String
         raw_statement_narration = getattr(line, "narration", "") or ""
-
-        # 2. Decompose Raw Statement Segments (Additive Only)
-        parsed_tokens = cls.decompose_raw_narration(raw_statement_narration)
-
-        # 3. Pull Live Alert Enrichment Telemetry from live_metadata
+        print(f"🔥 [UniversalNarration] RESOLVING LINE: {raw_statement_narration[:60]}")
+        # 2. Pull Live Alert Enrichment Telemetry from live_metadata
         meta = getattr(line, "live_metadata", None)
         if not isinstance(meta, dict):
             meta = {}
 
         live_merchant = meta.get("merchant") or meta.get("clean_merchant")
         live_remark = meta.get("remark") or meta.get("clean_remark")
+        resolved_narration = meta.get("resolved_narration")
+
+        # 3. Noise / Statement Delivery Detection
+        combined_text = f"{raw_statement_narration} {resolved_narration or ''}".strip()
+        is_statement_notice = cls.is_statement_or_notice(combined_text)
+
+        # 4. Normalize Narration for Token Parsing
+        clean_target_text = raw_statement_narration
+        if cls.BOILERPLATE_PATTERN.search(clean_target_text):
+            if resolved_narration and not cls.BOILERPLATE_PATTERN.search(
+                resolved_narration
+            ):
+                clean_target_text = resolved_narration
+            else:
+                clean_target_text = cls.clean_boilerplate_header(clean_target_text)
+
+        parsed_tokens = cls.decompose_raw_narration(clean_target_text)
+
         live_rrn = getattr(line, "live_upi_rrn", None) or meta.get("live_upi_rrn")
         live_source = meta.get("source")
         matched_tier = meta.get("matched_tier")
         has_amount_discrepancy = meta.get("has_amount_discrepancy", False)
         discrepancy_details = meta.get("discrepancy_details")
 
-        # 4. Check Cheque Reference Fallback
+        # 5. Check Cheque Reference Fallback
         cheque_ref = getattr(line, "cheque_ref_number", None)
         if cheque_ref and not parsed_tokens["reference"]:
             parsed_tokens["reference"] = str(cheque_ref).strip()
 
+        # 6. Resolve Suggestion Hierarchy
+        raw_payee = parsed_tokens["raw_payee"]
+        clean_raw_payee = (
+            raw_payee
+            if raw_payee and not cls.BOILERPLATE_PATTERN.search(raw_payee)
+            else None
+        )
+
+        suggested_payee = (
+            None
+            if is_statement_notice
+            else (
+                live_merchant
+                or clean_raw_payee
+                or resolved_narration
+                or raw_statement_narration
+            )
+        )
+
+        # Final cleanup pass on suggested_payee to ensure no leftover protocol artifacts
+        if suggested_payee:
+            suggested_payee = cls.clean_boilerplate_header(suggested_payee)
+
         return {
-            # === AUTHENTIC BANK DATA (UNTOUCHED) ===
+            # === AUTHENTIC BANK DATA ===
             "raw_statement_narration": raw_statement_narration,
             "statement_amount": (
                 float(line.amount) if getattr(line, "amount", None) is not None else 0.0
@@ -51,9 +147,12 @@ class UniversalNarrationExtractor:
             "raw_segments": parsed_tokens["raw_segments"],
             "detected_rail": parsed_tokens["rail"],
             "detected_bank_code": parsed_tokens["bank_code"],
-            "detected_reference": parsed_tokens["reference"],
+            "detected_reference": parsed_tokens["reference"] or live_rrn,
             "statement_payee_raw": parsed_tokens["raw_payee"],
             "statement_remark_raw": parsed_tokens["raw_remark"],
+            # === NOISE CLASSIFICATION ===
+            "is_noise": is_statement_notice,
+            "is_document_delivery": is_statement_notice,
             # === LIVE STREAM ENRICHMENT TELEMETRY ===
             "is_enriched_from_live": bool(getattr(line, "is_enriched_from_live", 0)),
             "live_source": live_source,
@@ -63,18 +162,17 @@ class UniversalNarrationExtractor:
             "matched_tier": matched_tier,
             "has_amount_discrepancy": has_amount_discrepancy,
             "discrepancy_details": discrepancy_details,
-            # === UNIFIED SUGGESTIONS (FOR DESK & RULES) ===
-            "suggested_payee": live_merchant
-            or parsed_tokens["raw_payee"]
-            or raw_statement_narration,
+            # === UNIFIED SUGGESTIONS ===
+            "suggested_payee": suggested_payee,
             "suggested_remark": live_remark or parsed_tokens["raw_remark"],
         }
 
     @classmethod
     def decompose_raw_narration(cls, text: str) -> Dict[str, Any]:
         """
-        Splits slash or MOB protocols without dropping or modifying tokens.
+        Splits slash, MOB, NEFT, and wire protocols cleanly without losing raw tokens.
         """
+        print(f"🔍 [UniversalNarration] DECOMPOSING: {text[:60]}")
         if not text:
             return {
                 "rail": "UNKNOWN",
@@ -86,11 +184,60 @@ class UniversalNarrationExtractor:
             }
 
         rail = cls._detect_rail(text)
+        clean_text = text.strip()
 
-        # Handle MOB / Bill Payment pattern: MOB/<REF>/Bill Payment/<PAYEE>
+        # -------------------------------------------------------------
+        # 1. NEFT / RTGS Wire Complex Protocol:
+        # e.g.: NEFT UTR: SIBLN19337311 445//STATE BANK OF INDI A/NEFT TO:SIBLN19337311 445:MONU PAYHOUSE/KALLA MBALAM
+        # -------------------------------------------------------------
+        neft_complex_m = cls.NEFT_COMPLEX_PATTERN.search(clean_text)
+        if neft_complex_m:
+            ref = re.sub(r"\s+", "", neft_complex_m.group(1))
+            bank_info = neft_complex_m.group(2).strip()
+            payee = neft_complex_m.group(3).strip()
+            branch = (
+                neft_complex_m.group(4).strip() if neft_complex_m.group(4) else None
+            )
+
+            # Strip trailing branch notes like "/KALLAMBALAM STATE BANK" if merged into payee
+            payee = re.sub(
+                r"/(?:KALLAMBALAM|BRANCH|STATE BANK).*", "", payee, flags=re.IGNORECASE
+            ).strip()
+
+            return {
+                "rail": "NEFT",
+                "bank_code": None,
+                "reference": ref,
+                "raw_payee": payee,
+                "raw_remark": f"{bank_info} ({branch})" if branch else bank_info,
+                "raw_segments": [ref, bank_info, payee],
+            }
+
+        # -------------------------------------------------------------
+        # 2. NEFT / RTGS Simple Pattern:
+        # e.g.: NEFT/AXISCN00234123/JOHN DOE/RENT
+        # -------------------------------------------------------------
+        neft_simple_m = cls.NEFT_SIMPLE_PATTERN.search(clean_text)
+        if neft_simple_m:
+            ref = neft_simple_m.group(1).strip()
+            payee = neft_simple_m.group(2).strip()
+            remark = neft_simple_m.group(3).strip() if neft_simple_m.group(3) else None
+            return {
+                "rail": "NEFT",
+                "bank_code": None,
+                "reference": ref,
+                "raw_payee": payee,
+                "raw_remark": remark,
+                "raw_segments": [ref, payee],
+            }
+
+        # -------------------------------------------------------------
+        # 3. Handle MOB / Bill Payment pattern:
+        # e.g.: MOB/<REF>/Bill Payment/<PAYEE>
+        # -------------------------------------------------------------
         mob_match = re.search(
             r"MOB/(?:(\d{6,18})/)?(?:Bill\s*Payment/)?([^/]+)(?:/(.*))?$",
-            text,
+            clean_text,
             re.IGNORECASE,
         )
         if mob_match:
@@ -106,16 +253,19 @@ class UniversalNarrationExtractor:
                 "raw_segments": [s for s in [ref, p1, p2] if s],
             }
 
-        # Slash-delimited protocols (UPI, IMPS, NEFT)
-        segments = [s.strip() for s in text.split("/") if s.strip()]
+        # -------------------------------------------------------------
+        # 4. Standard Slash Protocols (UPI, IMPS, Generic Slashes)
+        # e.g.: UPI/PYTM/402805967436/MR CHINNADURAI/NO REMARKS/...
+        # -------------------------------------------------------------
+        raw_segments = [s.strip() for s in clean_text.split("/") if s.strip()]
         bank_code = None
         reference = None
         raw_payee = None
         raw_remark = None
 
-        if len(segments) >= 2:
+        if len(raw_segments) >= 2:
             remaining = []
-            for seg in segments[1:]:
+            for seg in raw_segments[1:]:
                 rrn_m = cls.RRN_PATTERN.match(seg)
                 if rrn_m and not reference:
                     reference = rrn_m.group(1)
@@ -132,11 +282,14 @@ class UniversalNarrationExtractor:
                 remaining.append(seg)
 
             if len(remaining) >= 1:
+                # The first non-bank, non-RRN token is the merchant/payee
                 raw_payee = remaining[0]
             if len(remaining) >= 2:
-                raw_remark = " / ".join(remaining[1:])
+                # Discard generic 'NO REMARKS' filler from remarks
+                remarks_tokens = [r for r in remaining[1:] if r.upper() != "NO REMARKS"]
+                raw_remark = " / ".join(remarks_tokens) if remarks_tokens else None
         else:
-            raw_payee = text
+            raw_payee = clean_text
 
         return {
             "rail": rail,
@@ -144,7 +297,7 @@ class UniversalNarrationExtractor:
             "reference": reference,
             "raw_payee": raw_payee,
             "raw_remark": raw_remark,
-            "raw_segments": segments,
+            "raw_segments": raw_segments,
         }
 
     @staticmethod

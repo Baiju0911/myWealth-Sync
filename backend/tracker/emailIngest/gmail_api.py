@@ -6,6 +6,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from tracker.constants import DocumentInboxConstants
 
 from tracker.emailIngest.parser import clean_html_to_text, parse_bank_email_body
 from tracker.emailIngest.services import (
@@ -347,10 +348,151 @@ def get_gmail_service():
 #     }
 
 
+# def _convert_msg_to_preview(msg, RawEmailPayload_model):
+#     """
+#     Parses a single Gmail message into a lightweight preview object.
+#     Preserves raw body text for high-accuracy regex matching without truncating tokens.
+#     """
+#     msg_id = msg.get("id")
+#     payload = msg.get("payload", {})
+#     headers_dict = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
+
+#     raw_b64 = extract_email_body(payload)
+#     raw_body_html = ""
+#     if raw_b64:
+#         try:
+#             padded_b64 = raw_b64 + "=" * (-len(raw_b64) % 4)
+#             raw_body_html = base64.urlsafe_b64decode(padded_b64).decode(
+#                 "utf-8", errors="ignore"
+#             )
+#         except Exception as e:
+#             print(f"⚠️ Base64 decode error for msg {msg_id}: {e}")
+
+#     email_from = headers_dict.get("from") or "SIB Alerts <alerts@sib.co.in>"
+#     sender = headers_dict.get("sender") or email_from
+#     subject = headers_dict.get("subject") or "Debit/Credit Alert From SIB"
+#     raw_email_date = headers_dict.get("date") or ""
+#     parsed_email_date = safe_parse_datetime(raw_email_date)
+
+#     # Pass the decoded content directly to the parser
+#     parsed_data = parse_bank_email_body(raw_body_html, sender=email_from)
+
+#     raw_amount = parsed_data.get("amount")
+#     raw_balance = parsed_data.get("balance")
+
+#     try:
+#         parsed_amount_val = float(raw_amount) if raw_amount is not None else 0.0
+#     except (ValueError, TypeError):
+#         parsed_amount_val = 0.0
+
+#     try:
+#         parsed_balance_val = float(raw_balance) if raw_balance is not None else 0.0
+#     except (ValueError, TypeError):
+#         parsed_balance_val = 0.0
+
+#     # Only drop if the email is genuine noise (e.g. AMB notice, OTPs) or completely empty
+#     if parsed_data.get("is_noise"):
+#         return None
+
+#     txn_fingerprint = parsed_data.get(
+#         "txn_fingerprint"
+#     ) or generate_transaction_fingerprint(parsed_data)
+#     parsed_data["txn_fingerprint"] = txn_fingerprint
+#     parsed_data["source"] = "GMAIL_API"
+
+#     raw_bank = parsed_data.get("bank_name") or "SOUTH INDIAN BANK"
+#     account_last4 = parsed_data.get("account_last4")
+#     amount = f"{parsed_amount_val:.2f}" if parsed_amount_val > 0 else None
+#     upi_ref = parsed_data.get("upi_ref")
+#     date_str = (
+#         parsed_email_date.strftime("%Y-%m-%d %H:%M:%S")
+#         if parsed_email_date
+#         else "NO_DATE"
+#     )
+
+#     clean_snippet = clean_html_to_text(raw_body_html)
+
+#     hash_components = [
+#         str(raw_bank),
+#         str(account_last4 or "UNKNOWN_ACC"),
+#         str(amount or "0.00"),
+#         str(date_str),
+#         str(upi_ref or txn_fingerprint),
+#         str(clean_snippet)[:300],
+#     ]
+#     payload_hash = generate_payload_hash("_".join(hash_components))
+
+#     # Fast duplicate check against DB
+#     is_duplicate = False
+#     if RawEmailPayload_model.objects.filter(headers_json__message_id=msg_id).exists():
+#         is_duplicate = True
+#     elif (
+#         upi_ref
+#         and amount
+#         and RawEmailPayload_model.objects.filter(
+#             upi_ref=upi_ref, amount=amount
+#         ).exists()
+#     ):
+#         is_duplicate = True
+
+#     parsed_data["is_duplicate"] = is_duplicate
+
+#     return {
+#         "id": msg_id,
+#         "source": "GMAIL_API",
+#         "status": "DUPLICATE" if is_duplicate else "PREVIEW_ONLY",
+#         "committed": is_duplicate,
+#         "is_duplicate": is_duplicate,
+#         "parsed_transaction": parsed_data,
+#         "payload_hash": payload_hash,
+#         "raw_payload": {
+#             "source": "GMAIL_API",
+#             "sender": sender,
+#             "email_from": email_from,
+#             "email_date": date_str,
+#             "subject": subject,
+#             "decrypted_body": clean_snippet[:1000],
+#             "headers_json": {
+#                 "message_id": msg_id,
+#                 "parsed_summary": {
+#                     "bank": parsed_data.get("bank_name"),
+#                     "account": parsed_data.get("account_last4"),
+#                     "amount": amount,
+#                     "balance": (
+#                         f"{parsed_balance_val:.2f}"
+#                         if parsed_balance_val > 0.0
+#                         else None
+#                     ),
+#                     "upi_ref": upi_ref,
+#                     "full_narration": parsed_data.get("full_narration"),
+#                 },
+#             },
+#         },
+#     }
+
+
+def has_pdf_attachment(payload: dict) -> bool:
+    """Detects if an email carries a PDF statement attachment."""
+    if not payload or not isinstance(payload, dict):
+        return False
+
+    parts = payload.get("parts", [])
+    for part in parts:
+        mime = part.get("mimeType", "").lower()
+        filename = part.get("filename", "").lower()
+        if "pdf" in mime or filename.endswith(".pdf"):
+            return True
+        if "parts" in part:
+            if has_pdf_attachment(part):
+                return True
+    return False
+
+
 def _convert_msg_to_preview(msg, RawEmailPayload_model):
     """
     Parses a single Gmail message into a lightweight preview object.
-    Preserves raw body text for high-accuracy regex matching without truncating tokens.
+    Preserves raw body text for regex matching without truncating tokens.
+    Drops statement notices and zero-value alerts.
     """
     msg_id = msg.get("id")
     payload = msg.get("payload", {})
@@ -367,13 +509,22 @@ def _convert_msg_to_preview(msg, RawEmailPayload_model):
         except Exception as e:
             print(f"⚠️ Base64 decode error for msg {msg_id}: {e}")
 
-    email_from = headers_dict.get("from") or "SIB Alerts <alerts@sib.co.in>"
+    email_from = headers_dict.get("from") or "SIB Alerts <alerts@sib.bank.in>"
     sender = headers_dict.get("sender") or email_from
-    subject = headers_dict.get("subject") or "Debit/Credit Alert From SIB"
+    subject = headers_dict.get("subject") or "Debit/Credit Alert"
     raw_email_date = headers_dict.get("date") or ""
     parsed_email_date = safe_parse_datetime(raw_email_date)
 
-    # Pass the decoded content directly to the parser
+    clean_snippet = clean_html_to_text(raw_body_html) if raw_body_html else ""
+
+    # ------------------------------------------------------------------
+    # 🎯 1. REJECT STATEMENT DELIVERIES / PASSWORD NOTICES
+    # ------------------------------------------------------------------
+    content_to_scan = f"{subject} {clean_snippet}"
+    if DocumentInboxConstants.STATEMENT_NOTICE_PATTERN.search(content_to_scan):
+        return None
+
+    # Pass decoded content to the transaction parser
     parsed_data = parse_bank_email_body(raw_body_html, sender=email_from)
 
     raw_amount = parsed_data.get("amount")
@@ -389,10 +540,17 @@ def _convert_msg_to_preview(msg, RawEmailPayload_model):
     except (ValueError, TypeError):
         parsed_balance_val = 0.0
 
-    # Only drop if the email is genuine noise (e.g. AMB notice, OTPs) or completely empty
+    # ------------------------------------------------------------------
+    # 🎯 2. REJECT ZERO-VALUE NON-FINANCIAL / NOISE EMAILS
+    # ------------------------------------------------------------------
     if parsed_data.get("is_noise"):
         return None
 
+    # A real alert must have a debit/credit amount or a non-zero balance
+    if parsed_amount_val <= 0.0 and parsed_balance_val <= 0.0:
+        return None
+
+    # ------------------------------------------------------------------
     txn_fingerprint = parsed_data.get(
         "txn_fingerprint"
     ) or generate_transaction_fingerprint(parsed_data)
@@ -408,8 +566,6 @@ def _convert_msg_to_preview(msg, RawEmailPayload_model):
         if parsed_email_date
         else "NO_DATE"
     )
-
-    clean_snippet = clean_html_to_text(raw_body_html)
 
     hash_components = [
         str(raw_bank),

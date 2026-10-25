@@ -188,6 +188,20 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
             or "SOUTH INDIAN BANK"
         )
 
+        clean_full_narration = parsed.get("full_narration")
+        if not clean_full_narration or clean_full_narration.strip().startswith(
+            "Dear Customer"
+        ):
+            # Check if harvested payee or remark exists
+            if harvested.get("payee_hint"):
+                clean_full_narration = (
+                    f"{harvested.get('payee_hint')} ({harvested.get('remark_hint')})"
+                    if harvested.get("remark_hint")
+                    else harvested.get("payee_hint")
+                )
+            else:
+                clean_full_narration = body_content
+
         return {
             "id": str(record.id),
             "source": record.source or headers.get("source", default_source),
@@ -196,7 +210,8 @@ class LiveStreamPayloadSerializer(serializers.Serializer):
             or "SMS Gateway",
             "subject": record.subject or "NO_SUBJECT",
             "raw_body": body_content,
-            "full_narration": body_content
+            "full_narration": clean_full_narration
+            or "No raw body preserved."
             or parsed.get("full_narration")
             or "No raw body preserved.",
             "amount": (

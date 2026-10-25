@@ -196,6 +196,58 @@ class AccountingRuleAdminSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+# class StatementStagingLineSerializer(serializers.ModelSerializer):
+#     """
+#     Authoritative serializer for StatementStagingLine across:
+#     - Stage 1: Enriched Audit Matrix & Staged Modals
+#     - Stage 2: WIP Auto-Clearance Validation Desk
+#     - Stage 3: Categorization & Sweeper Workbenches
+#     """
+
+#     parsed_narration = serializers.SerializerMethodField()
+#     display_payee = serializers.SerializerMethodField()
+#     display_remark = serializers.SerializerMethodField()
+#     detected_rail = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = StatementStagingLine
+#         fields = [
+#             "id",
+#             "account_id",
+#             "bank_id",
+#             "raw_statement_date",
+#             "narration",
+#             "cheque_ref_number",
+#             "amount",
+#             "running_balance",
+#             "debit",
+#             "credit",
+#             "bank_transaction_id",
+#             "transaction_type",
+#             "routing_status",
+#             "is_enriched_from_live",
+#             "live_upi_rrn",
+#             "live_metadata",
+#             # Standardized universal narration package
+#             "parsed_narration",
+#             "display_payee",
+#             "display_remark",
+#             "detected_rail",
+#         ]
+
+#     def get_parsed_narration(self, obj) -> dict:
+#         return UniversalNarrationExtractor.resolve_from_staging_line(obj)
+
+#     def get_display_payee(self, obj) -> str:
+#         return self.get_parsed_narration(obj).get("suggested_payee") or obj.narration
+
+#     def get_display_remark(self, obj) -> str | None:
+#         return self.get_parsed_narration(obj).get("suggested_remark")
+
+#     def get_detected_rail(self, obj) -> str:
+#         return self.get_parsed_narration(obj).get("detected_rail", "BANK_TRANSFER")
+
+
 class StatementStagingLineSerializer(serializers.ModelSerializer):
     """
     Authoritative serializer for StatementStagingLine across:
@@ -204,6 +256,13 @@ class StatementStagingLineSerializer(serializers.ModelSerializer):
     - Stage 3: Categorization & Sweeper Workbenches
     """
 
+    # 1. Primary Display Override: Sends clean payee title under 'narration'
+    narration = serializers.SerializerMethodField()
+
+    # 2. Immutable Ground Truth: Preserves original bank text for audit modals
+    raw_narration = serializers.CharField(source="narration", read_only=True)
+
+    # 3. Standardized Universal Narration Decomposition & Telemetry
     parsed_narration = serializers.SerializerMethodField()
     display_payee = serializers.SerializerMethodField()
     display_remark = serializers.SerializerMethodField()
@@ -216,7 +275,10 @@ class StatementStagingLineSerializer(serializers.ModelSerializer):
             "account_id",
             "bank_id",
             "raw_statement_date",
+            # Clean display title sent under 'narration' for React UI compatibility
             "narration",
+            # Verbatim untouched statement string
+            "raw_narration",
             "cheque_ref_number",
             "amount",
             "running_balance",
@@ -228,24 +290,41 @@ class StatementStagingLineSerializer(serializers.ModelSerializer):
             "is_enriched_from_live",
             "live_upi_rrn",
             "live_metadata",
-            # Standardized universal narration package
+            # Universal Narration Decomposition package
             "parsed_narration",
             "display_payee",
             "display_remark",
             "detected_rail",
         ]
 
-    def get_parsed_narration(self, obj) -> dict:
+    def _get_resolved_narration_pkg(self, obj) -> dict:
+        """
+        Retrieves the decomposed narration package, leveraging the cached
+        model property if available to prevent running regex 4x per row.
+        """
+        if hasattr(obj, "parsed_narration"):
+            return obj.parsed_narration
         return UniversalNarrationExtractor.resolve_from_staging_line(obj)
 
+    def get_narration(self, obj) -> str:
+        """Feeds the clean dynamic payee to the default frontend 'narration' column."""
+        pkg = self._get_resolved_narration_pkg(obj)
+        return pkg.get("suggested_payee") or obj.narration
+
+    def get_parsed_narration(self, obj) -> dict:
+        return self._get_resolved_narration_pkg(obj)
+
     def get_display_payee(self, obj) -> str:
-        return self.get_parsed_narration(obj).get("suggested_payee") or obj.narration
+        pkg = self._get_resolved_narration_pkg(obj)
+        return pkg.get("suggested_payee") or obj.narration
 
     def get_display_remark(self, obj) -> str | None:
-        return self.get_parsed_narration(obj).get("suggested_remark")
+        pkg = self._get_resolved_narration_pkg(obj)
+        return pkg.get("suggested_remark")
 
     def get_detected_rail(self, obj) -> str:
-        return self.get_parsed_narration(obj).get("detected_rail", "BANK_TRANSFER")
+        pkg = self._get_resolved_narration_pkg(obj)
+        return pkg.get("detected_rail", "BANK_TRANSFER")
 
 
 # import decimal

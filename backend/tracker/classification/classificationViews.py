@@ -35,6 +35,7 @@ from tracker.classification.engine import (
     extract_clean_payee_pattern,
 )
 from tracker.models.subledger import AssetCategory
+from tracker.parsers.universal_narration import UniversalNarrationExtractor
 
 from typing import List, Dict, Any
 from ..ai.services.hybrid_classifier import push_to_vector_cache
@@ -1435,6 +1436,44 @@ def execute_bulk_sweep(request):
 #     return JsonResponse(result)
 
 
+# @api_view(["POST"])
+# def get_candidate_patterns_view(request):
+#     transaction_ids = request.data.get("transaction_ids", [])
+#     if not transaction_ids:
+#         return Response(
+#             {"selectable_patterns": [], "disabled_patterns": []},
+#             status=status.HTTP_200_OK,
+#         )
+
+#     entries = JournalEntry.objects.filter(id__in=transaction_ids).only(
+#         "remarks", "row_identifier"
+#     )
+
+#     # Staging lookup for clean raw narration
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+#     staging_map = dict(
+#         StatementStagingLine.objects.filter(row_identifier__in=row_ids).values_list(
+#             "row_identifier", "narration"
+#         )
+#     )
+
+#     narrations = []
+#     for entry in entries:
+#         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         # Priority: payee -> staging raw narration -> remarks universal_narration
+#         narr = (
+#             rem.get("payee")
+#             or staging_map.get(entry.row_identifier)
+#             or rem.get("universal_narration")
+#             or ""
+#         )
+#         if narr:
+#             narrations.append(narr)
+
+#     result = extract_candidate_patterns_from_narrations(narrations)
+#     return Response(result, status=status.HTTP_200_OK)
+
+
 @api_view(["POST"])
 def get_candidate_patterns_view(request):
     transaction_ids = request.data.get("transaction_ids", [])
@@ -1448,25 +1487,36 @@ def get_candidate_patterns_view(request):
         "remarks", "row_identifier"
     )
 
-    # Staging lookup for clean raw narration
+    # 1. Fetch staging lines as model instances so cached properties & extractors work
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
-    staging_map = dict(
-        StatementStagingLine.objects.filter(row_identifier__in=row_ids).values_list(
-            "row_identifier", "narration"
-        )
-    )
+    staging_lines = StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+
+    # Map row_identifier -> clean resolved display payee (NOT raw DB narration)
+    staging_map = {
+        line.row_identifier: line.display_payee
+        for line in staging_lines
+        if line.row_identifier
+    }
 
     narrations = []
     for entry in entries:
         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
-        # Priority: payee -> staging raw narration -> remarks universal_narration
+
+        # Clean payee resolution hierarchy:
+        clean_payee = rem.get("payee")
+        if not clean_payee or "Dear Customer" in clean_payee or "UTR" in clean_payee:
+            clean_payee = None
+
         narr = (
-            rem.get("payee")
+            clean_payee
             or staging_map.get(entry.row_identifier)
             or rem.get("universal_narration")
             or ""
         )
+
+        # Final safety cleanup pass on the pattern input
         if narr:
+            narr = UniversalNarrationExtractor.clean_boilerplate_header(narr)
             narrations.append(narr)
 
     result = extract_candidate_patterns_from_narrations(narrations)
