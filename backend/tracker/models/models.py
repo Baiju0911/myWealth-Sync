@@ -783,6 +783,175 @@ class AccountingRule(models.Model):
 #         return self.parsed_narration.get("detected_rail", "BANK_TRANSFER")
 
 
+# class StatementStagingLine(models.Model):
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+#     # 🎯 TARGET CONNECTIONS
+#     account = models.ForeignKey(
+#         "Account", on_delete=models.CASCADE, related_name="staging_lines"
+#     )
+#     bank = models.ForeignKey(
+#         "Bank", on_delete=models.CASCADE, related_name="staging_lines"
+#     )
+
+#     # 🔗 THE AUDIT MATRIX LINK
+#     ingest_registry = models.ForeignKey(
+#         "StatementIngestRegistry",
+#         on_delete=models.CASCADE,
+#         related_name="staging_lines",
+#         null=True,
+#         blank=True,
+#         help_text="The parent file upload profile history record linked to this transaction.",
+#     )
+
+#     # 📅 METADATA TIMESTAMPS
+#     uploaded_at = models.DateTimeField(auto_now_add=True)
+#     raw_statement_date = models.DateField()
+
+#     # 📝 EXTRACTED LINE VALUES (Authentic & Immutable Ground Truth)
+#     narration = models.TextField(editable=False)
+#     cheque_ref_number = models.TextField(blank=True, null=True)
+
+#     # 💰 BALANCE TRACKING QUANTITIES
+#     amount = models.DecimalField(max_digits=15, decimal_places=2)
+#     running_balance = models.DecimalField(
+#         max_digits=15, decimal_places=2, blank=True, null=True
+#     )
+#     debit = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+#     credit = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+
+#     bank_transaction_id = models.CharField(
+#         max_length=100,
+#         null=True,
+#         blank=True,
+#         help_text="Core banking transaction system identifier string (e.g., S29270471, FB209745)",
+#     )
+#     transaction_type = models.CharField(
+#         max_length=50, null=True, blank=True, help_text="e.g., NFT, UPI, CHQ, TFR"
+#     )
+
+#     # 🤖 ENGINE CLASSIFICATION STATS
+#     row_identifier = models.CharField(
+#         max_length=64, db_index=True, null=True, blank=True
+#     )
+#     routing_status = models.CharField(max_length=20, default="PENDING")
+#     suggested_contra_account = models.ForeignKey(
+#         "Account",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="staging_suggestions",
+#     )
+
+#     # ========================================================
+#     # ⚡ LIVE STREAM ENRICHMENT (HYBRID JSON + INDEXED ANCHORS)
+#     # ========================================================
+#     is_enriched_from_live = models.BooleanField(
+#         default=False,
+#         db_index=True,
+#         help_text="True if enriched with merchant or context from live push stream.",
+#     )
+#     live_upi_rrn = models.CharField(
+#         max_length=64,
+#         null=True,
+#         blank=True,
+#         db_index=True,
+#         help_text="Extracted 12-digit UPI reference number or rail reference for fast indexed lookups.",
+#     )
+#     live_metadata = models.JSONField(
+#         default=dict,
+#         blank=True,
+#         help_text=(
+#             "Flexible envelope storing donor metadata from RawEmailPayload: "
+#             "merchant, raw_payload_id, live_source, auth_code, matched_tier, etc."
+#         ),
+#     )
+
+#     class Meta:
+#         db_table = "ledger_statementstagingline"
+#         verbose_name = "Statement Staging Line"
+#         verbose_name_plural = "Statement Staging Lines"
+#         ordering = ["raw_statement_date", "uploaded_at"]
+
+#     def __str__(self):
+#         return f"{self.raw_statement_date} | {self.bank.code if self.bank else 'BANK'} | {self.display_payee[:30]} | ₹{self.amount}"
+
+#     def save(self, *args, **kwargs):
+#         if self.amount is None or self.amount == decimal.Decimal("0.00"):
+#             if self.debit is not None and self.debit > 0:
+#                 self.amount = self.debit
+#             elif self.credit is not None and self.credit > 0:
+#                 self.amount = self.credit
+#         super().save(*args, **kwargs)
+
+#     # ========================================================
+#     # 🧩 DYNAMIC PRESENTATION PROPERTIES (ZERO HARDCODING)
+#     # ========================================================
+#     @property
+#     def live_merchant(self) -> str | None:
+#         """Convenience accessor to retrieve the clean donor merchant name."""
+#         return (
+#             self.live_metadata.get("merchant")
+#             if isinstance(self.live_metadata, dict)
+#             else None
+#         )
+
+#     @property
+#     def live_source(self) -> str | None:
+#         """Convenience accessor to retrieve the donor stream source."""
+#         return (
+#             self.live_metadata.get("source")
+#             if isinstance(self.live_metadata, dict)
+#             else None
+#         )
+
+#     @property
+#     def parsed_narration(self) -> dict:
+#         """
+#         Non-destructive narration decomposition merged with live telemetry.
+#         Cached on the instance lifecycle to avoid redundant regex passes.
+#         """
+#         if not hasattr(self, "_cached_parsed_narration"):
+#             from tracker.parsers.universal_narration import UniversalNarrationExtractor
+
+#             self._cached_parsed_narration = (
+#                 UniversalNarrationExtractor.resolve_from_staging_line(self)
+#             )
+#         return self._cached_parsed_narration
+
+#     @property
+#     def display_payee(self) -> str:
+#         """
+#         Primary dynamic presentation title.
+#         Extracts clean merchant/payee via UniversalNarrationExtractor,
+#         guaranteeing no institutional headers or raw protocol noise.
+#         """
+#         resolved = self.parsed_narration.get("suggested_payee")
+#         if resolved:
+#             return resolved
+
+#         raw_payee = self.parsed_narration.get("statement_payee_raw")
+#         if raw_payee:
+#             return raw_payee
+
+#         return self.narration
+
+#     @property
+#     def display_remark(self) -> str | None:
+#         """Convenience accessor for extracted remark / reference notes."""
+#         return self.parsed_narration.get("suggested_remark")
+
+#     @property
+#     def detected_rail(self) -> str:
+#         """Convenience accessor for payment rail (UPI, IMPS, NEFT, ATM, etc.)."""
+#         return self.parsed_narration.get("detected_rail", "BANK_TRANSFER")
+
+#     @property
+#     def detected_reference(self) -> str | None:
+#         """Convenience accessor for extracted RRN / UTR / Cheque reference."""
+#         return self.parsed_narration.get("detected_reference")
+
+
 class StatementStagingLine(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -808,8 +977,12 @@ class StatementStagingLine(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
     raw_statement_date = models.DateField()
 
-    # 📝 EXTRACTED LINE VALUES (Authentic & Immutable Ground Truth)
-    narration = models.TextField(editable=False)
+    # ========================================================
+    # 📝 IMMUTABLE GROUND TRUTH BANK COLUMN
+    # Maps directly to the existing 'narration' column in MySQL.
+    # Marked editable=False to protect audit trail integrity.
+    # ========================================================
+    raw_narration = models.TextField(db_column="narration", editable=False)
     cheque_ref_number = models.TextField(blank=True, null=True)
 
     # 💰 BALANCE TRACKING QUANTITIES
@@ -874,7 +1047,7 @@ class StatementStagingLine(models.Model):
         ordering = ["raw_statement_date", "uploaded_at"]
 
     def __str__(self):
-        return f"{self.raw_statement_date} | {self.bank.code if self.bank else 'BANK'} | {self.display_payee[:30]} | ₹{self.amount}"
+        return f"{self.raw_statement_date} | {self.bank.code if self.bank else 'BANK'} | {self.narration[:30]} | ₹{self.amount}"
 
     def save(self, *args, **kwargs):
         if self.amount is None or self.amount == decimal.Decimal("0.00"):
@@ -934,7 +1107,21 @@ class StatementStagingLine(models.Model):
         if raw_payee:
             return raw_payee
 
-        return self.narration
+        return self.raw_narration
+
+    @property
+    def narration(self) -> str:
+        """
+        DYNAMIC SHIELD: Intercepts all requests for 'line.narration'
+        and returns the clean modern display title without breaking
+        any existing frontend code or serializers.
+        """
+        return self.display_payee
+
+    @narration.setter
+    def narration(self, value: str):
+        """Allows writing to the ground-truth field during ingestion/parser runs."""
+        self.raw_narration = value
 
     @property
     def display_remark(self) -> str | None:

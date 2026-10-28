@@ -332,7 +332,7 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
             }`}
           >
             <span>📁</span>
-            <span>Manual Upload</span>
+            <span>Manual Upload [Bank Statement]</span>
           </button>
 
           <button
@@ -348,7 +348,7 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
             }`}
           >
             <span>📥</span>
-            <span>Attachment Inbox</span>
+            <span>Attachment Inbox [EMAIL]</span>
             {inboxItems.length > 0 && (
               <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                 {inboxItems.length}
@@ -370,7 +370,7 @@ export function UniversalStatementIngestView({ onIngestionComplete }: UniversalS
             }`}
           >
             <span>⚡</span>
-            <span>Live Stream</span>
+            <span>Live Stream [SMS]</span>
             {liveStreamTotalCount > 0 && (
               <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">
                 {liveStreamTotalCount}

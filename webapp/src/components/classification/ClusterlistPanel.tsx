@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback } from 'react';
 import type { ExtendedCluster, Cluster } from '../../api/api';
 import { updateEntryUserNote } from '../../api/api';

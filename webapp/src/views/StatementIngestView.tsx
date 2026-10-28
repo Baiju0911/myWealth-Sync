@@ -346,7 +346,7 @@ export default function StatementIngestView() {
         </div>
 
         {/* Right Card: Live Staging Floor Deck */}
-        <div className="xl:col-span-8 p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[440px] flex flex-col">
+        <div className="xl:col-span-8 p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-110 flex flex-col">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-zinc-800 gap-4 mb-6">
             <div>
               <h3 className="text-base font-semibold text-white">
@@ -360,7 +360,7 @@ export default function StatementIngestView() {
                 type="button"
                 onClick={handleCommitStaging}
                 disabled={commitLoading || !isDoubleTrustOk}
-                className={`node-submit px-4 py-2 text-xs font-mono font-bold uppercase rounded-lg border tracking-wider transition-all shadow-md flex items-center justify-center min-w-[190px] ${
+                className={`node-submit px-4 py-2 text-xs font-mono font-bold uppercase rounded-lg border tracking-wider transition-all shadow-md flex items-center justify-center min-w-47.5 ${
                   isDoubleTrustOk
                     ? isFileFullyStale 
                       ? 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700 text-zinc-300 cursor-pointer'

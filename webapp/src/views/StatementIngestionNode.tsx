@@ -288,7 +288,7 @@ export default function StatementIngestionNode({ onRedirectToMapper }: Ingestion
 
         {/* Right Output Viewport Engine Status Monitor Block */}
         <div className="lg:col-span-2">
-          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-[300px] flex flex-col justify-between">
+          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl min-h-75 flex flex-col justify-between">
             
             {statusMode === 'IDLE' && !loading && (
               <div className="my-auto text-center p-6 space-y-2">

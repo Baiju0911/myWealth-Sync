@@ -1474,6 +1474,55 @@ def execute_bulk_sweep(request):
 #     return Response(result, status=status.HTTP_200_OK)
 
 
+# @api_view(["POST"])
+# def get_candidate_patterns_view(request):
+#     transaction_ids = request.data.get("transaction_ids", [])
+#     if not transaction_ids:
+#         return Response(
+#             {"selectable_patterns": [], "disabled_patterns": []},
+#             status=status.HTTP_200_OK,
+#         )
+
+#     entries = JournalEntry.objects.filter(id__in=transaction_ids).only(
+#         "remarks", "row_identifier"
+#     )
+
+#     # 1. Fetch staging lines as model instances so cached properties & extractors work
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+#     staging_lines = StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+
+#     # Map row_identifier -> clean resolved display payee (NOT raw DB narration)
+#     staging_map = {
+#         line.row_identifier: line.display_payee
+#         for line in staging_lines
+#         if line.row_identifier
+#     }
+
+#     narrations = []
+#     for entry in entries:
+#         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
+
+#         # Clean payee resolution hierarchy:
+#         clean_payee = rem.get("payee")
+#         if not clean_payee or "Dear Customer" in clean_payee or "UTR" in clean_payee:
+#             clean_payee = None
+
+#         narr = (
+#             clean_payee
+#             or staging_map.get(entry.row_identifier)
+#             or rem.get("universal_narration")
+#             or ""
+#         )
+
+#         # Final safety cleanup pass on the pattern input
+#         if narr:
+#             narr = UniversalNarrationExtractor.clean_boilerplate_header(narr)
+#             narrations.append(narr)
+
+#     result = extract_candidate_patterns_from_narrations(narrations)
+#     return Response(result, status=status.HTTP_200_OK)
+
+
 @api_view(["POST"])
 def get_candidate_patterns_view(request):
     transaction_ids = request.data.get("transaction_ids", [])
@@ -1491,9 +1540,11 @@ def get_candidate_patterns_view(request):
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
     staging_lines = StatementStagingLine.objects.filter(row_identifier__in=row_ids)
 
-    # Map row_identifier -> clean resolved display payee (NOT raw DB narration)
+    # Map row_identifier -> clean resolved display payee
     staging_map = {
-        line.row_identifier: line.display_payee
+        line.row_identifier: getattr(
+            line, "display_payee", getattr(line, "narration", "")
+        )
         for line in staging_lines
         if line.row_identifier
     }
@@ -1502,22 +1553,23 @@ def get_candidate_patterns_view(request):
     for entry in entries:
         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
 
-        # Clean payee resolution hierarchy:
-        clean_payee = rem.get("payee")
-        if not clean_payee or "Dear Customer" in clean_payee or "UTR" in clean_payee:
-            clean_payee = None
+        # 2. Prefer clean payee from staging_map, fallback to clean remarks
+        clean_payee = staging_map.get(entry.row_identifier)
+        if not clean_payee:
+            clean_payee = (
+                rem.get("payee")
+                or rem.get("universal_narration")
+                or rem.get("narration")
+                or ""
+            )
 
-        narr = (
-            clean_payee
-            or staging_map.get(entry.row_identifier)
-            or rem.get("universal_narration")
-            or ""
-        )
-
-        # Final safety cleanup pass on the pattern input
-        if narr:
-            narr = UniversalNarrationExtractor.clean_boilerplate_header(narr)
-            narrations.append(narr)
+        if clean_payee:
+            # 3. Clean any remaining boilerplate or prefixes
+            sanitized = UniversalNarrationExtractor.clean_boilerplate_header(
+                str(clean_payee)
+            )
+            if sanitized:
+                narrations.append(sanitized)
 
     result = extract_candidate_patterns_from_narrations(narrations)
     return Response(result, status=status.HTTP_200_OK)
