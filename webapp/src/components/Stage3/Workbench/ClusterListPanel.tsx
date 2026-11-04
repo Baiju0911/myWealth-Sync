@@ -1,17 +1,14 @@
 // webapp/src/components/Stage3/Workbench/ClusterListPanel.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ExtendedCluster, Cluster } from '../../../api/api';
-import { updateEntryUserNote, getClusterLineItems } from '../../../api/api';
-import { inrFormatter, parseRemarks, extractCleanPayee } from '../../../utils/classificationHelpers';
-import { ClusterCardItem } from './ClusterCardItem';
-import { DualNarrationViewer } from './DualNarrationViewer';
-
-interface VendorGroup {
-  vendorName: string;
-  items: any[];
-  txnIds: string[];
-  totalAmount: number;
-}
+import { getClusterLineItems } from '../../../api/api';
+import { subledgerApi, type UnmapTransactionRequest } from '../../../api/subledger';
+import { AlertCircle, FileSpreadsheet, Check } from 'lucide-react';
+import { WorkbenchSearchBar } from './clusterlistHelpers/WorkbenchSearchBar';
+import { ClusterAccordionItem } from './clusterlistHelpers/ClusterAccordionItem';
+import { useWorkbenchFilter } from './clusterlistHelpers/useWorkbenchFilter';
+import { RemarksInspectionModal } from './clusterlistHelpers/RemarksInspectionModal';
+import { copyToClipboard, generateTSVFromItems } from './clusterlistHelpers/searchAndFilterHelpers';
 
 interface Props {
   loading: boolean;
@@ -19,596 +16,327 @@ interface Props {
   selectedTxnIds: string[];
   visibleTxnIds: string[];
   activePreviewCluster: ExtendedCluster | Cluster | null;
-  searchQuery: string;
-  setSearchQuery: (q: string) => void;
   setActivePreviewCluster: (cluster: ExtendedCluster) => void;
   toggleIndividualTxn: (txnId: string, e: React.MouseEvent) => void;
   toggleClusterTxns: (clusterTxnIds: string[], e: React.MouseEvent) => void;
   toggleSelectAllVisible: () => void;
   clearAllSelections: () => void;
+  lastAppliedMapping?: { txnIds: string[]; asset_id?: string | number; asset_code?: string; asset_name?: string } | null;
+  onUnmapSuccess?: (unmappedId: string) => void;
 }
 
 export const ClusterListPanel: React.FC<Props> = ({
   loading,
-  filteredClusters,
+  filteredClusters: rawClusters,
   selectedTxnIds,
   visibleTxnIds,
   activePreviewCluster,
-  searchQuery,
-  setSearchQuery,
   setActivePreviewCluster,
   toggleIndividualTxn,
   toggleClusterTxns,
   toggleSelectAllVisible,
   clearAllSelections,
+  lastAppliedMapping,
+  onUnmapSuccess,
 }) => {
-  const [remarksModalItem, setRemarksModalItem] = useState<any | null>(null);
-  const [userNoteInput, setUserNoteInput] = useState<string>('');
-  const [savingNote, setSavingNote] = useState<boolean>(false);
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const [remarksModalItem, setRemarksModalItem] = useState<{ id: string; narration?: string; remarks?: any } | null>(null);
   const [globalNarrationMode, setGlobalNarrationMode] = useState<'smart' | 'raw'>('smart');
+  const [copiedBatch, setCopiedBatch] = useState(false);
 
-  // Accordion expansion states
-  const [expandedClusterKeys, setExpandedClusterKeys] = useState<Record<string, boolean>>({});
-  const [expandedVendorKeys, setExpandedVendorKeys] = useState<Record<string, boolean>>({});
-
-  // 🟢 LAZY-LOAD CACHE: Stores items fetched on demand per cluster
-  const [clusterItemsCache, setClusterItemsCache] = useState<Record<string, any[]>>({});
+  const [clusterItemsMap, setClusterItemsMap] = useState<Record<string, any[]>>({});
   const [loadingClusterKeys, setLoadingClusterKeys] = useState<Record<string, boolean>>({});
+  const [unmappingItemIds, setUnmappingItemIds] = useState<Record<string, boolean>>({});
 
-  const isClusterExpanded = useCallback(
-    (key: string) => !!expandedClusterKeys[key],
-    [expandedClusterKeys]
-  );
+  const {
+    statusFilter,
+    setStatusFilter,
+    directionFilter,
+    setDirectionFilter,
+    sortOrder,
+    setSortOrder,
+    filteredClusters,
+    expandedClusterKeys,
+    setExpandedClusterKeys,
+    expandAll,
+    collapseAll,
+    searchTokens,
+    availableYears,
+  } = useWorkbenchFilter(rawClusters, clusterItemsMap, localSearchQuery);
 
-  const isVendorExpanded = useCallback(
-    (key: string) => expandedVendorKeys[key] !== false,
-    [expandedVendorKeys]
-  );
+  useEffect(() => {
+    if (!lastAppliedMapping || !lastAppliedMapping.txnIds?.length) return;
+    const { txnIds, asset_id, asset_code, asset_name } = lastAppliedMapping;
 
-  const handleLoadClusterItems = async (clusterKey: string, cluster: ExtendedCluster, e: React.MouseEvent) => {
-  e.stopPropagation();
-  if (clusterItemsCache[clusterKey] || loadingClusterKeys[clusterKey]) return;
+    setClusterItemsMap((prev) => {
+      const updated = { ...prev };
+      let changed = false;
 
-  const txnIds = cluster.transaction_ids || [];
-  if (txnIds.length === 0) return;
-
-  setLoadingClusterKeys((prev) => ({ ...prev, [clusterKey]: true }));
-  try {
-    const response = await getClusterLineItems(txnIds);
-    const fetchedItems = Array.isArray(response) ? response : [];
-    setClusterItemsCache((prev) => ({ ...prev, [clusterKey]: fetchedItems }));
-  } catch (err) {
-    console.error('Failed to load cluster items:', err);
-  } finally {
-    setLoadingClusterKeys((prev) => ({ ...prev, [clusterKey]: false }));
-  }
-};
-
-  // 🟢 Global Expand: opens headers without flooding the network
-  const handleGlobalExpand = () => {
-    const openMap: Record<string, boolean> = {};
-    filteredClusters.forEach((c, idx) => {
-      const key = c.pattern ? `cluster-${c.pattern}-${idx}` : `cluster-idx-${idx}`;
-      openMap[key] = true;
+      Object.keys(updated).forEach((key) => {
+        const list = updated[key];
+        if (Array.isArray(list) && list.some((it) => txnIds.includes(it.id))) {
+          changed = true;
+          updated[key] = list.map((it) =>
+            txnIds.includes(it.id)
+              ? {
+                  ...it,
+                  is_mapped: true,
+                  asset_id: asset_id ? String(asset_id) : it.asset_id,
+                  asset_code: asset_code || it.asset_code || 'FLT',
+                  asset_name: asset_name || it.asset_name || 'Folio',
+                  subledger_mapping: {
+                    asset_id: asset_id ? String(asset_id) : it.asset_id,
+                    asset_code: asset_code || it.asset_code || 'FLT',
+                    asset_name: asset_name || it.asset_name || 'Folio',
+                  },
+                }
+              : it
+          );
+        }
+      });
+      return changed ? updated : prev;
     });
-    setExpandedClusterKeys(openMap);
+  }, [lastAppliedMapping]);
+
+  // ⚡ Auto-fetch line items for search-matched clusters so they show real cards instead of grey samples
+  useEffect(() => {
+    if (localSearchQuery.trim().length >= 2 && filteredClusters.length > 0) {
+      filteredClusters.slice(0, 5).forEach(async (cluster, idx) => {
+        const key = cluster.pattern ? `cluster-${cluster.pattern}-${idx}` : `cluster-idx-${idx}`;
+        if (!clusterItemsMap[key] && !loadingClusterKeys[key] && cluster.transaction_ids?.length) {
+          setLoadingClusterKeys((p) => ({ ...p, [key]: true }));
+          try {
+            const res: any = await getClusterLineItems(cluster.transaction_ids);
+            const fetchedItems: any[] = Array.isArray(res) ? res : res?.items || [];
+            setClusterItemsMap((p) => ({ ...p, [key]: fetchedItems }));
+          } catch (e) {
+            console.error('Failed auto-fetching cluster items on search:', e);
+          } finally {
+            setLoadingClusterKeys((p) => ({ ...p, [key]: false }));
+          }
+        }
+      });
+    }
+  }, [localSearchQuery, filteredClusters]);
+
+  // Real-time in-memory selection arithmetic & items collector
+  const selectionSummary = React.useMemo(() => {
+    let outSum = 0;
+    let inSum = 0;
+    const idSet = new Set(selectedTxnIds);
+    const selectedObjects: any[] = [];
+
+    Object.values(clusterItemsMap).forEach((items) => {
+      items.forEach((it) => {
+        if (idSet.has(it.id)) {
+          selectedObjects.push(it);
+          const dir = (it.direction || it.vector_type || it.entry_type || '').toUpperCase();
+          const isOut =
+            ['OUTFLOW', 'DEBIT', 'DR'].includes(dir) ||
+            (it.debit != null && Number(it.debit) > 0) ||
+            (it.amount ?? 0) < 0;
+          const val = Math.abs(Number(it.amount ?? it.debit ?? it.credit ?? 0));
+          if (isOut) outSum += val;
+          else inSum += val;
+        }
+      });
+    });
+
+    return { outSum, inSum, count: selectedTxnIds.length, items: selectedObjects };
+  }, [selectedTxnIds, clusterItemsMap]);
+
+  // Handle TSV Batch Export
+  const handleCopyTSV = async () => {
+    if (selectionSummary.items.length === 0) return;
+    const tsv = generateTSVFromItems(selectionSummary.items);
+    const ok = await copyToClipboard(tsv);
+    if (ok) {
+      setCopiedBatch(true);
+      setTimeout(() => setCopiedBatch(false), 2000);
+    }
   };
 
-  // 🟢 Global Collapse: collapses all clusters instantly
-  const handleGlobalCollapse = () => {
-    setExpandedClusterKeys({});
-  };
+  const toggleExpandCluster = async (cluster: ExtendedCluster, clusterKey: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const willBeOpen = !expandedClusterKeys[clusterKey];
+    setExpandedClusterKeys((p) => ({ ...p, [clusterKey]: willBeOpen }));
 
-  // Lazy fetch items on accordion expansion
-  const toggleExpandCluster = async (clusterKey: string, cluster: ExtendedCluster, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const willExpand = !isClusterExpanded(clusterKey);
-
-    setExpandedClusterKeys((prev) => ({ ...prev, [clusterKey]: willExpand }));
-
-    // If opening and items are not cached yet, fetch from backend:
-    if (willExpand && !clusterItemsCache[clusterKey] && (!cluster.items || cluster.items.length === 0)) {
-      const txnIds = cluster.transaction_ids || [];
-      if (txnIds.length === 0) return;
-
-      setLoadingClusterKeys((prev) => ({ ...prev, [clusterKey]: true }));
+    if (willBeOpen && !clusterItemsMap[clusterKey] && cluster.transaction_ids?.length) {
+      setLoadingClusterKeys((p) => ({ ...p, [clusterKey]: true }));
       try {
-        const response = await getClusterLineItems(txnIds);
-        const fetchedItems = Array.isArray(response) ? response : [];
-        setClusterItemsCache((prev) => ({ ...prev, [clusterKey]: fetchedItems }));
+        const res: any = await getClusterLineItems(cluster.transaction_ids);
+        const fetchedItems: any[] = Array.isArray(res) ? res : res?.items || [];
+        setClusterItemsMap((p) => ({ ...p, [clusterKey]: fetchedItems }));
       } catch (err) {
-        console.error('Failed to lazy load cluster items:', err);
+        console.error('Failed to load cluster items:', err);
       } finally {
-        setLoadingClusterKeys((prev) => ({ ...prev, [clusterKey]: false }));
+        setLoadingClusterKeys((p) => ({ ...p, [clusterKey]: false }));
       }
     }
   };
 
-  const toggleExpandVendor = (key: string, e: React.MouseEvent) => {
+  const handleUnmapSubledger = async (e: React.MouseEvent, item: any, clusterKey: string) => {
     e.stopPropagation();
-    setExpandedVendorKeys((prev) => ({ ...prev, [key]: !isVendorExpanded(key) }));
-  };
+    const itemId = String(item.id);
+    const assetId = item.asset_id || item.subledger_mapping?.asset_id;
+    const rowId = item.row_identifier;
 
-  const handleOpenInspectionModal = (item: any) => {
-    setRemarksModalItem(item);
-    const parsed = parseRemarks(item.remarks);
-    setUserNoteInput(parsed.user_note || '');
-  };
-
-  const handleSaveUserNote = async () => {
-    if (!remarksModalItem) return;
-    setSavingNote(true);
+    if (!item.mapping_id && !rowId && !assetId) return;
+    setUnmappingItemIds((p) => ({ ...p, [itemId]: true }));
 
     try {
-      const data = await updateEntryUserNote({
-        entry_id: remarksModalItem.id,
-        user_note: userNoteInput,
-      });
+      const payload: UnmapTransactionRequest = item.mapping_id
+        ? { mapping_id: item.mapping_id }
+        : { row_identifier: rowId, asset_id: assetId };
 
-      if (data && data.status === 'success') {
-        remarksModalItem.remarks = data.remarks;
-        setRemarksModalItem(null);
+      const res = await subledgerApi.unmapTransaction(payload);
+      if (res?.status === 'success') {
+        setClusterItemsMap((p) => {
+          const list = p[clusterKey];
+          if (!list) return p;
+          return {
+            ...p,
+            [clusterKey]: list.map((it) =>
+              String(it.id) === itemId
+                ? { ...it, is_mapped: false, mapping_id: null, asset_id: null, asset_code: null, subledger_mapping: null }
+                : it
+            ),
+          };
+        });
+        if (onUnmapSuccess) onUnmapSuccess(itemId);
       } else {
-        alert('Failed to save user note.');
+        alert(res?.message || 'Failed to unmap item.');
       }
     } catch (err) {
-      console.error('Save note error:', err);
+      console.error('Failed to unmap transaction:', err);
+      alert('Error unmapping transaction.');
     } finally {
-      setSavingNote(false);
+      setUnmappingItemIds((p) => ({ ...p, [itemId]: false }));
     }
-  };
-
-  const groupItemsByVendor = (items: any[] = []): VendorGroup[] => {
-    const groupsMap: Record<string, VendorGroup> = {};
-
-    items.forEach((item) => {
-      const remarksObj = parseRemarks(item.remarks);
-      const name = item.display_payee || extractCleanPayee(item.narration) || remarksObj.payee || 'Unlabeled Vendor';
-
-      const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
-      const isOut = dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR'
-        ? true
-        : dirStr === 'INFLOW' || dirStr === 'CREDIT' || dirStr === 'CR'
-        ? false
-        : item.debit != null && Number(item.debit) > 0
-        ? true
-        : item.credit != null && Number(item.credit) > 0
-        ? false
-        : (item.amount ?? 0) < 0;
-
-      const directionTag = isOut ? 'OUT' : 'IN';
-      const groupKey = `${name}__${directionTag}`;
-
-      if (!groupsMap[groupKey]) {
-        groupsMap[groupKey] = {
-          vendorName: `${name} (${directionTag})`,
-          items: [],
-          txnIds: [],
-          totalAmount: 0,
-        };
-      }
-
-      groupsMap[groupKey].items.push(item);
-      if (item.id) groupsMap[groupKey].txnIds.push(item.id);
-      groupsMap[groupKey].totalAmount += item.amount || item.debit || item.credit || 0;
-    });
-
-    return Object.values(groupsMap).sort((a, b) => {
-      if (b.items.length !== a.items.length) return b.items.length - a.items.length;
-      return Math.abs(b.totalAmount) - Math.abs(a.totalAmount);
-    });
   };
 
   return (
-    <div style={{ width: '58%', borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column', backgroundColor: '#09090b' }}>
-      
-      {/* Top Controls Toolbar */}
-      <div style={{ padding: '12px', borderBottom: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#121215' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#a1a1aa', cursor: 'pointer', fontWeight: 'bold' }}>
-          <input
-            type="checkbox"
-            checked={visibleTxnIds.length > 0 && visibleTxnIds.every((id) => selectedTxnIds.includes(id))}
-            onChange={toggleSelectAllVisible}
-            style={{ width: '15px', height: '15px', accentColor: '#f59e0b', cursor: 'pointer' }}
-          />
-          Visible
-        </label>
+    <div className="w-[58%] border-r border-zinc-800 flex flex-col bg-zinc-950 font-mono text-xs overflow-hidden relative">
+      <WorkbenchSearchBar
+        selectedCount={selectedTxnIds.length}
+        isAllVisibleSelected={visibleTxnIds.length > 0 && visibleTxnIds.every((id) => selectedTxnIds.includes(id))}
+        onToggleSelectAll={toggleSelectAllVisible}
+        onClearAll={clearAllSelections}
+        searchQuery={localSearchQuery}
+        onSearchChange={setLocalSearchQuery}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        directionFilter={directionFilter}
+        onDirectionFilterChange={setDirectionFilter}
+        sortOrder={sortOrder}
+        onSortOrderChange={setSortOrder}
+        availableYears={availableYears}
+        narrationMode={globalNarrationMode}
+        onToggleNarrationMode={setGlobalNarrationMode}
+        onExpandAll={expandAll}
+        onCollapseAll={collapseAll}
+      />
 
-        {selectedTxnIds.length > 0 && (
-          <button
-            type="button"
-            onClick={clearAllSelections}
-            style={{ backgroundColor: '#27272a', color: '#f4f4f5', border: 'none', borderRadius: '4px', padding: '3px 8px', fontSize: '10px', cursor: 'pointer' }}
-          >
-            Clear ({selectedTxnIds.length})
-          </button>
-        )}
+      {/* 🧮 Interactive Floating Batch Action & Arithmetic Bar */}
+      {selectionSummary.count > 0 && (
+        <div className="mx-3 mt-2 px-3 py-2 bg-linear-to-r from-amber-950/70 via-zinc-900 to-amber-950/70 border border-amber-500/50 rounded-xl flex items-center justify-between text-[11px] font-mono text-amber-200 shadow-lg shrink-0 animate-in fade-in slide-in-from-top-1">
+          <div className="flex items-center gap-3">
+            <span className="font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 text-amber-300">
+              {selectionSummary.count} {selectionSummary.count === 1 ? 'selected' : 'selected'}
+            </span>
+            {selectionSummary.outSum > 0 && (
+              <span className="text-rose-400 font-bold tabular-nums">
+                Out: -₹{selectionSummary.outSum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            )}
+            {selectionSummary.inSum > 0 && (
+              <span className="text-emerald-400 font-bold tabular-nums">
+                In: +₹{selectionSummary.inSum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            )}
+          </div>
 
-        <input
-          type="text"
-          placeholder="Search vendor patterns, narrations..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ flex: 1, backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#f4f4f5', outline: 'none' }}
-        />
-
-        {/* Global Narration View Switcher */}
-        <div style={{ display: 'flex', backgroundColor: '#18181b', borderRadius: '6px', border: '1px solid #27272a', padding: '2px' }}>
-          <button
-            type="button"
-            onClick={() => setGlobalNarrationMode('smart')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '2px 8px',
-              borderRadius: '4px',
-              fontSize: '10px',
-              fontWeight: 'bold',
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: globalNarrationMode === 'smart' ? '#f59e0b22' : 'transparent',
-              color: globalNarrationMode === 'smart' ? '#fbbf24' : '#71717a',
-            }}
-          >
-            ✨ Smart
-          </button>
-          <button
-            type="button"
-            onClick={() => setGlobalNarrationMode('raw')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '2px 8px',
-              borderRadius: '4px',
-              fontSize: '10px',
-              fontWeight: 'bold',
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: globalNarrationMode === 'raw' ? '#0284c722' : 'transparent',
-              color: globalNarrationMode === 'raw' ? '#38bdf8' : '#71717a',
-            }}
-          >
-            🏦 Raw Bank
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopyTSV}
+              className="flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+              title="Copy rows in Tab-Separated format to paste into Excel or Google Sheets"
+            >
+              {copiedBatch ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-300">Copied TSV!</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet className="w-3 h-3 text-amber-400" />
+                  <span>Copy TSV</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={clearAllSelections}
+              className="text-zinc-400 hover:text-zinc-200 text-[10px] underline ml-1 cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
         </div>
+      )}
 
-        {/* 🟢 Functional Expand / Collapse Actions */}
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <button
-            type="button"
-            onClick={handleGlobalExpand}
-            title="Expand all clusters"
-            style={{ backgroundColor: '#18181b', border: '1px solid #27272a', color: '#a1a1aa', padding: '3px 6px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer' }}
-          >
-            ▼ Expand
-          </button>
-          <button
-            type="button"
-            onClick={handleGlobalCollapse}
-            title="Collapse all clusters"
-            style={{ backgroundColor: '#18181b', border: '1px solid #27272a', color: '#a1a1aa', padding: '3px 6px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer' }}
-          >
-            ▶ Collapse
-          </button>
-        </div>
-      </div>
-
-      {/* Cluster List Container */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 flex flex-col gap-2">
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#71717a', fontSize: '12px' }}>
-            Building clusters...
+          <div className="text-center py-20 text-zinc-500 flex flex-col items-center gap-2">
+            <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs">Querying database & assembling vendor patterns...</span>
           </div>
         ) : filteredClusters.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#71717a', fontSize: '12px' }}>
-            No matching patterns found.
+          <div className="text-center py-20 text-zinc-600 flex flex-col items-center gap-2">
+            <AlertCircle className="w-6 h-6 text-zinc-600" />
+            <span className="text-xs">No matching transaction patterns found.</span>
           </div>
         ) : (
           filteredClusters.map((cluster, clusterIdx) => {
-            const clusterTxnIds: string[] = cluster.transaction_ids || [];
-            const selectedInClusterCount = clusterTxnIds.filter((id) => selectedTxnIds.includes(id)).length;
-            const isClusterFullySelected = clusterTxnIds.length > 0 && selectedInClusterCount === clusterTxnIds.length;
-            const isClusterPartiallySelected = selectedInClusterCount > 0 && !isClusterFullySelected;
-            const isActive = activePreviewCluster?.pattern === cluster.pattern;
             const clusterKey = cluster.pattern ? `cluster-${cluster.pattern}-${clusterIdx}` : `cluster-idx-${clusterIdx}`;
-
-            const expanded = isClusterExpanded(clusterKey);
-            const isFetchingItems = !!loadingClusterKeys[clusterKey];
-
-            // 🟢 PREFER CACHED ITEMS, THEN CLUSTER.ITEMS
-            const itemsPool = clusterItemsCache[clusterKey] || cluster.items || [];
-            const vendorGroups = groupItemsByVendor(itemsPool);
-
-            const clusterOutflow = cluster.total_outflow ?? cluster.total_amount ?? 0;
-            const clusterInflow = cluster.total_inflow ?? 0;
-            const displayTag = (cluster.pattern || 'GENERAL_SUSPENSE').replace(/^#+/, '');
-
             return (
-              <div
+              <ClusterAccordionItem
                 key={clusterKey}
-                onClick={() => setActivePreviewCluster(cluster)}
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  border: `1px solid ${isActive ? '#f59e0b' : selectedInClusterCount > 0 ? '#3f3f46' : '#27272a'}`,
-                  backgroundColor: isActive ? '#18181b' : '#0f0f12',
-                  cursor: 'pointer',
-                }}
-              >
-                {/* Cluster Tag Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <input
-                      type="checkbox"
-                      checked={isClusterFullySelected}
-                      ref={(el) => { if (el) el.indeterminate = isClusterPartiallySelected; }}
-                      onClick={(e) => {
-                        setActivePreviewCluster(cluster);
-                        toggleClusterTxns(clusterTxnIds, e);
-                      }}
-                      onChange={() => {}}
-                      style={{ width: '15px', height: '15px', accentColor: '#f59e0b', cursor: 'pointer' }}
-                    />
-                    <button
-                      type="button"
-                      onClick={(e) => toggleExpandCluster(clusterKey, cluster, e)}
-                      style={{ background: 'none', border: 'none', color: '#71717a', fontSize: '10px', cursor: 'pointer', padding: '2px 4px' }}
-                    >
-                      {expanded ? '▼' : '▶'}
-                    </button>
-                    <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#f4f4f5', fontFamily: 'monospace' }}>
-                      #{displayTag}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ padding: '2px 6px', fontSize: '10px', backgroundColor: '#27272a', color: '#d4d4d8', borderRadius: '4px' }}>
-                      {selectedInClusterCount} / {cluster.count || clusterTxnIds.length || 0}
-                    </span>
-                    {clusterOutflow > 0 && (
-                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#fb7185', backgroundColor: '#88133722', padding: '2px 6px', borderRadius: '4px', border: '1px solid #f43f5e33' }}>
-                        🔻 {inrFormatter.format(clusterOutflow)}
-                      </span>
-                    )}
-                    {clusterInflow > 0 && (
-                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#34d399', backgroundColor: '#064e3b22', padding: '2px 6px', borderRadius: '4px', border: '1px solid #10b98133' }}>
-                        🟢 {inrFormatter.format(clusterInflow)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Sub-group Accordion Body */}
-                {expanded && (
-                  <div style={{ paddingLeft: '20px', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {isFetchingItems ? (
-                      <div style={{ fontSize: '11px', color: '#a1a1aa', padding: '6px 0', fontStyle: 'italic' }}>
-                        Loading line items...
-                      </div>
-                    ) : itemsPool.length === 0 ? (
-                      <div style={{ padding: '6px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '10px', color: '#71717a' }}>
-                          {cluster.count || clusterTxnIds.length} transactions available.
-                        </span>
-                        {/* <button
-                          type="button"
-                          onClick={(e) => toggleExpandCluster(clusterKey, cluster, e)}
-                          style={{
-                            backgroundColor: '#27272a',
-                            border: '1px solid #3f3f46',
-                            color: '#f59e0b',
-                            borderRadius: '4px',
-                            padding: '2px 8px',
-                            fontSize: '10px',
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                          }}
-                        >
-                          Load Items
-                        </button> */}
-                        <button
-  type="button"
-  onClick={(e) => handleLoadClusterItems(clusterKey, cluster, e)}
-  style={{
-    backgroundColor: '#27272a',
-    border: '1px solid #3f3f46',
-    color: '#f59e0b',
-    borderRadius: '4px',
-    padding: '2px 8px',
-    fontSize: '10px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  }}
->
-  Load Items
-</button>
-                      </div>
-                    ) : vendorGroups.length > 0 ? (
-                      vendorGroups.map((vGroup, vIdx) => {
-                        const vendorKey = `${clusterKey}-vendor-${vGroup.vendorName}-${vIdx}`;
-                        const selectedInVendorCount = vGroup.txnIds.filter((id) => selectedTxnIds.includes(id)).length;
-                        const isVendorFullySelected = vGroup.txnIds.length > 0 && selectedInVendorCount === vGroup.txnIds.length;
-                        const isVendorPartiallySelected = selectedInVendorCount > 0 && !isVendorFullySelected;
-                        const isVendorOpen = isVendorExpanded(vendorKey);
-                        const isGroupOutflow = vGroup.vendorName.endsWith('(OUT)');
-
-                        return (
-                          <div
-                            key={vendorKey}
-                            style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: '6px', padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: '4px' }}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <input
-                                  type="checkbox"
-                                  checked={isVendorFullySelected}
-                                  ref={(el) => { if (el) el.indeterminate = isVendorPartiallySelected; }}
-                                  onClick={(e) => {
-                                    setActivePreviewCluster(cluster);
-                                    toggleClusterTxns(vGroup.txnIds, e);
-                                  }}
-                                  onChange={() => {}}
-                                  style={{ width: '14px', height: '14px', accentColor: '#f59e0b', cursor: 'pointer' }}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={(e) => toggleExpandVendor(vendorKey, e)}
-                                  style={{ background: 'none', border: 'none', color: '#71717a', fontSize: '9px', cursor: 'pointer', padding: '1px 3px' }}
-                                >
-                                  {isVendorOpen ? '▼' : '▶'}
-                                </button>
-                                <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#f4f4f5' }}>
-                                  {vGroup.vendorName}
-                                </span>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: '10px', color: '#a1a1aa', backgroundColor: '#27272a', padding: '1px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
-                                  {vGroup.items.length} {vGroup.items.length === 1 ? 'item' : 'items'}
-                                </span>
-                                <span style={{ fontSize: '11px', fontWeight: 'bold', color: isGroupOutflow ? '#fb7185' : '#34d399', fontFamily: 'monospace' }}>
-                                  {isGroupOutflow ? '-' : '+'}₹{Math.abs(vGroup.totalAmount).toLocaleString('en-IN')}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Line Items Container using ClusterCardItem */}
-                            {isVendorOpen && (
-                              <div style={{ paddingLeft: '22px', paddingTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                {vGroup.items.map((item, itemIdx) => (
-                                  <ClusterCardItem
-                                    key={item.id ? `card-${item.id}` : `card-idx-${clusterIdx}-${vIdx}-${itemIdx}`}
-                                    item={item}
-                                    clusterIdx={clusterIdx}
-                                    vIdx={vIdx}
-                                    itemIdx={itemIdx}
-                                    isSelected={selectedTxnIds.includes(item.id)}
-                                    globalNarrationMode={globalNarrationMode}
-                                    onToggleSelect={(id, e) => {
-                                      setActivePreviewCluster(cluster);
-                                      toggleIndividualTxn(id, e);
-                                    }}
-                                    onOpenRemarksModal={(clickedItem) => {
-                                      setActivePreviewCluster(cluster);
-                                      handleOpenInspectionModal(clickedItem);
-                                    }}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    ) : (
-                      (cluster.sample_descriptions || []).map((desc: string, descIdx: number) => (
-                        <div
-                          key={`desc-${clusterIdx}-${descIdx}`}
-                          style={{ fontSize: '10px', color: '#71717a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace' }}
-                        >
-                          • {desc}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
+                cluster={cluster}
+                clusterKey={clusterKey}
+                isExpanded={Boolean(expandedClusterKeys[clusterKey])}
+                isFetchingItems={Boolean(loadingClusterKeys[clusterKey])}
+                isActive={activePreviewCluster?.pattern === cluster.pattern}
+                selectedTxnIds={selectedTxnIds}
+                activeItems={clusterItemsMap[clusterKey] || cluster.items || []}
+                globalNarrationMode={globalNarrationMode}
+                searchTokens={searchTokens}
+                searchQuery={localSearchQuery}
+                statusFilter={statusFilter}
+                directionFilter={directionFilter}
+                unmappingItemIds={unmappingItemIds}
+                onToggleExpand={toggleExpandCluster}
+                onSelectCluster={setActivePreviewCluster}
+                onToggleClusterTxns={toggleClusterTxns}
+                onToggleIndividualTxn={toggleIndividualTxn}
+                onUnmap={handleUnmapSubledger}
+                onOpenRemarksModal={(it) => setRemarksModalItem(it)}
+              />
             );
           })
         )}
       </div>
 
-      {/* Modal with DualNarrationViewer */}
-      {remarksModalItem && (
-        <div
-          onClick={() => setRemarksModalItem(null)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.8)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 9999999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '16px',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: '#18181b',
-              border: '1px solid #3f3f46',
-              borderRadius: '12px',
-              padding: '20px',
-              maxWidth: '540px',
-              width: '100%',
-              color: '#f4f4f5',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Line Item Audit & Dual Narration
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRemarksModalItem(null)}
-                style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', fontSize: '16px' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <DualNarrationViewer item={remarksModalItem} />
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ fontSize: '10px', color: '#f59e0b', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>
-                User Comment / Note
-              </label>
-              <input
-                type="text"
-                placeholder="e.g., Personal payment for tea at Technopark..."
-                value={userNoteInput}
-                onChange={(e) => setUserNoteInput(e.target.value)}
-                style={{
-                  width: '100%',
-                  backgroundColor: '#09090b',
-                  border: '1px solid #3f3f46',
-                  borderRadius: '6px',
-                  padding: '8px 12px',
-                  fontSize: '12px',
-                  color: '#f4f4f5',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={() => setRemarksModalItem(null)}
-                style={{ flex: 1, padding: '8px', backgroundColor: '#27272a', border: 'none', borderRadius: '6px', color: '#a1a1aa', fontSize: '12px', cursor: 'pointer' }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveUserNote}
-                disabled={savingNote}
-                style={{ flex: 1, padding: '8px', backgroundColor: '#f59e0b', border: 'none', borderRadius: '6px', color: '#09090b', fontSize: '12px', fontWeight: 'bold', cursor: savingNote ? 'wait' : 'pointer' }}
-              >
-                {savingNote ? 'Saving...' : 'Save Comment'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RemarksInspectionModal
+        item={remarksModalItem}
+        onClose={() => setRemarksModalItem(null)}
+      />
     </div>
   );
 };
+
+
 
 
 // import React, { useState, useCallback, useEffect } from 'react';

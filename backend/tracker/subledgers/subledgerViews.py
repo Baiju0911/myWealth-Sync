@@ -1,8 +1,11 @@
 from decimal import Decimal
 
 from django.db import models, transaction
-from django.db.models import Q, Sum
+from django.db.models import Q, Count, Sum
 from django.utils import timezone
+from django.apps import apps
+
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
@@ -850,7 +853,13 @@ class AssetSubLedgerViewSet(viewsets.ModelViewSet):
         StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
         JournalEntry = apps.get_model("ledger", "JournalEntry")
         Account = apps.get_model("ledger", "Account")
-
+        bank_account_ids = list(
+            Account.objects.filter(
+                Q(bank__isnull=False)
+                | (~Q(account_number="") & Q(account_number__isnull=False))
+                | (~Q(ifsc_code="") & Q(ifsc_code__isnull=False))
+            ).values_list("id", flat=True)
+        )
         asset = self.get_object()
 
         # 1. Fetch raw mapping records for this asset
@@ -875,7 +884,7 @@ class AssetSubLedgerViewSet(viewsets.ModelViewSet):
         staging_map = dict(
             StatementStagingLine.objects.filter(
                 row_identifier__in=bank_row_ids
-            ).values_list("row_identifier", "narration")
+            ).values_list("row_identifier", "raw_narration")
         )
 
         # 3. Fetch pairing bank account legs from JournalEntry (where account_id != 99)
@@ -1236,29 +1245,26 @@ class SubledgerSubcategoryBreakdownView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        taxonomy_entries = JournalEntry.objects.filter(debit__gt=0)
+        sub_clean = subcategory_name.strip()
 
-        total_taxonomy_debit = Decimal("0.00")
-        for entry in taxonomy_entries.iterator():
-            snapshot = entry.evaluation_matrix_snapshot or {}
-            if (
-                isinstance(snapshot, dict)
-                and snapshot.get("resolved_subcategory") == subcategory_name
-            ):
-                total_taxonomy_debit += entry.debit
-
-        assets = (
-            AssetSubLedger.objects.filter(
-                asset_category__default_taxonomy_subcategory=subcategory_name
-            )
-            .select_related("vendor", "asset_category")
-            .prefetch_related("operational_accounts", "compliance_schedules")
+        # -------------------------------------------------------------
+        # 🟢 1. ROBUST ASSET MATCHING (Verified schema fields only)
+        # -------------------------------------------------------------
+        asset_filter = (
+            Q(category__icontains=sub_clean)
+            | Q(category__iexact=sub_clean)
+            | Q(asset_category__name__icontains=sub_clean)
+            | Q(asset_category__name__iexact=sub_clean)
+            | Q(asset_category__default_taxonomy_subcategory__icontains=sub_clean)
+            | Q(asset_category__default_taxonomy_subcategory__iexact=sub_clean)
         )
 
-        if not assets.exists():
-            assets = AssetSubLedger.objects.filter(
-                linked_gl_account__subcategory__iexact=subcategory_name
-            ).select_related("vendor", "asset_category")
+        assets = (
+            AssetSubLedger.objects.filter(asset_filter)
+            .select_related("vendor", "asset_category")
+            .prefetch_related("operational_accounts", "compliance_schedules")
+            .distinct()
+        )
 
         asset_summary_list = []
         total_subledger_mapped = Decimal("0.00")
@@ -1275,32 +1281,59 @@ class SubledgerSubcategoryBreakdownView(APIView):
                 asset.vendor.name if asset.vendor else "Independent / Uncategorized"
             )
 
+            mapped_count = AssetTransactionMapping.objects.filter(asset=asset).count()
+
             asset_summary_list.append(
                 {
                     "asset_id": str(asset.id),
                     "asset_code": asset.asset_code,
                     "name": asset.name,
-                    "acquisition_cost": float(asset.acquisition_cost),
-                    "current_valuation": float(asset.current_valuation),
+                    "acquisition_cost": float(asset.acquisition_cost or 0),
+                    "current_valuation": float(asset.current_valuation or 0),
                     "status": asset.status,
                     "mapped_transaction_total": float(mapped_total),
-                    "mapped_count": AssetTransactionMapping.objects.filter(
-                        asset=asset
-                    ).count(),
+                    "mapped_count": mapped_count,
                     "vendor": vendor_id,
                     "vendor_id": vendor_id,
                     "vendor_name": vendor_name,
                     "vendor_detail": (
-                        {
-                            "id": vendor_id,
-                            "name": vendor_name,
-                        }
-                        if asset.vendor
-                        else None
+                        {"id": vendor_id, "name": vendor_name} if asset.vendor else None
                     ),
                 }
             )
 
+        # -------------------------------------------------------------
+        # 🟢 2. ROBUST GL TAXONOMY BALANCE CALCULATION
+        # -------------------------------------------------------------
+        gl_filter = (
+            Q(evaluation_matrix_snapshot__resolved_subcategory__iexact=sub_clean)
+            | Q(remarks__target_account_name__iexact=sub_clean)
+            | Q(remarks__subcategory__iexact=sub_clean)
+        )
+
+        mapped_row_ids = list(
+            AssetTransactionMapping.objects.filter(asset__in=assets).values_list(
+                "row_identifier", flat=True
+            )
+        )
+
+        if mapped_row_ids:
+            gl_filter |= Q(row_identifier__in=mapped_row_ids)
+
+        Account = apps.get_model("ledger", "Account")
+        bank_account_ids = list(
+            Account.objects.filter(
+                Q(bank__isnull=False)
+                | (~Q(account_number="") & Q(account_number__isnull=False))
+                | (~Q(ifsc_code="") & Q(ifsc_code__isnull=False))
+            ).values_list("id", flat=True)
+        )
+
+        taxonomy_agg = JournalEntry.objects.filter(gl_filter, debit__gt=0).aggregate(
+            total=Sum("debit"), count=Count("row_identifier", distinct=True)
+        )
+
+        total_taxonomy_debit = taxonomy_agg["total"] or Decimal("0.00")
         variance = total_taxonomy_debit - total_subledger_mapped
 
         return Response(
@@ -1314,3 +1347,98 @@ class SubledgerSubcategoryBreakdownView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+# class SubledgerSubcategoryBreakdownView(APIView):
+#     """GET /api/v1/subledgers/subcategory-breakdown/?subcategory=Real%20Estate
+
+#     Drills into a specific taxonomy subcategory to evaluate total balance,
+#     mapped subledger amounts, variance, and list all assigned asset instances.
+#     """
+
+#     def get(self, request):
+#         subcategory_name = request.query_params.get("subcategory")
+#         if not subcategory_name:
+#             return Response(
+#                 {"error": "Query parameter 'subcategory' is required."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         taxonomy_entries = JournalEntry.objects.filter(debit__gt=0)
+
+#         total_taxonomy_debit = Decimal("0.00")
+#         for entry in taxonomy_entries.iterator():
+#             snapshot = entry.evaluation_matrix_snapshot or {}
+#             if (
+#                 isinstance(snapshot, dict)
+#                 and snapshot.get("resolved_subcategory") == subcategory_name
+#             ):
+#                 total_taxonomy_debit += entry.debit
+
+#         assets = (
+#             AssetSubLedger.objects.filter(
+#                 asset_category__default_taxonomy_subcategory=subcategory_name
+#             )
+#             .select_related("vendor", "asset_category")
+#             .prefetch_related("operational_accounts", "compliance_schedules")
+#         )
+
+#         if not assets.exists():
+#             assets = AssetSubLedger.objects.filter(
+#                 linked_gl_account__subcategory__iexact=subcategory_name
+#             ).select_related("vendor", "asset_category")
+
+#         asset_summary_list = []
+#         total_subledger_mapped = Decimal("0.00")
+
+#         for asset in assets:
+#             mapped_total = AssetTransactionMapping.objects.filter(
+#                 asset=asset
+#             ).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+#             total_subledger_mapped += mapped_total
+
+#             vendor_id = str(asset.vendor.id) if asset.vendor else None
+#             vendor_name = (
+#                 asset.vendor.name if asset.vendor else "Independent / Uncategorized"
+#             )
+
+#             asset_summary_list.append(
+#                 {
+#                     "asset_id": str(asset.id),
+#                     "asset_code": asset.asset_code,
+#                     "name": asset.name,
+#                     "acquisition_cost": float(asset.acquisition_cost),
+#                     "current_valuation": float(asset.current_valuation),
+#                     "status": asset.status,
+#                     "mapped_transaction_total": float(mapped_total),
+#                     "mapped_count": AssetTransactionMapping.objects.filter(
+#                         asset=asset
+#                     ).count(),
+#                     "vendor": vendor_id,
+#                     "vendor_id": vendor_id,
+#                     "vendor_name": vendor_name,
+#                     "vendor_detail": (
+#                         {
+#                             "id": vendor_id,
+#                             "name": vendor_name,
+#                         }
+#                         if asset.vendor
+#                         else None
+#                     ),
+#                 }
+#             )
+
+#         variance = total_taxonomy_debit - total_subledger_mapped
+
+#         return Response(
+#             {
+#                 "taxonomy_subcategory": subcategory_name,
+#                 "total_taxonomy_balance": float(total_taxonomy_debit),
+#                 "total_subledger_mapped": float(total_subledger_mapped),
+#                 "unmapped_variance": float(variance),
+#                 "asset_count": len(asset_summary_list),
+#                 "assets": asset_summary_list,
+#             },
+#             status=status.HTTP_200_OK,
+#         )

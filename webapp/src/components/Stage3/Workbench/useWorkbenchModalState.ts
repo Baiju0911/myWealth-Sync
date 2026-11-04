@@ -417,7 +417,13 @@ export function useWorkbenchModalState({
 
     try {
       const appliedTxnIds = [...selectedSummary.allTxnIds];
-      const folioIdToBind = selectedSubledgerFolioId;
+
+      // 🛡️ Resolve clean identifier if composite string was provided (e.g. "[EXP-SUNH-008] SUN MEDANATA MMC")
+      let folioIdToBind = selectedSubledgerFolioId;
+      const bracketMatch = folioIdToBind?.match(/\[(.*?)\]/);
+      const cleanFolioCode = bracketMatch
+        ? bracketMatch[1].trim()
+        : folioIdToBind;
 
       const data = await applyReclassification({
         transaction_ids: appliedTxnIds,
@@ -446,24 +452,33 @@ export function useWorkbenchModalState({
 
           // Fetch asset info for immediate optimistic badge display
           try {
-            const assetObj = await subledgerApi.getAssetById(folioIdToBind);
+            // If backend returns the verified UUID or asset code in response
+            const targetIdForLookup =
+              data.subledger_asset_id || data.asset_id || folioIdToBind;
+            const assetObj = await subledgerApi.getAssetById(targetIdForLookup);
             boundAssetMeta = assetObj;
           } catch {
-            boundAssetMeta = { id: folioIdToBind, asset_code: 'FLT' };
+            boundAssetMeta = {
+              id: folioIdToBind,
+              asset_code: cleanFolioCode || 'FLT',
+            };
           }
 
-          for (const item of selectedItems) {
-            await subledgerApi.bindTransaction({
-              asset_id: folioIdToBind,
-              row_identifier: item.row_identifier || item.id,
-              transaction_date:
-                item.transaction_date ||
-                item.date ||
-                new Date().toISOString().split('T')[0],
-              amount: Number(item.debit || item.credit || item.amount || 0),
-              transaction_purpose: 'OPERATING_SPEND',
-              user_note: `Classified & Bound via Workbench (${selectedSubcategory})`,
-            });
+          // If backend already bound it in apply_reclassification_and_learn, skip manual re-bind
+          if (!data.subledger_bound) {
+            for (const item of selectedItems) {
+              await subledgerApi.bindTransaction({
+                asset_id: boundAssetMeta?.id || folioIdToBind,
+                row_identifier: item.row_identifier || item.id,
+                transaction_date:
+                  item.transaction_date ||
+                  item.date ||
+                  new Date().toISOString().split('T')[0],
+                amount: Number(item.debit || item.credit || item.amount || 0),
+                transaction_purpose: 'OPERATING_SPEND',
+                user_note: `Classified & Bound via Workbench (${selectedSubcategory})`,
+              });
+            }
           }
           clearSubledgerBreakdownCache(selectedSubcategory);
         } catch (bindErr) {

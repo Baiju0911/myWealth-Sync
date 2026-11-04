@@ -10,6 +10,7 @@ from django.db import transaction
 from collections import Counter
 from django.core.paginator import Paginator
 from decimal import Decimal
+from django.apps import apps
 
 from urllib.parse import parse_qs, unquote
 from django.http import JsonResponse
@@ -234,41 +235,47 @@ class CategoryVendorDrilldownView(views.APIView):
         )
 
 
-# @api_view(["GET"])
-# def get_suspense_workbench_data(request):
-#     target_sub = request.GET.get("subcategory", "Suspense Account")
-#     account_id_param = request.GET.get("account_id")
-#     search_query = request.GET.get("q") or request.GET.get("search")
+def enrich_items_with_subledger_mappings(items):
+    if not items:
+        return items
 
-#     include_cleared_param = request.GET.get("include_cleared")
-#     if include_cleared_param is not None:
-#         include_cleared = include_cleared_param.lower() in ["true", "1", "yes"]
-#     else:
-#         include_cleared = target_sub != "Suspense Account"
+    # Collect both row_identifier and id for mapping checks
+    identifiers = set()
+    for item in items:
+        row_id = item.get("row_identifier")
+        entry_id = item.get("id")
+        if row_id:
+            identifiers.add(str(row_id))
+        if entry_id:
+            identifiers.add(str(entry_id))
 
-#     account_id = (
-#         int(account_id_param)
-#         if account_id_param and account_id_param.isdigit()
-#         else None
-#     )
+    if not identifiers:
+        return items
 
-#     clusters = get_suspense_clusters(
-#         target_subcategory=target_sub,
-#         account_id=account_id,
-#         search_query=search_query,
-#         include_cleared=include_cleared,
-#     )
+    AssetTransactionMapping = apps.get_model("ledger", "AssetTransactionMapping")
 
-#     return Response(
-#         {
-#             "status": "success",
-#             "target_subcategory": target_sub,
-#             "include_cleared": include_cleared,
-#             "total_clusters": len(clusters),
-#             "clusters": clusters,
-#         },
-#         status=status.HTTP_200_OK,
-#     )
+    mappings = {
+        m.row_identifier: {
+            "asset_id": str(m.asset.id),
+            "asset_code": m.asset.asset_code,
+            "asset_name": m.asset.name,
+            "is_cash_float": any(
+                term in (m.asset.category or "").upper()
+                or term in str(getattr(m.asset, "linked_gl_account", "")).upper()
+                for term in ["CASH", "FLOAT", "PETTY"]
+            ),
+        }
+        for m in AssetTransactionMapping.objects.filter(
+            row_identifier__in=identifiers
+        ).select_related("asset")
+    }
+
+    for item in items:
+        row_id = str(item.get("row_identifier") or "")
+        entry_id = str(item.get("id") or "")
+        item["subledger_mapping"] = mappings.get(row_id) or mappings.get(entry_id)
+
+    return items
 
 
 @api_view(["GET"])
@@ -348,81 +355,17 @@ def get_cluster_line_items(request):
 
     items = fetch_cluster_line_items(entry_ids)
 
+    # 🎯 Enrich items with their subledger folio linkage (Petty cash, Asset folio, etc.)
+    enriched_items = enrich_items_with_subledger_mappings(items)
+
     return Response(
         {
             "status": "success",
-            "count": len(items),
-            "items": items,
+            "count": len(enriched_items),
+            "items": enriched_items,
         },
         status=status.HTTP_200_OK,
     )
-
-
-# @api_view(["POST"])
-# def get_cluster_line_items(request):
-#     """
-#     Lazy fetch endpoint. Called on-demand when an accordion is expanded.
-#     """
-#     entry_ids = request.data.get("entry_ids") or request.data.get("transaction_ids", [])
-
-#     if not entry_ids:
-#         return Response(
-#             {
-#                 "status": "success",
-#                 "count": 0,
-#                 "items": [],
-#             },
-#             status=status.HTTP_200_OK,
-#         )
-
-#     items = fetch_cluster_line_items(entry_ids)
-
-#     return Response(
-#         {
-#             "status": "success",
-#             "count": len(items),
-#             "items": items,
-#         },
-#         status=status.HTTP_200_OK,
-#     )
-
-
-# @api_view(["POST"])
-# def apply_reclassification_and_learn(request):
-#     transaction_ids = (
-#         request.data.get("transaction_ids")
-#         or request.data.get("row_identifiers")
-#         or request.data.get("ids")
-#         or []
-#     )
-#     target_category = request.data.get("target_category")
-#     target_subcategory = request.data.get("target_subcategory")
-
-#     patterns = request.data.get("patterns", [])
-#     single_pattern = request.data.get("pattern")
-
-#     if not patterns and single_pattern:
-#         patterns = [single_pattern]
-
-#     save_rule = request.data.get("save_rule", True)
-
-#     if not transaction_ids or not target_category or not target_subcategory:
-#         return Response(
-#             {
-#                 "error": "transaction_ids (or row_identifiers), target_category, and target_subcategory are required."
-#             },
-#             status=status.HTTP_400_BAD_REQUEST,
-#         )
-
-#     result = reclassify_and_learn(
-#         transaction_ids=transaction_ids,
-#         target_category=target_category,
-#         target_subcategory=target_subcategory,
-#         patterns=patterns,
-#         save_rule=save_rule,
-#     )
-
-#     return Response(result, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
@@ -467,6 +410,8 @@ def apply_reclassification_and_learn(request):
     # 🎯 3. If the user intentionally chose a Subledger Folio (e.g. Petty Cash Float), bind it!
     if subledger_asset_id:
         try:
+            import uuid
+            import re
             from django.apps import apps
 
             AssetSubLedger = apps.get_model("ledger", "AssetSubLedger")
@@ -474,7 +419,32 @@ def apply_reclassification_and_learn(request):
                 "ledger", "AssetTransactionMapping"
             )
 
-            target_asset = AssetSubLedger.objects.filter(id=subledger_asset_id).first()
+            raw_identifier = str(subledger_asset_id).strip()
+            target_asset = None
+
+            # 1. Try UUID lookup
+            try:
+                valid_uuid = uuid.UUID(raw_identifier)
+                target_asset = AssetSubLedger.objects.filter(id=valid_uuid).first()
+            except (ValueError, TypeError, AttributeError):
+                pass
+
+            # 2. Try bracketed asset_code extraction e.g. "[EXP-SUNH-008] SUN MEDANATA MMC"
+            if not target_asset:
+                code_match = re.search(r"\[(.*?)\]", raw_identifier)
+                extracted_code = (
+                    code_match.group(1).strip() if code_match else raw_identifier
+                )
+
+                target_asset = (
+                    AssetSubLedger.objects.filter(
+                        asset_code__iexact=extracted_code
+                    ).first()
+                    or AssetSubLedger.objects.filter(
+                        name__iexact=raw_identifier
+                    ).first()
+                )
+
             if target_asset:
                 # Query the journal entries that were just reclassified
                 entries_to_map = JournalEntry.objects.filter(
@@ -507,6 +477,15 @@ def apply_reclassification_and_learn(request):
                 result["subledger_bound"] = True
                 result["subledger_asset_code"] = target_asset.asset_code
                 result["mappings_created"] = created_mappings
+            else:
+                logger.warning(
+                    f"Subledger entity could not be resolved for identifier: '{subledger_asset_id}'"
+                )
+                result["subledger_bound"] = False
+                result["subledger_error"] = (
+                    f"Subledger '{subledger_asset_id}' not found"
+                )
+
         except Exception as e:
             logger.error(
                 f"Failed to attribute transactions to subledger {subledger_asset_id}: {e}"
@@ -533,23 +512,6 @@ def get_taxonomy_nodes_Assetview(request):
     ]
 
     return Response({"status": "success", "taxonomy": taxonomy_data})
-
-
-# @api_view(["GET"])
-# def get_taxonomy_tree_view(request):
-#     nodes = TaxonomyTree.objects.filter(is_active=True)
-
-#     tree_dict = {}
-#     for node in nodes:
-#         if node.category not in tree_dict:
-#             tree_dict[node.category] = []
-#         tree_dict[node.category].append(node.subcategory)
-
-#     taxonomy_data = [
-#         {"category": cat, "subcategories": subs} for cat, subs in tree_dict.items()
-#     ]
-
-#     return Response({"status": "success", "taxonomy": taxonomy_data})
 
 
 @api_view(["GET"])
@@ -678,75 +640,6 @@ def preview_pattern_matches(request):
 
 
 REF_HASH_REGEX = re.compile(r"^[A-Z0-9]{9,}$")
-
-
-# @api_view(["POST"])
-# def validate_pattern_anchor(request):
-#     raw_pattern = request.data.get("pattern", "").strip().upper()
-
-#     if not raw_pattern:
-#         return Response(
-#             {
-#                 "status": "CATASTROPHIC",
-#                 "is_valid": False,
-#                 "clean_pattern": "",
-#                 "message": "Pattern anchor cannot be empty.",
-#             }
-#         )
-
-#     if len(raw_pattern) < 2:
-#         return Response(
-#             {
-#                 "status": "CATASTROPHIC",
-#                 "is_valid": False,
-#                 "clean_pattern": raw_pattern,
-#                 "message": "🛑 Pattern must be at least 2 characters long.",
-#             }
-#         )
-
-#     if raw_pattern in CATASTROPHIC_KEYWORDS:
-#         return Response(
-#             {
-#                 "status": "CATASTROPHIC",
-#                 "is_valid": False,
-#                 "clean_pattern": raw_pattern,
-#                 "message": f"🛑 '{raw_pattern}' is a generic system keyword.",
-#             }
-#         )
-
-#     if REF_HASH_REGEX.match(raw_pattern) and any(
-#         char.isdigit() for char in raw_pattern
-#     ):
-#         return Response(
-#             {
-#                 "status": "BAD",
-#                 "is_valid": True,
-#                 "clean_pattern": raw_pattern,
-#                 "message": f"⚠️ '{raw_pattern}' looks like a temporary UPI/RRN reference hash.",
-#             }
-#         )
-
-#     clean_pattern = re.sub(r"[^A-Z0-9\s]", " ", raw_pattern)
-#     clean_pattern = re.sub(r"\s+", " ", clean_pattern).strip()
-
-#     if clean_pattern != raw_pattern:
-#         return Response(
-#             {
-#                 "status": "BAD",
-#                 "is_valid": True,
-#                 "clean_pattern": clean_pattern,
-#                 "message": f"💡 Special characters detected. Auto-normalized to '{clean_pattern}'.",
-#             }
-#         )
-
-#     return Response(
-#         {
-#             "status": "GOOD",
-#             "is_valid": True,
-#             "clean_pattern": clean_pattern,
-#             "message": f"🟢 Excellent vendor anchor! Ready to auto-match future transactions.",
-#         }
-#     )
 
 
 @api_view(["POST"])
@@ -928,119 +821,6 @@ def bulk_remove_patterns_from_rules(request):
 
     except Exception as e:
         return Response({"status": "error", "message": str(e)}, status=500)
-
-
-# @api_view(["GET"])
-# def sweep_preview_summary(request):
-#     base_qs = JournalEntry.objects.filter(account_id=99, is_reclassified=False)
-
-#     unclassified_entries = list(
-#         base_qs.values(
-#             "id",
-#             "debit",
-#             "credit",
-#             "remarks__payee",
-#             "remarks__narration",
-#             "remarks__display_text",
-#             "evaluation_matrix_snapshot__resolved_subcategory",
-#         )
-#     )
-
-#     total_unclassified = len(unclassified_entries)
-#     if total_unclassified == 0:
-#         return Response({"status": "success", "rule_matches": []})
-
-#     processed_pool = []
-#     for entry in unclassified_entries:
-#         debit_val = float(entry["debit"] or 0.0)
-#         credit_val = float(entry["credit"] or 0.0)
-
-#         payee = (entry.get("remarks__payee") or "").upper()
-#         narration = (entry.get("remarks__narration") or "").upper()
-#         display_text = (entry.get("remarks__display_text") or "").upper()
-
-#         search_haystack = f"{payee} {narration} {display_text}"
-
-#         processed_pool.append(
-#             {
-#                 "id": entry["id"],
-#                 "debit": debit_val,
-#                 "credit": credit_val,
-#                 "total_amount": debit_val + credit_val,
-#                 "haystack": search_haystack,
-#             }
-#         )
-
-#     active_rules = ClassificationRule.objects.filter(is_active=True).order_by(
-#         "-priority"
-#     )
-
-#     rule_matches = []
-#     seen_patterns = set()
-#     claimed_entry_ids = set()
-
-#     for rule in active_rules:
-#         raw_patterns = (
-#             rule.get_patterns() if hasattr(rule, "get_patterns") else rule.patterns
-#         )
-
-#         if not raw_patterns:
-#             continue
-
-#         patterns_list = sorted(
-#             list(raw_patterns), key=lambda p: (-len(p.split()), -len(p))
-#         )
-#         rule_type = (
-#             rule.rule_type.lower()
-#             if hasattr(rule, "rule_type") and rule.rule_type
-#             else None
-#         )
-
-#         for pattern_str in patterns_list:
-#             if not pattern_str or pattern_str in seen_patterns:
-#                 continue
-
-#             clean_search_str = pattern_str.lstrip("#").strip().upper()
-#             if len(clean_search_str) < 2:
-#                 continue
-
-#             matched_count = 0
-#             matched_amount = 0.0
-#             new_claimed_ids = []
-
-#             for row in processed_pool:
-#                 if row["id"] in claimed_entry_ids:
-#                     continue
-
-#                 if rule_type == "debit" and row["debit"] <= 0:
-#                     continue
-#                 if rule_type == "credit" and row["credit"] <= 0:
-#                     continue
-
-#                 if clean_search_str in row["haystack"]:
-#                     matched_count += 1
-#                     matched_amount += row["total_amount"]
-#                     new_claimed_ids.append(row["id"])
-
-#             if matched_count > 0:
-#                 claimed_entry_ids.update(new_claimed_ids)
-#                 seen_patterns.add(pattern_str)
-
-#                 rule_matches.append(
-#                     {
-#                         "pattern": pattern_str,
-#                         "display_tag": f"#{pattern_str}",
-#                         "token_breakdown": [clean_search_str],
-#                         "matched_rows": matched_count,
-#                         "total_amount": round(matched_amount, 2),
-#                         "suggested_category": rule.target_category,
-#                         "suggested_subcategory": rule.target_subcategory,
-#                         "rule_code": rule.rule_code,
-#                         "matched_entry_ids": new_claimed_ids,
-#                     }
-#                 )
-
-#     return Response({"status": "success", "rule_matches": rule_matches})
 
 
 @api_view(["GET"])
@@ -1338,189 +1118,6 @@ def execute_bulk_sweep(request):
     print("=" * 80 + "\n")
 
     return Response({"status": "success", "total_reclassified": total_updated})
-
-
-# def extract_candidate_patterns_from_narrations(
-#     narrations: list[str], max_selectable: int = 15
-# ) -> dict:
-#     """
-#     Extracts high-precision candidate patterns from raw narrations/payees.
-#     Generates multi-word n-grams (2-grams, 3-grams), full normalized phrases,
-#     and distinct brand tokens so the user has optimal multi-selection options.
-#     """
-#     if not narrations:
-#         return {"selectable_patterns": [], "disabled_patterns": []}
-
-#     candidate_counter = Counter()
-#     disabled_tokens = set()
-
-#     for raw_text in narrations:
-#         if not raw_text:
-#             continue
-
-#         raw_str = str(raw_text).upper().strip()
-
-#         clean_str = re.sub(r"[^A-Z0-9\s]", " ", raw_str)
-#         clean_str = re.sub(r"\s+", " ", clean_str).strip()
-
-#         if not clean_str:
-#             continue
-
-#         tokens = clean_str.split()
-
-#         valid_tokens = []
-#         for token in tokens:
-#             if token in NOISE_KEYWORD_BLACKLIST or token in RULE_SAFETY_BLACKLIST:
-#                 disabled_tokens.add(token)
-#                 continue
-
-#             if token.isdigit() or len(token) > 25:
-#                 continue
-
-#             valid_tokens.append(token)
-
-#         if 2 <= len(valid_tokens) <= 4:
-#             full_compound = " ".join(valid_tokens)
-#             if len(full_compound) >= 4:
-#                 candidate_counter[full_compound] += 3
-
-#         for i in range(len(valid_tokens) - 2):
-#             gram_3 = f"{valid_tokens[i]} {valid_tokens[i+1]} {valid_tokens[i+2]}"
-#             candidate_counter[gram_3] += 2
-
-#         for i in range(len(valid_tokens) - 1):
-#             gram_2 = f"{valid_tokens[i]} {valid_tokens[i+1]}"
-#             candidate_counter[gram_2] += 2
-
-#         for token in valid_tokens:
-#             if len(token) >= 4:
-#                 candidate_counter[token] += 1
-
-#     sorted_candidates = sorted(
-#         candidate_counter.keys(),
-#         key=lambda p: (-candidate_counter[p], -len(p.split()), -len(p)),
-#     )
-
-#     selectable = sorted_candidates[:max_selectable]
-#     disabled = sorted(list(disabled_tokens))[:10]
-
-#     return {
-#         "selectable_patterns": selectable,
-#         "disabled_patterns": disabled,
-#     }
-
-
-# @api_view(["POST"])
-# def get_candidate_patterns_view(request):
-#     transaction_ids = request.data.get("transaction_ids", [])
-
-#     if not transaction_ids:
-#         return JsonResponse({"selectable_patterns": [], "disabled_patterns": []})
-
-#     entries = JournalEntry.objects.filter(id__in=transaction_ids)
-#     if not entries.exists():
-#         entries = JournalEntry.objects.filter(row_identifier__in=transaction_ids)
-
-#     narrations = []
-#     for entry in entries:
-#         remarks_dict = entry.remarks if isinstance(entry.remarks, dict) else {}
-#         narration = remarks_dict.get("narration") or str(entry.remarks or "")
-#         payee = remarks_dict.get("payee") or ""
-
-#         if payee:
-#             narrations.append(payee)
-#         if narration:
-#             narrations.append(narration)
-
-#     result = extract_candidate_patterns_from_narrations(narrations, max_selectable=15)
-#     return JsonResponse(result)
-
-
-# @api_view(["POST"])
-# def get_candidate_patterns_view(request):
-#     transaction_ids = request.data.get("transaction_ids", [])
-#     if not transaction_ids:
-#         return Response(
-#             {"selectable_patterns": [], "disabled_patterns": []},
-#             status=status.HTTP_200_OK,
-#         )
-
-#     entries = JournalEntry.objects.filter(id__in=transaction_ids).only(
-#         "remarks", "row_identifier"
-#     )
-
-#     # Staging lookup for clean raw narration
-#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
-#     staging_map = dict(
-#         StatementStagingLine.objects.filter(row_identifier__in=row_ids).values_list(
-#             "row_identifier", "narration"
-#         )
-#     )
-
-#     narrations = []
-#     for entry in entries:
-#         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
-#         # Priority: payee -> staging raw narration -> remarks universal_narration
-#         narr = (
-#             rem.get("payee")
-#             or staging_map.get(entry.row_identifier)
-#             or rem.get("universal_narration")
-#             or ""
-#         )
-#         if narr:
-#             narrations.append(narr)
-
-#     result = extract_candidate_patterns_from_narrations(narrations)
-#     return Response(result, status=status.HTTP_200_OK)
-
-
-# @api_view(["POST"])
-# def get_candidate_patterns_view(request):
-#     transaction_ids = request.data.get("transaction_ids", [])
-#     if not transaction_ids:
-#         return Response(
-#             {"selectable_patterns": [], "disabled_patterns": []},
-#             status=status.HTTP_200_OK,
-#         )
-
-#     entries = JournalEntry.objects.filter(id__in=transaction_ids).only(
-#         "remarks", "row_identifier"
-#     )
-
-#     # 1. Fetch staging lines as model instances so cached properties & extractors work
-#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
-#     staging_lines = StatementStagingLine.objects.filter(row_identifier__in=row_ids)
-
-#     # Map row_identifier -> clean resolved display payee (NOT raw DB narration)
-#     staging_map = {
-#         line.row_identifier: line.display_payee
-#         for line in staging_lines
-#         if line.row_identifier
-#     }
-
-#     narrations = []
-#     for entry in entries:
-#         rem = entry.remarks if isinstance(entry.remarks, dict) else {}
-
-#         # Clean payee resolution hierarchy:
-#         clean_payee = rem.get("payee")
-#         if not clean_payee or "Dear Customer" in clean_payee or "UTR" in clean_payee:
-#             clean_payee = None
-
-#         narr = (
-#             clean_payee
-#             or staging_map.get(entry.row_identifier)
-#             or rem.get("universal_narration")
-#             or ""
-#         )
-
-#         # Final safety cleanup pass on the pattern input
-#         if narr:
-#             narr = UniversalNarrationExtractor.clean_boilerplate_header(narr)
-#             narrations.append(narr)
-
-#     result = extract_candidate_patterns_from_narrations(narrations)
-#     return Response(result, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])

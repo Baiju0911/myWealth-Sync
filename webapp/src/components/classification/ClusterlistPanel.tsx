@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import type { ExtendedCluster, Cluster } from '../../api/api';
 import { updateEntryUserNote } from '../../api/api';
@@ -30,6 +29,12 @@ interface Props {
   toggleClusterTxns: (clusterTxnIds: string[], e: React.MouseEvent) => void;
   toggleSelectAllVisible: () => void;
   clearAllSelections: () => void;
+  lastAppliedMapping?: {
+    txnIds: string[];
+    asset_id?: string | number;
+    asset_code?: string;
+    asset_name?: string;
+  } | null;
 }
 
 export const ClusterListPanel: React.FC<Props> = ({
@@ -45,8 +50,14 @@ export const ClusterListPanel: React.FC<Props> = ({
   toggleClusterTxns,
   toggleSelectAllVisible,
   clearAllSelections,
+  lastAppliedMapping,
 }) => {
-  const [remarksModalItem, setRemarksModalItem] = useState<{ id: string; narration?: string; remarks?: any } | null>(null);
+  const [remarksModalItem, setRemarksModalItem] = useState<{
+    id: string;
+    narration?: string;
+    remarks?: any;
+    subledger_mapping?: any;
+  } | null>(null);
   const [userNoteInput, setUserNoteInput] = useState<string>('');
   const [savingNote, setSavingNote] = useState<boolean>(false);
 
@@ -93,6 +104,8 @@ export const ClusterListPanel: React.FC<Props> = ({
     setExpandedClusterKeys(collapsedMap);
   };
 
+  
+
   const handleOpenInspectionModal = (item: any) => {
     setRemarksModalItem(item);
     const parsed = parseRemarks(item.remarks);
@@ -120,6 +133,22 @@ export const ClusterListPanel: React.FC<Props> = ({
     } finally {
       setSavingNote(false);
     }
+  };
+
+  // Helper to resolve mapping with optimistic overlay
+  const resolveItemMapping = (item: any) => {
+    if (
+      lastAppliedMapping &&
+      lastAppliedMapping.txnIds.includes(String(item.id || item.row_identifier))
+    ) {
+      return {
+        asset_id: lastAppliedMapping.asset_id,
+        asset_code: lastAppliedMapping.asset_code,
+        asset_name: lastAppliedMapping.asset_name,
+        is_cash_float: String(lastAppliedMapping.asset_code || '').includes('FLT'),
+      };
+    }
+    return item.subledger_mapping || item.mapping_info || null;
   };
 
   // 💡 Sub-group raw cluster items by clean vendor name AND direction (IN vs OUT), sorted Max to Min Count
@@ -161,7 +190,6 @@ export const ClusterListPanel: React.FC<Props> = ({
       groupsMap[groupKey].totalAmount += item.amount || item.debit || item.credit || 0;
     });
 
-    // 💡 SORTING LOGIC: Max items to Min items (Fallback to Max totalAmount if item counts tie)
     return Object.values(groupsMap).sort((a, b) => {
       if (b.items.length !== a.items.length) {
         return b.items.length - a.items.length;
@@ -395,7 +423,6 @@ export const ClusterListPanel: React.FC<Props> = ({
                                 {vGroup.items.map((item, itemIdx) => {
                                   const isItemChecked = selectedTxnIds.includes(item.id);
 
-                                  // 💡 BULLETPROOF DIRECTION DETECTION
                                   const isOutflow = (() => {
                                     const dirStr = (item.direction || item.vector_type || item.entry_type || '').toUpperCase();
                                     if (dirStr === 'OUTFLOW' || dirStr === 'DEBIT' || dirStr === 'DR') return true;
@@ -416,6 +443,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                                   const itemKey = item.id ? `item-${item.id}` : `item-idx-${clusterIdx}-${vIdx}-${itemIdx}`;
                                   const remarksObj = parseRemarks(item.remarks);
                                   const userRemark = extractUpiRemark(item.narration);
+                                  const subledgerMap = resolveItemMapping(item);
 
                                   return (
                                     <div
@@ -424,7 +452,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                                       style={{
                                         display: 'flex',
                                         flexDirection: 'column',
-                                        gap: '2px',
+                                        gap: '3px',
                                         padding: '5px 8px',
                                         borderRadius: '4px',
                                         backgroundColor: isItemChecked ? '#27272a' : '#09090b',
@@ -465,7 +493,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                                             overflow: 'hidden',
                                             textOverflow: 'ellipsis',
                                             fontFamily: 'monospace',
-                                            color: '#71717a',
+                                            color: '#d4d4d8',
                                           }}
                                           title={item.narration}
                                         >
@@ -479,46 +507,81 @@ export const ClusterListPanel: React.FC<Props> = ({
                                         </span>
                                       </div>
 
-                                      {/* Remarks Badges & Inspection Trigger */}
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '21px', fontSize: '9px' }}>
-                                        {remarksObj.upi_ref && (
-                                          <span style={{ backgroundColor: '#18181b', color: '#a1a1aa', padding: '1px 4px', borderRadius: '3px', border: '1px solid #27272a', fontFamily: 'monospace' }}>
-                                            Ref: {remarksObj.upi_ref}
-                                          </span>
-                                        )}
+                                      {/* Subledger Destination Badge & Metadata Row */}
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginLeft: '21px', fontSize: '9px', marginTop: '2px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                          {/* 🎯 Subledger / Cash Float Attribution Badge */}
+                                          {subledgerMap ? (
+                                            <span
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '3px',
+                                                backgroundColor: subledgerMap.is_cash_float ? '#451a03' : '#064e3b',
+                                                color: subledgerMap.is_cash_float ? '#fcd34d' : '#6ee7b7',
+                                                border: `1px solid ${subledgerMap.is_cash_float ? '#b45309' : '#047857'}`,
+                                                padding: '1px 5px',
+                                                borderRadius: '3px',
+                                                fontWeight: 'bold',
+                                                fontFamily: 'monospace',
+                                                fontSize: '8.5px',
+                                              }}
+                                              title={`Mapped to ${subledgerMap.asset_name || 'Subledger Folio'}`}
+                                            >
+                                              <span>{subledgerMap.is_cash_float ? '💵' : '🏬'}</span>
+                                              <span>[{subledgerMap.asset_code || 'FOLIO'}]</span>
+                                              <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {subledgerMap.asset_name}
+                                              </span>
+                                            </span>
+                                          ) : (
+                                            <span style={{ color: '#52525b', fontSize: '8.5px', fontFamily: 'monospace' }}>
+                                              Direct GL
+                                            </span>
+                                          )}
 
-                                        {userRemark && (
-                                          <span
-                                            style={{
-                                              backgroundColor: '#064e3b',
-                                              color: '#34d399',
-                                              padding: '1px 6px',
-                                              borderRadius: '3px',
-                                              border: '1px solid #047857',
-                                              fontWeight: 'bold',
-                                              fontSize: '8px',
-                                              textTransform: 'uppercase',
-                                            }}
-                                            title={`Detected user remark: ${userRemark}`}
-                                          >
-                                            🏷️ {userRemark}
-                                          </span>
-                                        )}
+                                          {remarksObj.upi_ref && (
+                                            <span style={{ backgroundColor: '#18181b', color: '#a1a1aa', padding: '1px 4px', borderRadius: '3px', border: '1px solid #27272a', fontFamily: 'monospace' }}>
+                                              Ref: {remarksObj.upi_ref}
+                                            </span>
+                                          )}
+
+                                          {userRemark && (
+                                            <span
+                                              style={{
+                                                backgroundColor: '#064e3b',
+                                                color: '#34d399',
+                                                padding: '1px 6px',
+                                                borderRadius: '3px',
+                                                border: '1px solid #047857',
+                                                fontWeight: 'bold',
+                                                fontSize: '8px',
+                                                textTransform: 'uppercase',
+                                              }}
+                                              title={`Detected user remark: ${userRemark}`}
+                                            >
+                                              🏷️ {userRemark}
+                                            </span>
+                                          )}
+                                        </div>
 
                                         <button
                                           type="button"
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setActivePreviewCluster(cluster);
-                                            handleOpenInspectionModal(item);
+                                            handleOpenInspectionModal({
+                                              ...item,
+                                              subledger_mapping: subledgerMap,
+                                            });
                                           }}
                                           style={{
                                             backgroundColor: '#27272a',
                                             color: '#f59e0b',
                                             border: '1px solid #3f3f46',
                                             borderRadius: '3px',
-                                            padding: '1px 4px',
-                                            fontSize: '8px',
+                                            padding: '1px 5px',
+                                            fontSize: '8.5px',
                                             cursor: 'pointer',
                                             fontWeight: 'bold',
                                           }}
@@ -574,7 +637,7 @@ export const ClusterListPanel: React.FC<Props> = ({
               border: '1px solid #3f3f46',
               borderRadius: '12px',
               padding: '20px',
-              maxWidth: '500px',
+              maxWidth: '520px',
               width: '100%',
               color: '#f4f4f5',
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
@@ -592,6 +655,23 @@ export const ClusterListPanel: React.FC<Props> = ({
                 ✕
               </button>
             </div>
+
+            {/* Subledger Destination Status In Modal */}
+            {remarksModalItem.subledger_mapping && (
+              <div style={{ marginBottom: '12px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#09090b', border: '1px solid #27272a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold' }}>
+                  Subledger Folio Link:
+                </span>
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 'bold',
+                  color: remarksModalItem.subledger_mapping.is_cash_float ? '#fcd34d' : '#6ee7b7',
+                  fontFamily: 'monospace',
+                }}>
+                  {remarksModalItem.subledger_mapping.is_cash_float ? '💵 Cash Float' : '🏬 Folio Asset'}: [{remarksModalItem.subledger_mapping.asset_code}] {remarksModalItem.subledger_mapping.asset_name}
+                </span>
+              </div>
+            )}
 
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontWeight: 'bold', display: 'block', marginBottom: '2px' }}>
@@ -648,4 +728,3 @@ export const ClusterListPanel: React.FC<Props> = ({
     </div>
   );
 };
-

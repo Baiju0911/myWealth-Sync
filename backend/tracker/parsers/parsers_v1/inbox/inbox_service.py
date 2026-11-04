@@ -217,7 +217,7 @@ class InboxStatementService:
         db_records = list(
             StatementStagingLine.objects.filter(account_id=account.id).values(
                 "row_identifier",
-                "narration",
+                "raw_narration",
                 "cheque_ref_number",
                 "raw_statement_date",
                 "amount",

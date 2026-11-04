@@ -491,25 +491,31 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
                   
                   {/* Category-specific folios (e.g. Real estate, Gold) */}
                   {subledgerInfo?.assets && subledgerInfo.assets.length > 0 && (
-                    <optgroup label={`${selectedSubcategory} Folios`}>
-                      {subledgerInfo.assets.map((ast: any) => (
-                        <option key={ast.id} value={ast.id}>
-                          [{ast.asset_code}] {ast.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
+  <optgroup label={`${selectedSubcategory} Folios`}>
+    {subledgerInfo.assets.map((ast: any) => {
+      const assetKey = ast.asset_id || ast.id;
+      return (
+        <option key={assetKey} value={assetKey}>
+          [{ast.asset_code}] {ast.name}
+        </option>
+      );
+    })}
+  </optgroup>
+)}
 
                   {/* Cash Float Folios (Always available to attribute expenses) */}
                   {allCashFolios.length > 0 && (
-                    <optgroup label="Operating Floats & Cash Pools">
-                      {allCashFolios.map((folio: any) => (
-                        <option key={folio.id} value={folio.id}>
-                          [{folio.asset_code}] {folio.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
+  <optgroup label="Operating Floats & Cash Pools">
+    {allCashFolios.map((folio: any) => {
+      const folioKey = folio.asset_id || folio.id;
+      return (
+        <option key={folioKey} value={folioKey}>
+          [{folio.asset_code}] {folio.name}
+        </option>
+      );
+    })}
+  </optgroup>
+)}
                 </select>
 
                 <p className="text-[10px] text-zinc-400 leading-normal">

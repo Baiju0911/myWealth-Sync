@@ -104,7 +104,7 @@ class LiveStreamEnrichmentService:
             candidate_conditions |= Q(live_upi_rrn__in=alert_rrns)
             candidate_conditions |= Q(cheque_ref_number__in=alert_rrns)
             for rrn in alert_rrns:
-                candidate_conditions |= Q(narration__icontains=rrn)
+                candidate_conditions |= Q(raw_narration__icontains=rrn)
 
         if alert_amounts:
             candidate_conditions |= Q(is_enriched_from_live=0) & Q(
@@ -229,7 +229,12 @@ class LiveStreamEnrichmentService:
         if lines_to_update:
             StatementStagingLine.objects.bulk_update(
                 lines_to_update,
-                ["is_enriched_from_live", "live_upi_rrn", "live_metadata", "narration"],
+                [
+                    "is_enriched_from_live",
+                    "live_upi_rrn",
+                    "live_metadata",
+                    "raw_narration",
+                ],
                 batch_size=MatchingRules.BULK_UPDATE_BATCH_SIZE,
             )
 
@@ -285,7 +290,7 @@ class LiveStreamEnrichmentService:
 
             ref_anchor = line.live_upi_rrn or line.cheque_ref_number
             if not ref_anchor:
-                rail_info = extract_rail_reference(line.narration or "")
+                rail_info = extract_rail_reference(line.raw_narration or "")
                 ref_anchor = rail_info.get("anchor")
 
             if ref_anchor:
@@ -426,7 +431,7 @@ class LiveStreamEnrichmentService:
 
         # 🛡️ Enforce Authoritative Merchant Hierarchy
         final_merchant = cls._resolve_clean_merchant_hierarchy(
-            statement_narration=target_line.narration or "",
+            statement_narration=target_line.raw_narration or "",
             candidate_donor_merchant=donor_merchant,
         )
 
@@ -441,7 +446,7 @@ class LiveStreamEnrichmentService:
         # 🔍 Prioritize harvested remark hint ("Bill Payment", "Fuel", etc.), fallback to statement narration
         remark = harvested.get("remark_hint")
         if not remark:
-            narration_str = target_line.narration or ""
+            narration_str = target_line.raw_narration or ""
             if narration_str.count("/") >= 4:
                 candidate_remark = narration_str.split("/")[-1].strip()
                 if candidate_remark.upper() not in {"NO REMARK", "NO REMAR", ""}:
@@ -463,14 +468,14 @@ class LiveStreamEnrichmentService:
         )
 
         # 🎯 FIX: Replace boilerplate greeting in statement line narration with clean entity
-        current_narr = target_line.narration or ""
+        current_narr = target_line.raw_narration or ""
         if (
             "Dear Customer" in current_narr
             or current_narr.strip().lower().startswith("alert:")
             or not current_narr.strip()
         ):
             if synthesized_narration:
-                target_line.narration = synthesized_narration
+                target_line.raw_narration = synthesized_narration
 
         current_meta.update(
             {
@@ -482,7 +487,7 @@ class LiveStreamEnrichmentService:
                 "matched_tier": tier_label,
                 "donor_raw_snippet": donor_snippet[:200],
                 "enriched_at": now_ts.isoformat(),
-                "original_narration": target_line.narration,
+                "original_narration": target_line.raw_narration,
                 "resolved_narration": synthesized_narration,
                 "has_amount_discrepancy": has_amount_discrepancy,
                 "smart_extra_meta": harvested.get("extra_meta"),
@@ -574,7 +579,7 @@ class LiveStreamEnrichmentService:
                 "id",
                 "live_upi_rrn",
                 "cheque_ref_number",
-                "narration",
+                "raw_narration",
                 "raw_statement_date",
                 "amount",
                 "live_metadata",

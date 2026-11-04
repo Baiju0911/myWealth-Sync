@@ -90,14 +90,15 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
             selectedTxnIds={state.selectedTxnIds}
             visibleTxnIds={state.visibleTxnIds}
             activePreviewCluster={state.activePreviewCluster}
-            searchQuery={state.searchQuery}
-            setSearchQuery={actions.setSearchQuery}
+           // searchQuery={state.searchQuery}
+           // setSearchQuery={actions.setSearchQuery}
             setActivePreviewCluster={actions.handleSelectCluster}
             toggleIndividualTxn={actions.toggleIndividualTxn}
             toggleClusterTxns={actions.toggleClusterTxns}
             toggleSelectAllVisible={actions.toggleSelectAllVisible}
             clearAllSelections={actions.clearAllSelections}
             lastAppliedMapping={state.lastAppliedMapping}
+            
           />
 
           <TaxonomyMapperPanel

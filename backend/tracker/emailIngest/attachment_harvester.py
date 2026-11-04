@@ -1,4 +1,4 @@
-# tracker/services/attachment_harvester.py
+# tracker/emailingest/attachment_harvester.py
 import base64
 import hashlib
 import json
@@ -161,15 +161,51 @@ class AttachmentHarvesterService:
 
         return None, None
 
-    def _extract_body_snippet(self, payload: dict) -> str:
+    # def _extract_body_snippet(self, payload: dict) -> str:
+    #     """Recursively extracts clean text from Gmail payload parts (plain text & HTML)."""
+    #     snippet = payload.get("snippet", "")
+    #     collected_text = [snippet]
+
+    #     def _walk_parts(parts):
+    #         for part in parts:
+    #             mime = part.get("mimeType", "").lower()
+    #             data = part.get("body", {}).get("data")
+
+    #             if data and mime in ("text/plain", "text/html"):
+    #                 try:
+    #                     raw_bytes = base64.urlsafe_b64decode(data.encode("UTF-8"))
+    #                     text = raw_bytes.decode("utf-8", errors="ignore")
+    #                     if mime == "text/html":
+    #                         text = re.sub(r"<[^>]+>", " ", text)
+    #                     clean_text = text.replace("&nbsp;", " ").replace("\xa0", " ")
+    #                     clean_text = re.sub(r"\s+", " ", clean_text)
+    #                     collected_text.append(clean_text)
+    #                 except Exception:
+    #                     pass
+
+    #             if "parts" in part:
+    #                 _walk_parts(part["parts"])
+
+    #     _walk_parts(payload.get("parts", []))
+    #     return " ".join(collected_text)
+
+    def _extract_body_snippet(self, payload: dict, snippet: str = "") -> str:
         """Recursively extracts clean text from Gmail payload parts (plain text & HTML)."""
-        snippet = payload.get("snippet", "")
-        collected_text = [snippet]
+        if not isinstance(payload, dict):
+            return snippet or ""
+
+        collected_text = [snippet] if snippet else []
 
         def _walk_parts(parts):
+            if not isinstance(parts, list):
+                return
             for part in parts:
+                if not isinstance(part, dict):
+                    continue
+
                 mime = part.get("mimeType", "").lower()
-                data = part.get("body", {}).get("data")
+                body = part.get("body")
+                data = body.get("data") if isinstance(body, dict) else None
 
                 if data and mime in ("text/plain", "text/html"):
                     try:
@@ -183,10 +219,14 @@ class AttachmentHarvesterService:
                     except Exception:
                         pass
 
-                if "parts" in part:
-                    _walk_parts(part["parts"])
+                sub_parts = part.get("parts")
+                if isinstance(sub_parts, list):
+                    _walk_parts(sub_parts)
 
-        _walk_parts(payload.get("parts", []))
+        parts = payload.get("parts", [])
+        if isinstance(parts, list):
+            _walk_parts(parts)
+
         return " ".join(collected_text)
 
     def _build_gmail_date_query(
@@ -258,8 +298,15 @@ class AttachmentHarvesterService:
         )
         messages = results.get("messages", [])
 
-        manifest = self.load_staged_manifest()
-        manifest_map = {item.get("stage_id"): item for item in manifest}
+        raw_manifest = self.load_staged_manifest()
+        manifest = (
+            [item for item in raw_manifest if isinstance(item, dict)]
+            if isinstance(raw_manifest, list)
+            else []
+        )
+        manifest_map = {
+            item.get("stage_id"): item for item in manifest if item.get("stage_id")
+        }
 
         # Cache existing committed DB identifiers
         committed_hashes = set(
@@ -277,10 +324,48 @@ class AttachmentHarvesterService:
             if item.get("attachment_hash")
         }
         staged_msg_files = {
-            (item.get("message_id"), item.get("filename")) for item in manifest
+            (item.get("message_id"), item.get("filename"))
+            for item in manifest
+            if item.get("message_id") and item.get("filename")
         }
 
+        # for msg_summary in messages:
+        #     msg_id = msg_summary["id"]
+        #     msg = (
+        #         self.service.users()
+        #         .messages()
+        #         .get(userId="me", id=msg_id, format="full")
+        #         .execute()
+        #     )
+
+        #     payload = msg.get("payload", {})
+        #     headers = {
+        #         h["name"].lower(): h["value"] for h in payload.get("headers", [])
+        #     }
+
+        #     subject = headers.get("subject", "No Subject")
+        #     sender = headers.get("from", "Unknown")
+        #     body_text = self._extract_body_snippet(payload)
+
+        #     internal_date_ms = int(msg.get("internalDate", 0))
+        #     received_dt = (
+        #         timezone.make_aware(datetime.fromtimestamp(internal_date_ms / 1000.0))
+        #         if internal_date_ms
+        #         else timezone.now()
+        #     )
+
+        #     doc_type = self.detect_doc_type(subject, body_text)
+        #     parts = payload.get("parts", [])
+
+        #     for part in parts:
+        #         filename = part.get("filename", "")
+        #         body = part.get("body", {})
+        #         attachment_id = body.get("attachmentId")
+
+        #         if attachment_id and filename.lower().endswith(".pdf"):
         for msg_summary in messages:
+            if not isinstance(msg_summary, dict) or "id" not in msg_summary:
+                continue
             msg_id = msg_summary["id"]
             msg = (
                 self.service.users()
@@ -289,14 +374,26 @@ class AttachmentHarvesterService:
                 .execute()
             )
 
+            if not isinstance(msg, dict):
+                continue
+
             payload = msg.get("payload", {})
-            headers = {
-                h["name"].lower(): h["value"] for h in payload.get("headers", [])
-            }
+            if not isinstance(payload, dict):
+                continue
+
+            raw_headers = payload.get("headers", [])
+            headers = {}
+            if isinstance(raw_headers, list):
+                headers = {
+                    h.get("name", "").lower(): h.get("value", "")
+                    for h in raw_headers
+                    if isinstance(h, dict)
+                }
 
             subject = headers.get("subject", "No Subject")
             sender = headers.get("from", "Unknown")
-            body_text = self._extract_body_snippet(payload)
+            raw_snippet = msg.get("snippet", "")
+            body_text = self._extract_body_snippet(payload, snippet=raw_snippet)
 
             internal_date_ms = int(msg.get("internalDate", 0))
             received_dt = (
@@ -307,10 +404,27 @@ class AttachmentHarvesterService:
 
             doc_type = self.detect_doc_type(subject, body_text)
             parts = payload.get("parts", [])
+            if not isinstance(parts, list):
+                parts = []
 
-            for part in parts:
+            # Flatten or recursively collect all attachment parts
+            def _collect_attachment_parts(parts_list):
+                found = []
+                for p in parts_list:
+                    if isinstance(p, dict):
+                        found.append(p)
+                        sub = p.get("parts")
+                        if isinstance(sub, list):
+                            found.extend(_collect_attachment_parts(sub))
+                return found
+
+            all_parts = _collect_attachment_parts(parts)
+
+            for part in all_parts:
                 filename = part.get("filename", "")
                 body = part.get("body", {})
+                if not isinstance(body, dict):
+                    continue
                 attachment_id = body.get("attachmentId")
 
                 if attachment_id and filename.lower().endswith(".pdf"):

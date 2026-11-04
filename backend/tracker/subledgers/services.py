@@ -248,7 +248,7 @@ class AssetCandidateMatcher:
                 bound_narrations = dict(
                     StatementStagingLine.objects.filter(
                         row_identifier__in=bound_row_ids
-                    ).values_list("row_identifier", "narration")
+                    ).values_list("row_identifier", "raw_narration")
                 )
 
                 asset_code_val = (
@@ -395,11 +395,11 @@ class AssetCandidateMatcher:
         if search_terms:
             staging_kw_q = Q()
             for term in search_terms:
-                staging_kw_q |= Q(narration__icontains=term)
+                staging_kw_q |= Q(raw_narration__icontains=term)
 
             matched_row_ids = list(
                 StatementStagingLine.objects.filter(staging_kw_q).values_list(
-                    "row_identifier", flat=True
+                    "row_identifier", "raw_narration"  # , flat=True
                 )
             )
             remarks_q = Q(row_identifier__in=matched_row_ids)
@@ -424,7 +424,7 @@ class AssetCandidateMatcher:
             dict(
                 StatementStagingLine.objects.filter(
                     row_identifier__in=candidate_row_ids
-                ).values_list("row_identifier", "narration")
+                ).values_list("row_identifier", "raw_narration")
             )
             if candidate_row_ids
             else {}
