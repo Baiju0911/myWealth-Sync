@@ -261,6 +261,174 @@ def _build_clusters_from_entries(
     return sorted_clusters
 
 
+# def _build_clusters_from_entries(
+#     entries, target_subcategory, search_query=None, include_items=False
+# ):
+#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+#     staging_lines = list(
+#         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+#     )
+#     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
+
+#     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
+#     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
+
+#     clusters_map = {}
+
+#     for entry in entries:
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         stg_line = staging_map.get(entry.row_identifier)
+#         contra_info = contra_map.get(
+#             entry.row_identifier,
+#             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+#         )
+
+#         if stg_line:
+#             parsed_meta = stg_line.parsed_narration or {}
+#             raw_payee = (
+#                 parsed_meta.get("suggested_payee") or stg_line.display_payee or ""
+#             )
+#             ref_no = parsed_meta.get("detected_reference")
+#             rail = parsed_meta.get("detected_rail", "BANK")
+#             remark = parsed_meta.get("suggested_remark")
+#             raw_statement_text = getattr(stg_line, "raw_narration", None) or getattr(
+#                 stg_line, "narration", ""
+#             )
+#             host_account_id = getattr(stg_line, "account_id", None) or entry.account_id
+#         else:
+#             fallback_text = (
+#                 remarks.get("universal_narration")
+#                 or remarks.get("narration")
+#                 or remarks.get("display_text")
+#                 or ""
+#             )
+#             parsed_meta = UniversalNarrationExtractor.decompose_raw_narration(
+#                 fallback_text
+#             )
+#             raw_payee = (
+#                 remarks.get("payee") or parsed_meta.get("raw_payee") or fallback_text
+#             )
+#             ref_no = remarks.get("upi_ref") or parsed_meta.get("reference")
+#             rail = parsed_meta.get("rail", "BANK")
+#             remark = parsed_meta.get("raw_remark")
+#             raw_statement_text = fallback_text
+#             host_account_id = entry.account_id
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+#         is_outflow = debit_val > 0
+#         amount = debit_val if is_outflow else credit_val
+
+#         # Route tagging, scoring, and pair isolation delegated to TaggingEngine
+#         is_contra = contra_info.get("is_self_transfer", False)
+#         (
+#             pattern,
+#             canonical_title,
+#             display_subgroup,
+#             pair_id,
+#             score,
+#             label,
+#             ok_to_classify,
+#         ) = TaggingEngine.resolve_cluster_envelope(
+#             is_contra=is_contra,
+#             contra_info=contra_info,
+#             raw_narration=raw_statement_text,
+#             payee=raw_payee,
+#             amount=amount,
+#             ref_no=ref_no,
+#             host_account_id=host_account_id,
+#             acc_registry=acc_registry,
+#         )
+#         if (
+#             "BAIJU" in str(raw_payee).upper()
+#             or "FRIEND" in str(raw_statement_text).upper()
+#         ):
+#             print(
+#                 f"\n>>> [CLUSTER DEBUG] Raw: {raw_statement_text[:35]}... | "
+#                 f"Payee: {raw_payee} -> Subgroup: {display_subgroup} | "
+#                 f"Pattern: {pattern} | Score: {score}",
+#                 flush=True,
+#             )
+
+#         if pattern not in clusters_map:
+#             clusters_map[pattern] = TaggingEngine.create_empty_cluster(
+#                 pattern=pattern,
+#                 display_name=canonical_title,
+#                 score=score,
+#                 label=label,
+#                 is_contra=is_contra,
+#             )
+
+#         readable_narrative = build_human_readable_narrative(
+#             rail=rail,
+#             direction="OUTFLOW" if is_outflow else "INFLOW",
+#             amount=amount,
+#             payee=display_subgroup,
+#             ref_no=ref_no,
+#             branch_or_remark=remark,
+#         )
+
+#         cluster = clusters_map[pattern]
+#         cluster["count"] += 1
+#         cluster["total_amount"] += amount
+#         if is_outflow:
+#             cluster["total_outflow"] += amount
+#         else:
+#             cluster["total_inflow"] += amount
+
+#         cluster["transaction_ids"].append(str(entry.id))
+#         if (
+#             len(cluster["sample_descriptions"]) < 2
+#             and readable_narrative not in cluster["sample_descriptions"]
+#         ):
+#             cluster["sample_descriptions"].append(readable_narrative)
+
+#         if include_items:
+#             cluster["items"].append(
+#                 {
+#                     "id": str(entry.id),
+#                     "pair_id": pair_id or f"SINGLE_{entry.id}",
+#                     "ok_to_classify": ok_to_classify,
+#                     "confidence_score": score,
+#                     "confidence_label": label,
+#                     "narration": raw_statement_text,
+#                     "raw_narration": raw_statement_text,
+#                     "display_payee": display_subgroup,
+#                     "universal_narration": readable_narrative,
+#                     "debit": debit_val,
+#                     "credit": credit_val,
+#                     "amount": amount,
+#                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                     "transaction_date": str(entry.transaction_date),
+#                     "contra_meta": contra_info,
+#                 }
+#             )
+
+#     # Sort cluster items so paired transactions sit side-by-side
+#     if include_items:
+#         for c in clusters_map.values():
+#             c["items"].sort(
+#                 key=lambda x: (x["pair_id"], x["transaction_date"], x["direction"])
+#             )
+
+#     sorted_clusters = sorted(
+#         clusters_map.values(), key=lambda c: c["count"], reverse=True
+#     )
+
+#     if search_query and str(search_query).strip():
+#         norm_query = search_query.strip().upper()
+#         return [
+#             c
+#             for c in sorted_clusters
+#             if norm_query in c["pattern"].upper()
+#             or any(norm_query in s.upper() for s in c.get("sample_descriptions", []))
+#         ]
+
+#     return sorted_clusters
+
+
 def get_suspense_workbench_clusters(
     account_id=None, search_query=None, include_cleared=False, include_items=False
 ):

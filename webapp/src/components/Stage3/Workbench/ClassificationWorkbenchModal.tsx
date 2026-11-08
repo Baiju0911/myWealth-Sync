@@ -1,12 +1,13 @@
 // webapp/src/components/Stage3/Workbench/ClassificationWorkbenchModal.tsx
-import React from 'react';
+import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { X, SlidersHorizontal, ListFilter } from 'lucide-react';
 import { useWorkbenchModalState } from './useWorkbenchModalState';
 import { ClusterListPanel } from './ClusterListPanel';
 import { TaxonomyMapperPanel, clearSubledgerBreakdownCache } from './TaxonomyMapperPanel';
 import { PatternSelectionModal } from './PatternSelectionModal';
 import { AssetFormModal } from '../../subledger/AssetFormModal';
+import { ManageGroupsModal } from './ManageGroupsModal';
 import type { TaxonomyMatchContext } from '../../subledger/CandidateMatcherModal';
 
 interface ModalProps {
@@ -20,17 +21,17 @@ interface ModalProps {
   onOpenOperationsHub?: (subcategory: string) => void;
 }
 
-const DEFAULT_SUBLEDGER_CAPABLE_HEADS = new Set<string>([
-  'Suspense Account',
-  'Gold & Precious Metals',
-  'ShareMarket & Mutual Funds',
-  'Real Estate',
-  'Insurance Assets',
-  'Fixed Deposits',
-  'Loans & Advances',
-  'Sundry Debtors',
-  'Sundry Creditors',
-]);
+// const DEFAULT_SUBLEDGER_CAPABLE_HEADS = new Set<string>([
+//   'Suspense Account',
+//   'Gold & Precious Metals',
+//   'ShareMarket & Mutual Funds',
+//   'Real Estate',
+//   'Insurance Assets',
+//   'Fixed Deposits',
+//   'Loans & Advances',
+//   'Sundry Debtors',
+//   'Sundry Creditors',
+// ]);
 
 export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
   isOpen,
@@ -38,7 +39,7 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
   onSuccess,
   targetSubcategory = 'Suspense Account',
   accountId,
-  subledgerCapableSet = DEFAULT_SUBLEDGER_CAPABLE_HEADS,
+  //subledgerCapableSet = DEFAULT_SUBLEDGER_CAPABLE_HEADS,
   onOpenSubledgerDrawer,
 }) => {
   const { state, actions } = useWorkbenchModalState({
@@ -47,6 +48,29 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
     accountId,
     onSuccess,
   });
+
+  const dynamicSubledgerCapableSet = React.useMemo(() => {
+    const capable = new Set<string>();
+    
+    (state.taxonomyTree || []).forEach((cat: any) => {
+      (cat.subcategories || []).forEach((sub: any) => {
+        if (typeof sub === 'object' && sub !== null) {
+          const name = sub.subcategory || sub.name || sub.title;
+          if (sub.is_subledger_capable || sub.requires_subledger || sub.is_asset_folio) {
+            if (name) capable.add(name);
+          }
+        }
+      });
+    });
+
+    // Always include Suspense Account as capable for contra/unmapped handling
+    capable.add('Suspense Account');
+
+    return capable;
+  }, [state.taxonomyTree]);
+
+  const [isManageGroupsOpen, setIsManageGroupsOpen] = useState(false);
+  const [isFlatMode, setIsFlatMode] = useState(false);
 
   if (!isOpen) return null;
 
@@ -73,13 +97,37 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
             </p>
           </div>
 
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-100 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors cursor-pointer"
-            title="Close Workbench (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {/* Action Tools */}
+          <div className="flex items-center gap-3">
+            {/* Flat View Toggle */}
+            <label className="flex items-center gap-2 px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700/60 rounded-lg text-xs cursor-pointer select-none transition-colors">
+              <ListFilter className="w-3.5 h-3.5 text-zinc-400" />
+              <input
+                type="checkbox"
+                checked={isFlatMode}
+                onChange={(e) => setIsFlatMode(e.target.checked)}
+                className="rounded border-zinc-700 text-emerald-500 focus:ring-0 focus:ring-offset-0 bg-zinc-900 cursor-pointer"
+              />
+              <span className="text-zinc-300">Flat Stream</span>
+            </label>
+
+            {/* Manage Groups Modal Trigger */}
+            <button
+              onClick={() => setIsManageGroupsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs font-semibold text-zinc-200 hover:text-white cursor-pointer transition-colors"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Manage Groups</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="text-zinc-400 hover:text-zinc-100 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors cursor-pointer"
+              title="Close Workbench (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Workspace Split Body */}
@@ -90,51 +138,95 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
             selectedTxnIds={state.selectedTxnIds}
             visibleTxnIds={state.visibleTxnIds}
             activePreviewCluster={state.activePreviewCluster}
-           // searchQuery={state.searchQuery}
-           // setSearchQuery={actions.setSearchQuery}
             setActivePreviewCluster={actions.handleSelectCluster}
             toggleIndividualTxn={actions.toggleIndividualTxn}
             toggleClusterTxns={actions.toggleClusterTxns}
             toggleSelectAllVisible={actions.toggleSelectAllVisible}
             clearAllSelections={actions.clearAllSelections}
             lastAppliedMapping={state.lastAppliedMapping}
-            
+            isFlatMode={isFlatMode}
           />
 
-          <TaxonomyMapperPanel
-            targetSubcategoryContext={targetSubcategory}
-            selectedSummary={state.selectedSummary}
-            activePreviewCluster={state.activePreviewCluster}
-            taxonomyTree={state.taxonomyTree}
-            availableSubcategories={state.availableSubcategories}
-            selectedCategory={state.selectedCategory}
-            setSelectedCategory={actions.setSelectedCategory}
-            selectedSubcategory={state.selectedSubcategory}
-            setSelectedSubcategory={actions.setSelectedSubcategory}
-            isCreatingNew={state.isCreatingNew}
-            setIsCreatingNew={actions.setIsCreatingNew}
-            newCatInput={state.newCatInput}
-            setNewCatInput={actions.setNewCatInput}
-            newSubInput={state.newSubInput}
-            setNewSubInput={actions.setNewSubInput}
-            savingNewTaxonomy={state.savingNewTaxonomy}
-            handleCreateTaxonomy={actions.handleCreateTaxonomy}
-            saveRule={state.saveRule}
-            setSaveRule={actions.setSaveRule}
-            upiStrategy={state.upiStrategy}
-            setUpiStrategy={actions.setUpiStrategy}
-            vectorType={state.vectorType}
-            submitting={state.submitting}
-            handleApplyClassification={actions.handleOpenPatternSelectionFlow}
-            onClose={onClose}
-            suggestedRule={state.suggestedRule}
-            subledgerCapableSet={subledgerCapableSet}
-            onOpenSubledgerDrawer={onOpenSubledgerDrawer}
-            onOpenNewFolioModal={(sub) => {
-              actions.setPendingTargetSubcategory(sub);
-              actions.setIsFolioModalOpen(true);
-            }}
-          />
+          {/* Resolve the currently checked or focused transaction */}
+          {(() => {
+            let activeTxn: any = null;
+            const targetId = state.selectedTxnIds?.[0];
+
+            // 1. Recursive helper searching clusters, subgroups, and transaction lists
+            const extractTransaction = (node: any): any => {
+              if (!node) return null;
+              const direct = node.items || node.transactions || [];
+              if (Array.isArray(direct) && direct.length > 0) {
+                if (targetId) {
+                  const match = direct.find(
+                    (it: any) => String(it.id ?? it.row_identifier ?? it.txn_id) === String(targetId)
+                  );
+                  if (match) return match;
+                } else {
+                  return direct[0];
+                }
+              }
+              const children = node.subclusters || node.children || node.groups || [];
+              for (const child of children) {
+                const found = extractTransaction(child);
+                if (found) return found;
+              }
+              return null;
+            };
+
+            if (state.clusters) {
+              for (const cluster of state.clusters) {
+                activeTxn = extractTransaction(cluster);
+                if (activeTxn) break;
+              }
+            }
+
+            if (!activeTxn && state.activePreviewCluster) {
+              activeTxn = extractTransaction(state.activePreviewCluster);
+            }
+
+            return (
+              <TaxonomyMapperPanel
+                targetSubcategoryContext={targetSubcategory}
+                selectedSummary={state.selectedSummary}
+                activePreviewCluster={state.activePreviewCluster}
+                selectedTransaction={activeTxn}
+                taxonomyTree={state.taxonomyTree}
+                availableSubcategories={state.availableSubcategories}
+                selectedCategory={state.selectedCategory}
+                activeVendorName={state.activeVendorName}
+                setSelectedCategory={actions.setSelectedCategory}
+                selectedSubcategory={state.selectedSubcategory}
+                setSelectedSubcategory={actions.setSelectedSubcategory}
+                isCreatingNew={state.isCreatingNew}
+                setIsCreatingNew={actions.setIsCreatingNew}
+                newCatInput={state.newCatInput}
+                setNewCatInput={actions.setNewCatInput}
+                newSubInput={state.newSubInput}
+                setNewSubInput={actions.setNewSubInput}
+                savingNewTaxonomy={state.savingNewTaxonomy}
+                handleCreateTaxonomy={actions.handleCreateTaxonomy}
+                saveRule={state.saveRule}
+                setSaveRule={actions.setSaveRule}
+                upiStrategy={state.upiStrategy}
+                setUpiStrategy={actions.setUpiStrategy}
+                vectorType={state.vectorType}
+                submitting={state.submitting}
+                handleApplyClassification={actions.handleOpenPatternSelectionFlow}
+                onClose={onClose}
+                suggestedRule={state.suggestedRule}
+                subledgerCapableSet={dynamicSubledgerCapableSet}
+                onOpenSubledgerDrawer={onOpenSubledgerDrawer}
+                onOpenNewFolioModal={(sub) => {
+                  actions.setPendingTargetSubcategory(sub);
+                  actions.setIsFolioModalOpen(true);
+                }}
+                onTagRuleSaved={() => {
+                  actions.loadClusters(targetSubcategory, accountId, state.searchQuery);
+                }}
+              />
+            );
+          })()}
         </div>
       </div>
 
@@ -157,6 +249,16 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
         activeTab="ASSET"
         onSuccess={() => {
           clearSubledgerBreakdownCache(state.pendingTargetSubcategory || state.selectedSubcategory);
+          actions.loadClusters(targetSubcategory, accountId, state.searchQuery);
+        }}
+      />
+
+      {/* Intra-Header Group & Hierarchy Management Modal */}
+      <ManageGroupsModal
+        isOpen={isManageGroupsOpen}
+        onClose={() => setIsManageGroupsOpen(false)}
+        headerScope={targetSubcategory || 'Suspense Account'}
+        onHierarchyUpdated={() => {
           actions.loadClusters(targetSubcategory, accountId, state.searchQuery);
         }}
       />

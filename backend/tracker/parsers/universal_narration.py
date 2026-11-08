@@ -1,12 +1,13 @@
+from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
 
 class UniversalNarrationExtractor:
     """
-    100% additive narration engine.
-    Retains the authentic bank statement narration while layering
-    protocol decomposition, noise classification, and live alert stream telemetry.
+    Dual-mode narration engine:
+    - Mode A (Slash-Delimited): SIB MOB/IMPS, NEFT wires, ICICI CMS.
+    - Mode B (Space-Delimited / Free-Form): POS swipes, ATMs, CBS internal transfers.
     """
 
     RRN_PATTERN = re.compile(
@@ -30,90 +31,54 @@ class UniversalNarrationExtractor:
         re.IGNORECASE,
     )
 
-    NEFT_COMPLEX_PATTERN = re.compile(
-        r"(?:NEFT|RTGS)\s*(?:UTR\s*:\s*)?([A-Z0-9\s]+?)\s*//\s*(?:(.*?)/)?(?:NEFT|RTGS)\s*TO\s*[:\s]+(?:[^:]+:)?([^/]+)(?:/(.*))?$",
-        re.IGNORECASE,
-    )
+    SIB_CHANNEL_TAGS = {
+        "FRIENDS",
+        "TRADING",
+        "EXPENSES",
+        "FAMILY",
+        "SELF",
+        "BILL PAYMENT",
+        "TRANSFER",
+        "INVESTMENT",
+        "PERSONAL",
+    }
 
-    NEFT_SIMPLE_PATTERN = re.compile(
-        r"(?:NEFT|RTGS)[/-](?:UTR[:\s]*)?([A-Z0-9]+)[/-](?:TO[:\s]*)?([^/]+)(?:/(.*))?$",
-        re.IGNORECASE,
-    )
-
-    # -------------------------------------------------------------
-    # 🧩 SHARED NORMALIZATION & KERNING REPAIR UTILITIES
-    # -------------------------------------------------------------
-    @staticmethod
-    def repair_kerning_and_splits(text: str) -> str:
-        """
-        Generic algorithmic reconstruction of fragmented text caused by
-        bank PDF scraping, monospace column wrapping, and printer kerning.
-        """
-        if not text:
-            return ""
-
-        s = text.strip()
-
-        # Rule 1: Collapse multi-letter single character chains ("O W N" -> "OWN", "B A I J U" -> "BAIJU")
-        prev = None
-        while prev != s:
-            prev = s
-            s = re.sub(r"\b([A-Za-z0-9])\s+([A-Za-z0-9])\b", r"\1\2", s)
-
-        # Rule 2: Re-join isolated single-letter trailing splinters ("INDI A" -> "INDIA")
-        s = re.sub(r"\b([A-Za-z]{3,})\s+([A-Za-z]{1})\b", r"\1\2", s)
-
-        # Rule 3: Re-join isolated single-letter leading splinters ("S ERVICE" -> "SERVICE", "B AIJU" -> "BAIJU")
-        s = re.sub(r"\b([A-Za-z]{1})\s+([A-Za-z]{3,})\b", r"\1\2", s)
-
-        return re.sub(r"\s+", " ", s).strip()
-
-    @classmethod
-    def generate_canonical_cluster_tag(cls, raw_name: str) -> str:
-        """
-        Deterministic clustering hash. Eliminates all internal space variants
-        so 'BAIJU SUSEELAN NAIR' and 'BAIJUSUSEELANNAIR' merge into '#BAIJUSUSEELANNAIR'.
-        """
-        if not raw_name:
-            return "#SUSPENSE"
-
-        repaired = cls.repair_kerning_and_splits(raw_name).upper()
-        words = re.findall(r"[A-Z0-9]+", repaired)
-
-        if not words:
-            return "#SUSPENSE"
-
-        cohesive_words = []
-        buffer = ""
-
-        for w in words:
-            if len(w) <= 2 and buffer:
-                buffer += w
-            elif len(w) <= 2 and not buffer:
-                buffer = w
-            else:
-                if buffer:
-                    cohesive_words.append(buffer)
-                    buffer = ""
-                cohesive_words.append(w)
-
-        if buffer:
-            cohesive_words.append(buffer)
-
-        return f"#{'_'.join(cohesive_words)}"
+    PROTECTED_TOKENS = {
+        "IN",
+        "AT",
+        "TO",
+        "OF",
+        "BY",
+        "FOR",
+        "ON",
+        "OR",
+        "NO",
+        "A",
+        "AN",
+        "THE",
+        "NRI",
+        "NRE",
+        "NRO",
+        "MOB",
+        "ATM",
+        "POS",
+        "TRN",
+        "WDL",
+        "DEP",
+        "TFR",
+        "MBS",
+    }
 
     @classmethod
     def clean_boilerplate_header(cls, text: str) -> str:
         if not text:
             return ""
-
         cleaned = text.strip()
         if cls.INFO_PREFIX_PATTERN.search(cleaned):
             cleaned = cls.INFO_PREFIX_PATTERN.sub("", cleaned).strip()
         elif cls.BOILERPLATE_PATTERN.match(cleaned):
             cleaned = cls.BOILERPLATE_PATTERN.sub("", cleaned).strip()
-
-        return cls.repair_kerning_and_splits(cleaned)
+        return cls.repair_segment_kerning(cleaned)
 
     @classmethod
     def is_statement_or_notice(cls, text: str) -> bool:
@@ -122,11 +87,275 @@ class UniversalNarrationExtractor:
         return bool(cls.STATEMENT_NOTICE_PATTERN.search(text))
 
     @classmethod
+    def repair_kerning_and_splits(cls, text: str) -> str:
+        """Compatibility alias for existing engine callers."""
+        return cls.repair_segment_kerning(text)
+
+    @classmethod
+    def repair_segment_kerning(cls, segment: str) -> str:
+        if not segment:
+            return ""
+
+        s = re.sub(r"\s+", " ", str(segment)).strip().upper()
+
+        s = re.sub(r"\bN\s+RI\b", "NRI", s)
+        s = re.sub(r"\bOW\s+N\s*ACCOUNT\b", "OWN ACCOUNT", s)
+
+        prev = None
+        while prev != s:
+            prev = s
+            s = re.sub(r"\b([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\b", r"\1\2\3", s)
+
+        words = s.split()
+        if not words:
+            return ""
+
+        merged = []
+        i = 0
+        n = len(words)
+
+        while i < n:
+            curr = words[i]
+
+            if i + 1 < n:
+                nxt = words[i + 1]
+
+                if nxt in cls.PROTECTED_TOKENS:
+                    merged.append(curr)
+                    i += 1
+                    continue
+
+                if i + 1 == n - 1 and len(nxt) == 1 and nxt.isalpha():
+                    merged.append(curr)
+                    i += 1
+                    continue
+
+                if curr.isalpha() and nxt.isdigit():
+                    merged.append(curr)
+                    i += 1
+                    continue
+
+                if (
+                    len(curr) <= 2
+                    and curr.isalpha()
+                    and len(nxt) >= 3
+                    and nxt.isalpha()
+                ):
+                    merged.append(curr + nxt)
+                    i += 2
+                    continue
+
+                if (
+                    len(curr) >= 3
+                    and curr.isalpha()
+                    and len(nxt) <= 2
+                    and nxt.isalpha()
+                ):
+                    if len(nxt) == 1 and i + 1 < n - 1:
+                        merged.append(curr + nxt)
+                        i += 2
+                        continue
+                    elif len(nxt) == 2 and nxt not in cls.PROTECTED_TOKENS:
+                        merged.append(curr + nxt)
+                        i += 2
+                        continue
+
+            merged.append(curr)
+            i += 1
+
+        return " ".join(merged).strip()
+
+    @classmethod
+    def repair_kerning_and_splits(cls, text: str) -> str:
+        """Compatibility alias for existing engine callers."""
+        return cls.repair_segment_kerning(text)
+
+    @classmethod
+    def decompose_raw_narration(cls, text: str) -> Dict[str, Any]:
+        if not text:
+            return {
+                "rail": "UNKNOWN",
+                "channel": None,
+                "bank_code": None,
+                "reference": None,
+                "raw_payee": None,
+                "raw_remark": None,
+                "bank_purpose": None,
+                "branch_location": None,
+                "raw_segments": [],
+            }
+
+        raw_str = text.strip()
+        has_slashes = (
+            "/" in raw_str and len([p for p in raw_str.split("/") if p.strip()]) >= 2
+        )
+
+        if has_slashes:
+            return cls._decompose_slash_delimited(raw_str)
+        else:
+            return cls._decompose_free_form_spaces(raw_str)
+
+    @classmethod
+    def _decompose_slash_delimited(cls, clean_text: str) -> Dict[str, Any]:
+        clean_text = re.sub(r"/+$", "", clean_text.strip())
+        raw_parts = [p.strip() for p in clean_text.split("/") if p.strip()]
+        parts = [cls.repair_segment_kerning(p) for p in raw_parts]
+
+        if "/NEFT:" in clean_text.upper() or "/RTGS:" in clean_text.upper():
+            ref_no = parts[0] if len(parts) > 0 else None
+            ifsc_code = parts[1] if len(parts) > 1 else None
+
+            remitter = None
+            rail_type = "NEFT"
+            for p in raw_parts:
+                m = re.match(r"^(?:NEFT|RTGS):\s*(.+)$", p, flags=re.IGNORECASE)
+                if m:
+                    remitter = cls.repair_segment_kerning(m.group(1)).upper()
+                    rail_type = "RTGS" if "RTGS" in p.upper() else "NEFT"
+                    break
+
+            desk = parts[3] if len(parts) > 3 else "CENTRAL CLEARING"
+            bank_label = (
+                "ICICI BANK"
+                if ifsc_code and ifsc_code.startswith("ICIC")
+                else (ifsc_code or "CLEARING")
+            )
+
+            return {
+                "rail": rail_type,
+                "channel": "CLEARING_WIRE",
+                "bank_code": bank_label,
+                "reference": ref_no,
+                "raw_payee": remitter or bank_label,
+                "raw_remark": f"{bank_label} • {desk}",
+                "bank_purpose": "INWARD_REMITTANCE",
+                "branch_location": desk,
+                "raw_segments": raw_parts,
+            }
+
+        upper_text = clean_text.upper()
+        if re.search(r"(?:^|/)\s*MOB(?:\s*[/]|$)", upper_text):
+            ref_no = None
+            if parts and (
+                re.match(r"^\d{6,22}$", parts[0]) or parts[0].startswith("100000")
+            ):
+                ref_no = parts.pop(0)
+
+            tokens = [p for p in parts if p.upper() not in ["MOB", "IMPS"]]
+
+            purpose_tag = None
+            counterparty = None
+            branch_location = None
+
+            if len(tokens) >= 3:
+                purpose_tag = tokens[0]
+                counterparty = tokens[1]
+                branch_location = tokens[2]
+            elif len(tokens) == 2:
+                if tokens[0].upper() in cls.SIB_CHANNEL_TAGS:
+                    purpose_tag = tokens[0]
+                    counterparty = tokens[1]
+                else:
+                    counterparty = tokens[0]
+                    branch_location = tokens[1]
+            elif len(tokens) == 1:
+                counterparty = tokens[0]
+            else:
+                counterparty = "UNKNOWN"
+
+            remark_elements = ["MOB_PAYMENT"]
+            if purpose_tag:
+                remark_elements.append(f"Purpose: {purpose_tag}")
+            if branch_location:
+                remark_elements.append(branch_location)
+
+            return {
+                "rail": "IMPS/MOB",
+                "channel": "MOB_PAYMENT",
+                "bank_code": "SIB",
+                "reference": ref_no,
+                "raw_payee": re.sub(r"\s+", " ", str(counterparty or "UNKNOWN"))
+                .strip()
+                .upper(),
+                "raw_remark": " • ".join(remark_elements),
+                "bank_purpose": purpose_tag,
+                "branch_location": branch_location,
+                "raw_segments": raw_parts,
+            }
+
+        return {
+            "rail": cls._detect_rail(clean_text),
+            "channel": "CBS_DELIMITED",
+            "bank_code": None,
+            "reference": None,
+            "raw_payee": parts[0].upper() if parts else clean_text,
+            "raw_remark": " / ".join(parts[1:]) if len(parts) > 1 else None,
+            "bank_purpose": None,
+            "branch_location": None,
+            "raw_segments": raw_parts,
+        }
+
+    @classmethod
+    def _decompose_free_form_spaces(cls, text: str) -> Dict[str, Any]:
+        cleaned = cls.repair_segment_kerning(text)
+        rail = cls._detect_rail(cleaned)
+
+        m_rrn = cls.RRN_PATTERN.search(cleaned) or re.search(r"\b(\d{12})\b", cleaned)
+        reference = (
+            m_rrn.group(1)
+            if (m_rrn and m_rrn.lastindex)
+            else (m_rrn.group(0) if m_rrn else None)
+        )
+
+        upper_text = cleaned.upper()
+        if any(
+            marker in upper_text
+            for marker in ["INB", "MBS", "WDL TFR", "DEP TFR", "SELF"]
+        ):
+            return {
+                "rail": "CBS_TRANSFER",
+                "channel": "BRANCH_CBS",
+                "bank_code": "INTERNAL",
+                "reference": reference,
+                "raw_payee": cleaned,
+                "raw_remark": "Internal Book Transfer",
+                "bank_purpose": "SELF_TRANSFER",
+                "branch_location": "BRANCH",
+                "raw_segments": cleaned.split(),
+            }
+
+        raw_tokens = cleaned.split()
+        meaningful_tokens = [
+            t
+            for t in raw_tokens
+            if t
+            not in ["ATM", "POS", "TRN", "WDL", "DEP", "TFR", "IN", "OUT", "DR", "CR"]
+            and not t.isdigit()
+        ]
+
+        payee = " ".join(meaningful_tokens[:3]) if meaningful_tokens else cleaned
+
+        return {
+            "rail": rail,
+            "channel": "FREE_FORM",
+            "bank_code": None,
+            "reference": reference,
+            "raw_payee": payee.upper(),
+            "raw_remark": cleaned,
+            "bank_purpose": None,
+            "branch_location": None,
+            "raw_segments": raw_tokens,
+        }
+
+    @classmethod
     def resolve_from_staging_line(cls, line: Any) -> Dict[str, Any]:
+        """
+        Integrates dynamic staging line fields, live telemetry alerts,
+        and dual-mode parsed narration for ledger models.
+        """
         raw_statement_narration = (
             getattr(line, "raw_narration", None) or getattr(line, "narration", "") or ""
         )
-
         meta = getattr(line, "live_metadata", None)
         if not isinstance(meta, dict):
             meta = {}
@@ -160,10 +389,10 @@ class UniversalNarrationExtractor:
         parsed_tokens = cls.decompose_raw_narration(clean_target_text)
 
         cheque_ref = getattr(line, "cheque_ref_number", None)
-        if cheque_ref and not parsed_tokens["reference"]:
+        if cheque_ref and not parsed_tokens.get("reference"):
             parsed_tokens["reference"] = str(cheque_ref).strip()
 
-        raw_payee = parsed_tokens["raw_payee"]
+        raw_payee = parsed_tokens.get("raw_payee")
         clean_raw_payee = (
             raw_payee
             if raw_payee and not cls.BOILERPLATE_PATTERN.search(raw_payee)
@@ -191,7 +420,7 @@ class UniversalNarrationExtractor:
             context_parts.append(f"[{live_channel}]")
         if live_remark:
             context_parts.append(live_remark)
-        elif parsed_tokens["raw_remark"]:
+        elif parsed_tokens.get("raw_remark"):
             context_parts.append(parsed_tokens["raw_remark"])
 
         final_remark = " • ".join(context_parts) if context_parts else None
@@ -201,12 +430,12 @@ class UniversalNarrationExtractor:
             "statement_amount": (
                 float(line.amount) if getattr(line, "amount", None) is not None else 0.0
             ),
-            "raw_segments": parsed_tokens["raw_segments"],
-            "detected_rail": parsed_tokens["rail"],
-            "detected_bank_code": parsed_tokens["bank_code"],
-            "detected_reference": parsed_tokens["reference"] or live_rrn,
-            "statement_payee_raw": parsed_tokens["raw_payee"],
-            "statement_remark_raw": parsed_tokens["raw_remark"],
+            "raw_segments": parsed_tokens.get("raw_segments", []),
+            "detected_rail": parsed_tokens.get("rail", "BANK_TRANSFER"),
+            "detected_bank_code": parsed_tokens.get("bank_code"),
+            "detected_reference": parsed_tokens.get("reference") or live_rrn,
+            "statement_payee_raw": parsed_tokens.get("raw_payee"),
+            "statement_remark_raw": parsed_tokens.get("raw_remark"),
             "is_noise": is_statement_notice,
             "is_document_delivery": is_statement_notice,
             "is_enriched_from_live": bool(
@@ -221,126 +450,6 @@ class UniversalNarrationExtractor:
             "discrepancy_details": discrepancy_details,
             "suggested_payee": suggested_payee,
             "suggested_remark": final_remark,
-        }
-
-    @classmethod
-    def decompose_raw_narration(cls, text: str) -> Dict[str, Any]:
-        if not text:
-            return {
-                "rail": "UNKNOWN",
-                "bank_code": None,
-                "reference": None,
-                "raw_payee": None,
-                "raw_remark": None,
-                "raw_segments": [],
-            }
-
-        rail = cls._detect_rail(text)
-        clean_text = text.strip()
-
-        # 1. NEFT / RTGS Wire Complex Protocol
-        neft_complex_m = cls.NEFT_COMPLEX_PATTERN.search(clean_text)
-        if neft_complex_m:
-            ref = re.sub(r"\s+", "", neft_complex_m.group(1))
-            bank_info = (
-                neft_complex_m.group(2).strip() if neft_complex_m.group(2) else ""
-            )
-            payee = cls.repair_kerning_and_splits(neft_complex_m.group(3))
-            branch = (
-                neft_complex_m.group(4).strip() if neft_complex_m.group(4) else None
-            )
-
-            payee = re.sub(
-                r"/(?:KALLAMBALAM|KA\s*LLAMBALAM|BRANCH|STATE BANK).*",
-                "",
-                payee,
-                flags=re.IGNORECASE,
-            ).strip()
-
-            remark_parts = [p for p in [bank_info, branch] if p]
-            return {
-                "rail": "NEFT",
-                "bank_code": None,
-                "reference": ref,
-                "raw_payee": payee,
-                "raw_remark": " / ".join(remark_parts) if remark_parts else None,
-                "raw_segments": [ref, bank_info, payee],
-            }
-
-        # 2. NEFT / RTGS Simple Pattern
-        neft_simple_m = cls.NEFT_SIMPLE_PATTERN.search(clean_text)
-        if neft_simple_m:
-            ref = neft_simple_m.group(1).strip()
-            payee = cls.repair_kerning_and_splits(neft_simple_m.group(2))
-            remark = neft_simple_m.group(3).strip() if neft_simple_m.group(3) else None
-            return {
-                "rail": "NEFT",
-                "bank_code": None,
-                "reference": ref,
-                "raw_payee": payee,
-                "raw_remark": remark,
-                "raw_segments": [ref, payee],
-            }
-
-        # 3. Handle Single or Double MOB (e.g. MOB/MOB/126011185604/FA MILY/IMPS/KALLAMBALAM)
-        mob_match = re.search(
-            r"^(?:MOB/)+(\d{6,18})?/??(?:Bill\s*Payment/)?([^/]+)(?:/(.*))?$",
-            clean_text,
-            re.IGNORECASE,
-        )
-        if mob_match:
-            ref = mob_match.group(1)
-            p1 = cls.repair_kerning_and_splits(mob_match.group(2))
-            p2 = mob_match.group(3).strip() if mob_match.group(3) else None
-            return {
-                "rail": "MOB/IMPS",
-                "bank_code": None,
-                "reference": ref,
-                "raw_payee": p1,
-                "raw_remark": p2 or "Mobile Banking Transfer",
-                "raw_segments": [s for s in [ref, p1, p2] if s],
-            }
-
-        # 4. Standard Slash Protocols (UPI, IMPS, etc.)
-        raw_segments = [s.strip() for s in clean_text.split("/") if s.strip()]
-        bank_code = None
-        reference = None
-        raw_payee = None
-        raw_remark = None
-
-        if len(raw_segments) >= 2:
-            remaining = []
-            for seg in raw_segments[1:]:
-                rrn_m = cls.RRN_PATTERN.match(seg)
-                if rrn_m and not reference:
-                    reference = rrn_m.group(1)
-                    continue
-
-                if (
-                    cls.BANK_CODE_PATTERN.match(seg)
-                    and not bank_code
-                    and len(remaining) == 0
-                ):
-                    bank_code = seg
-                    continue
-
-                remaining.append(seg)
-
-            if len(remaining) >= 1:
-                raw_payee = cls.repair_kerning_and_splits(remaining[0])
-            if len(remaining) >= 2:
-                remarks_tokens = [r for r in remaining[1:] if r.upper() != "NO REMARKS"]
-                raw_remark = " / ".join(remarks_tokens) if remarks_tokens else None
-        else:
-            raw_payee = cls.repair_kerning_and_splits(clean_text)
-
-        return {
-            "rail": rail,
-            "bank_code": bank_code,
-            "reference": reference,
-            "raw_payee": raw_payee,
-            "raw_remark": raw_remark,
-            "raw_segments": raw_segments,
         }
 
     @staticmethod

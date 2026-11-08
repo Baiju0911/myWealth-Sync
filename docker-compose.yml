@@ -40,11 +40,15 @@ services:
   # 🐍 MyWealth Django Backend
   backend:
     build: .
+    stdin_open: true
+    tty: true
     container_name: mywealth_backend
     working_dir: /app/backend
     command: python manage.py runserver 0.0.0.0:8000
+    #command: python -m debugpy --listen 0.0.0.0:5678 manage.py runserver 0.0.0.0:8000 --nothreading --noreload
     ports:
       - "8000:8000"
+      - "5678:5678"
     environment:
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
       - PYTHONPATH=${PYTHONPATH}

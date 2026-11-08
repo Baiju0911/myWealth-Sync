@@ -1,11 +1,12 @@
 // webapp/src/components/Stage3/Workbench/ClusterListPanel.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import type { ExtendedCluster, Cluster } from '../../../api/api';
 import { getClusterLineItems } from '../../../api/api';
 import { subledgerApi, type UnmapTransactionRequest } from '../../../api/subledger';
-import { AlertCircle, FileSpreadsheet, Check } from 'lucide-react';
+import { AlertCircle, FileSpreadsheet, Check, ListFilter } from 'lucide-react';
 import { WorkbenchSearchBar } from './clusterlistHelpers/WorkbenchSearchBar';
 import { ClusterAccordionItem } from './clusterlistHelpers/ClusterAccordionItem';
+import { ClusterCardItem } from './clusterlistHelpers/ClusterCardItem';
 import { useWorkbenchFilter } from './clusterlistHelpers/useWorkbenchFilter';
 import { RemarksInspectionModal } from './clusterlistHelpers/RemarksInspectionModal';
 import { copyToClipboard, generateTSVFromItems } from './clusterlistHelpers/searchAndFilterHelpers';
@@ -23,6 +24,7 @@ interface Props {
   clearAllSelections: () => void;
   lastAppliedMapping?: { txnIds: string[]; asset_id?: string | number; asset_code?: string; asset_name?: string } | null;
   onUnmapSuccess?: (unmappedId: string) => void;
+  isFlatMode?: boolean;
 }
 
 export const ClusterListPanel: React.FC<Props> = ({
@@ -38,6 +40,7 @@ export const ClusterListPanel: React.FC<Props> = ({
   clearAllSelections,
   lastAppliedMapping,
   onUnmapSuccess,
+  isFlatMode = false,
 }) => {
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [remarksModalItem, setRemarksModalItem] = useState<{ id: string; narration?: string; remarks?: any } | null>(null);
@@ -64,6 +67,26 @@ export const ClusterListPanel: React.FC<Props> = ({
     availableYears,
   } = useWorkbenchFilter(rawClusters, clusterItemsMap, localSearchQuery);
 
+  // Eagerly hydrate line items when in Flat Stream mode
+  useEffect(() => {
+    if (!isFlatMode || filteredClusters.length === 0) return;
+
+    filteredClusters.forEach((cluster, idx) => {
+      const key = cluster.pattern ? `cluster-${cluster.pattern}-${idx}` : `cluster-idx-${idx}`;
+      if (!clusterItemsMap[key] && !loadingClusterKeys[key] && cluster.transaction_ids?.length) {
+        setLoadingClusterKeys((p) => ({ ...p, [key]: true }));
+        getClusterLineItems(cluster.transaction_ids)
+          .then((res: any) => {
+            const fetchedItems: any[] = Array.isArray(res) ? res : res?.items || [];
+            setClusterItemsMap((p) => ({ ...p, [key]: fetchedItems }));
+          })
+          .catch((err) => console.error('Failed fetching flat mode items:', err))
+          .finally(() => setLoadingClusterKeys((p) => ({ ...p, [key]: false })));
+      }
+    });
+  }, [isFlatMode, filteredClusters]);
+
+  // Handle live subledger mapping updates
   useEffect(() => {
     if (!lastAppliedMapping || !lastAppliedMapping.txnIds?.length) return;
     const { txnIds, asset_id, asset_code, asset_name } = lastAppliedMapping;
@@ -98,29 +121,8 @@ export const ClusterListPanel: React.FC<Props> = ({
     });
   }, [lastAppliedMapping]);
 
-  // ⚡ Auto-fetch line items for search-matched clusters so they show real cards instead of grey samples
-  useEffect(() => {
-    if (localSearchQuery.trim().length >= 2 && filteredClusters.length > 0) {
-      filteredClusters.slice(0, 5).forEach(async (cluster, idx) => {
-        const key = cluster.pattern ? `cluster-${cluster.pattern}-${idx}` : `cluster-idx-${idx}`;
-        if (!clusterItemsMap[key] && !loadingClusterKeys[key] && cluster.transaction_ids?.length) {
-          setLoadingClusterKeys((p) => ({ ...p, [key]: true }));
-          try {
-            const res: any = await getClusterLineItems(cluster.transaction_ids);
-            const fetchedItems: any[] = Array.isArray(res) ? res : res?.items || [];
-            setClusterItemsMap((p) => ({ ...p, [key]: fetchedItems }));
-          } catch (e) {
-            console.error('Failed auto-fetching cluster items on search:', e);
-          } finally {
-            setLoadingClusterKeys((p) => ({ ...p, [key]: false }));
-          }
-        }
-      });
-    }
-  }, [localSearchQuery, filteredClusters]);
-
-  // Real-time in-memory selection arithmetic & items collector
-  const selectionSummary = React.useMemo(() => {
+  // Real-time selection arithmetic
+  const selectionSummary = useMemo(() => {
     let outSum = 0;
     let inSum = 0;
     const idSet = new Set(selectedTxnIds);
@@ -145,7 +147,34 @@ export const ClusterListPanel: React.FC<Props> = ({
     return { outSum, inSum, count: selectedTxnIds.length, items: selectedObjects };
   }, [selectedTxnIds, clusterItemsMap]);
 
-  // Handle TSV Batch Export
+  // Flattened stream sorted by nearest narration (lexical payee / pattern)
+  const flatTransactions = useMemo(() => {
+    if (!isFlatMode) return [];
+    const allItems: any[] = [];
+    const seenIds = new Set<string>();
+
+    filteredClusters.forEach((cluster, idx) => {
+      const clusterKey = cluster.pattern ? `cluster-${cluster.pattern}-${idx}` : `cluster-idx-${idx}`;
+      const items = clusterItemsMap[clusterKey] || cluster.items || [];
+      items.forEach((it) => {
+        if (!seenIds.has(it.id)) {
+          seenIds.add(it.id);
+          allItems.push({
+            ...it,
+            _parentCluster: cluster,
+            _clusterKey: clusterKey,
+          });
+        }
+      });
+    });
+
+    return allItems.sort((a, b) => {
+      const narA = (a.display_payee || a.narration || '').toUpperCase();
+      const narB = (b.display_payee || b.narration || '').toUpperCase();
+      return narA.localeCompare(narB);
+    });
+  }, [isFlatMode, filteredClusters, clusterItemsMap]);
+
   const handleCopyTSV = async () => {
     if (selectionSummary.items.length === 0) return;
     const tsv = generateTSVFromItems(selectionSummary.items);
@@ -237,12 +266,12 @@ export const ClusterListPanel: React.FC<Props> = ({
         onCollapseAll={collapseAll}
       />
 
-      {/* 🧮 Interactive Floating Batch Action & Arithmetic Bar */}
+      {/* Floating Batch Calculation & TSV Export Bar */}
       {selectionSummary.count > 0 && (
         <div className="mx-3 mt-2 px-3 py-2 bg-linear-to-r from-amber-950/70 via-zinc-900 to-amber-950/70 border border-amber-500/50 rounded-xl flex items-center justify-between text-[11px] font-mono text-amber-200 shadow-lg shrink-0 animate-in fade-in slide-in-from-top-1">
           <div className="flex items-center gap-3">
             <span className="font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 text-amber-300">
-              {selectionSummary.count} {selectionSummary.count === 1 ? 'selected' : 'selected'}
+              {selectionSummary.count} selected
             </span>
             {selectionSummary.outSum > 0 && (
               <span className="text-rose-400 font-bold tabular-nums">
@@ -286,20 +315,67 @@ export const ClusterListPanel: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Main View Area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 flex flex-col gap-2">
         {loading ? (
           <div className="text-center py-20 text-zinc-500 flex flex-col items-center gap-2">
             <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
             <span className="text-xs">Querying database & assembling vendor patterns...</span>
           </div>
+        ) : isFlatMode ? (
+          /* ========================================================= */
+          /* FLAT STREAM MODE: Unwrapped, Nearest-Narration Stream     */
+          /* ========================================================= */
+          flatTransactions.length === 0 ? (
+            <div className="text-center py-20 text-zinc-600 flex flex-col items-center gap-2">
+              <ListFilter className="w-6 h-6 text-zinc-600" />
+              <span className="text-xs">No transactions loaded in flat stream.</span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <div className="px-2 py-1 text-[10px] uppercase font-bold text-zinc-400 flex justify-between items-center border-b border-zinc-800/80 mb-1">
+                <span className="text-emerald-400">Flat Stream: {flatTransactions.length} items</span>
+                <span className="text-zinc-500">Sorted: Nearest Narration</span>
+              </div>
+              {flatTransactions.map((item) => (
+                <ClusterCardItem
+                  key={item.id ? `flat-item-${item.id}` : `flat-temp-${Math.random()}`}
+                  item={item}
+                  clusterKey={item._clusterKey}
+                  isSelected={selectedTxnIds.includes(item.id)}
+                  isUnmapping={Boolean(unmappingItemIds[String(item.id)])}
+                  globalNarrationMode={globalNarrationMode}
+                  searchTokens={searchTokens}
+                  onToggleSelect={(id, e) => {
+                    if (item._parentCluster) setActivePreviewCluster(item._parentCluster);
+                    toggleIndividualTxn(id, e);
+                  }}
+                  onUnmap={handleUnmapSubledger}
+                  onOpenRemarksModal={(it) => {
+                    if (item._parentCluster) setActivePreviewCluster(item._parentCluster);
+                    setRemarksModalItem(it);
+                  }}
+                />
+              ))}
+            </div>
+          )
         ) : filteredClusters.length === 0 ? (
+          /* ========================================================= */
+          /* CLUSTER ACCORDION VIEW: Filter Empty State                */
+          /* ========================================================= */
           <div className="text-center py-20 text-zinc-600 flex flex-col items-center gap-2">
             <AlertCircle className="w-6 h-6 text-zinc-600" />
             <span className="text-xs">No matching transaction patterns found.</span>
           </div>
         ) : (
+          /* ========================================================= */
+          /* CLUSTER ACCORDION VIEW: Standard Clustered Groups         */
+          /* ========================================================= */
           filteredClusters.map((cluster, clusterIdx) => {
-            const clusterKey = cluster.pattern ? `cluster-${cluster.pattern}-${clusterIdx}` : `cluster-idx-${clusterIdx}`;
+            const clusterKey = cluster.pattern
+              ? `cluster-${cluster.pattern}-${clusterIdx}`
+              : `cluster-idx-${clusterIdx}`;
+
             return (
               <ClusterAccordionItem
                 key={clusterKey}
@@ -335,7 +411,6 @@ export const ClusterListPanel: React.FC<Props> = ({
     </div>
   );
 };
-
 
 
 

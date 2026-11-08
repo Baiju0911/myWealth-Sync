@@ -1,4 +1,4 @@
-// src/api.ts
+// src/api/api.ts
 import api from './client'; // 🔌 Point directly to your pre-configured Axios instance
 
 /* ==========================================================================
@@ -875,29 +875,69 @@ export const removePatternFromRule = async (
   }
 };
 
+// export interface CandidatePatternsResponse {
+//   selectable_patterns: string[];
+//   disabled_patterns: string[];
+// }
+
 export interface CandidatePatternsResponse {
-  selectable_patterns: string[];
-  disabled_patterns: string[];
+  selectable_patterns?: string[];
+  disabled_patterns?: string[];
+  candidate_patterns?: string[];
+  clean_entity?: string;
+  raw_narration?: string;
+  narration?: string;
+  source_account?: string;
+  destination_account?: string;
+  source_account_id?: number | null;
+  channel?: string;
+  protocol?: string;
+  is_contra?: boolean;
 }
 
-export const fetchCandidatePatterns = async (
-  transactionIds: string[]
-): Promise<CandidatePatternsResponse> => {
-  console.log(
-    `[API] 🚀 Fetching candidate patterns for ${transactionIds.length} transactions...`
-  );
+// export const fetchCandidatePatterns = async (
+//   transactionIds: string[]
+// ): Promise<CandidatePatternsResponse> => {
+//   console.log(
+//     `[API] 🚀 Fetching candidate patterns for ${transactionIds.length} transactions...`
+//   );
 
+//   try {
+//     const response = await api.post<CandidatePatternsResponse>(
+//       '/classification/staging/get_candidate_patterns/', // <--- Aligned with staging path
+//       { transaction_ids: transactionIds }
+//     );
+
+//     console.log(`[API] 📦 Candidate patterns response:`, response.data);
+//     return response.data;
+//   } catch (error) {
+//     console.error('[API] ❌ Failed to fetch candidate patterns:', error);
+//     return { selectable_patterns: [], disabled_patterns: [] };
+//   }
+// };
+
+export const fetchCandidatePatterns = async (
+  transactionIds: (string | number)[],
+  vendorName?: string,
+  clusterPattern?: string
+): Promise<CandidatePatternsResponse> => {
   try {
     const response = await api.post<CandidatePatternsResponse>(
-      '/classification/staging/get_candidate_patterns/', // <--- Aligned with staging path
-      { transaction_ids: transactionIds }
+      '/classification/staging/get_candidate_patterns/',
+      {
+        transaction_ids: transactionIds,
+        ...(vendorName && { vendor_name: vendorName }),
+        ...(clusterPattern && { cluster_pattern: clusterPattern }),
+      }
     );
-
-    console.log(`[API] 📦 Candidate patterns response:`, response.data);
     return response.data;
   } catch (error) {
     console.error('[API] ❌ Failed to fetch candidate patterns:', error);
-    return { selectable_patterns: [], disabled_patterns: [] };
+    return {
+      selectable_patterns: [],
+      disabled_patterns: [],
+      candidate_patterns: [],
+    };
   }
 };
 
