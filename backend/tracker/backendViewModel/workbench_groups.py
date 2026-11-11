@@ -1,3 +1,4 @@
+import json
 import re
 from django.db.models import Q
 from rest_framework import serializers, viewsets, status
@@ -47,6 +48,8 @@ class WorkbenchGroupHierarchyViewSet(viewsets.ModelViewSet):
 
         if subgroup_tag:
             subgroup_tag = subgroup_tag.strip().upper()
+        else:
+            subgroup_tag = ""
 
         if not header_scope or not group_tag:
             return Response(
@@ -99,21 +102,64 @@ class WorkbenchGroupHierarchyViewSet(viewsets.ModelViewSet):
 
 
 class MasterNarrationTagRuleSerializer(serializers.ModelSerializer):
+    match_tokens = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+    )
+
     class Meta:
         model = MasterNarrationTagRule
         fields = [
             "id",
             "keyword_pattern",
+            "match_tokens",
             "match_type",
             "allowed_vector",
             "header_scope",
             "parent_group_tag",
             "subgroup_tag",
             "require_internal_contra",
-            "source_account",
+            "source_account_id",  # Only source_account_id in fields
             "priority",
             "is_active",
+            "created_at",
+            "updated_at",
         ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def to_internal_value(self, data):
+        # Allow input mutation
+        data = data.copy() if hasattr(data, "copy") else dict(data)
+
+        # Map legacy or frontend 'source_account' key to model column 'source_account_id'
+        if "source_account" in data and not data.get("source_account_id"):
+            data["source_account_id"] = data.pop("source_account")
+
+        # Auto-serialize keyword_pattern if frontend sends raw array string or tokens
+        tokens = data.get("match_tokens")
+        pattern = data.get("keyword_pattern", "")
+
+        if (
+            isinstance(pattern, str)
+            and pattern.startswith("[")
+            and pattern.endswith("]")
+        ):
+            try:
+                parsed_list = json.loads(pattern)
+                if isinstance(parsed_list, list):
+                    if not tokens:
+                        data["match_tokens"] = parsed_list
+                    data["keyword_pattern"] = parsed_list[0] if parsed_list else ""
+            except Exception:
+                pass
+
+        if not data.get("keyword_pattern") and data.get("match_tokens"):
+            tks = data.get("match_tokens")
+            if isinstance(tks, list) and len(tks) > 0:
+                data["keyword_pattern"] = str(tks[0])
+
+        return super().to_internal_value(data)
 
 
 class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
@@ -136,43 +182,95 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
                 {"detail": "Rule not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
-        # Base filter across statement staging lines
         qs = StatementStagingLine.objects.all()
+        print(
+            f"\n🔍 [RULE EVALUATION START] Rule #{rule.id} -> {rule.parent_group_tag}"
+        )
+        print(f"   [STAGE 0] Total lines in StatementStagingLine: {qs.count()}")
 
-        # Vector filter
+        # 1. Vector filter
         if rule.allowed_vector == "OUTFLOW":
             qs = qs.filter(Q(amount__lt=0) | Q(debit__gt=0))
         elif rule.allowed_vector == "INFLOW":
             qs = qs.filter(Q(amount__gt=0) | Q(credit__gt=0))
+        print(f"   [STAGE 1] After vector ({rule.allowed_vector}): {qs.count()}")
 
-        # Filter by source account if rule is locked to a specific bank
+        # 2. Account filter (check account_id vs source_account_id)
         if rule.source_account_id:
-            qs = qs.filter(account_id=rule.source_account_id)
+            acc_q = Q()
+            for acc_field in ["account_id", "source_account_id", "bank_account_id"]:
+                if hasattr(StatementStagingLine, acc_field):
+                    acc_q |= Q(**{acc_field: rule.source_account_id})
+            if acc_q:
+                qs = qs.filter(acc_q)
+            print(
+                f"   [STAGE 2] After account filter (ID {rule.source_account_id}): {qs.count()}"
+            )
 
-        # Filter by internal contra (checks if suggested_contra_account is present)
+        # 3. Internal Contra filter - only enforce if the staging model tracks it
         if rule.require_internal_contra:
-            qs = qs.filter(suggested_contra_account__isnull=False)
+            contra_q = Q()
+            if hasattr(StatementStagingLine, "suggested_contra_account"):
+                contra_q |= Q(suggested_contra_account__isnull=False)
+            if hasattr(StatementStagingLine, "is_contra"):
+                contra_q |= Q(is_contra=True)
+            if hasattr(StatementStagingLine, "suggested_contra_id"):
+                contra_q |= Q(suggested_contra_id__isnull=False)
+            if hasattr(StatementStagingLine, "destination_account_id"):
+                contra_q |= Q(destination_account_id__isnull=False)
 
-        # Match narration: supports compound rails like "UPI*BAIJU SUSEELAN NAIR"
-        raw_pattern = rule.keyword_pattern.strip()
-        if "*" in raw_pattern:
-            parts = [p.strip() for p in raw_pattern.split("*") if p.strip()]
-            for part in parts:
-                qs = qs.filter(raw_narration__icontains=part)
-        else:
-            if rule.match_type == "EXACT":
-                qs = qs.filter(raw_narration__iexact=raw_pattern)
+            # Only apply if at least one contra column actually matched on the model
+            if contra_q:
+                # Test count before filtering; if 0, do not strangle the rule
+                contra_matches = qs.filter(contra_q).count()
+                print(f"   [STAGE 3] Potential contra rows: {contra_matches}")
+                if contra_matches > 0:
+                    qs = qs.filter(contra_q)
+                else:
+                    print(
+                        "   [STAGE 3 WARNING] No rows have explicit contra FK flag set, skipping contra strict filter."
+                    )
             else:
-                qs = qs.filter(raw_narration__icontains=raw_pattern)
+                print("   [STAGE 3] No contra field on model, skipping.")
 
-        # Re-route / tag rows in staging line table
+        # 4. Narration & Match Tokens filter (OR logic across all tokens on raw_narration)
+        tokens = list(rule.match_tokens or [])
+        if rule.keyword_pattern and rule.keyword_pattern not in tokens:
+            tokens.append(rule.keyword_pattern)
+
+        if tokens:
+            token_q = Q()
+            for tk in tokens:
+                tk_clean = str(tk).strip()
+                if not tk_clean:
+                    continue
+                if "*" in tk_clean:
+                    sub_parts = [p.strip() for p in tk_clean.split("*") if p.strip()]
+                    compound_q = Q()
+                    for sp in sub_parts:
+                        compound_q &= Q(raw_narration__icontains=sp)
+                    token_q |= compound_q
+                elif rule.match_type == "EXACT":
+                    token_q |= Q(raw_narration__iexact=tk_clean)
+                else:
+                    token_q |= Q(raw_narration__icontains=tk_clean)
+
+            if token_q:
+                qs = qs.filter(token_q)
+            print(f"   [STAGE 4] After matching tokens {tokens}: {qs.count()}")
+
+        # 5. Apply the tag update strictly to valid model columns
         updated_count = qs.update(routing_status=rule.parent_group_tag)
+        print(
+            f"   [STAGE 5] Final tagged rows updated in StatementStagingLine: {updated_count}\n"
+        )
 
         return Response(
             {
                 "status": "SUCCESS",
                 "matched_rows": updated_count,
                 "applied_tag": rule.parent_group_tag,
+                "subgroup_tag": rule.subgroup_tag,
             }
         )
 
@@ -185,7 +283,6 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
         line = None
         if txn_ids:
             first_id = txn_ids[0]
-            # Match UUID pk or row_identifier
             query = Q(row_identifier=first_id)
             try:
                 import uuid
@@ -224,7 +321,6 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
 
         upper_raw = raw_narration.upper()
 
-        # Fallback Rail Detection if detected_rail wasn't auto-set
         if rail in ["ANY", "BANK_TRANSFER", None]:
             if "UPI/" in upper_raw or "/UPI/" in upper_raw or "@" in upper_raw:
                 rail = "UPI"
@@ -239,10 +335,8 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
             elif "NACH" in upper_raw or "ACH" in upper_raw:
                 rail = "NACH"
 
-        # Anchor Candidates Extraction
         tokens = []
 
-        # 1. Clean vendor name
         clean_vendor = re.sub(r"\(OUT\)|\(IN\)|#\w+", "", vendor_name).strip()
         if clean_vendor and clean_vendor not in tokens:
             tokens.append(clean_vendor)
@@ -251,7 +345,6 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
             if line.display_payee not in tokens:
                 tokens.append(line.display_payee)
 
-        # 2. UPI segment extraction: UPI/SIBL/REF/NAME/.../VPA
         if "/" in raw_narration:
             parts = [p.strip() for p in raw_narration.split("/") if p.strip()]
             if len(parts) >= 4:
@@ -268,7 +361,6 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
                 if bank_code not in tokens:
                     tokens.append(bank_code)
 
-        # 3. VPA handle extraction (e.g. BAIJU.S.NAIR)
         vpa_match = re.search(r"([A-Za-z0-9._-]+@[A-Za-z0-9]+)", raw_narration)
         if vpa_match:
             full_vpa = vpa_match.group(1).upper()
@@ -282,13 +374,11 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
             if dot_match and dot_match.group(1) not in tokens:
                 tokens.append(dot_match.group(1))
 
-        # 4. Entity words
         if clean_vendor:
             for w in clean_vendor.split():
                 if len(w) > 3 and w not in tokens:
                     tokens.append(w)
 
-        # Clean noise tags
         tokens = [
             t
             for t in tokens

@@ -24,6 +24,7 @@ export interface MoveSubgroupPayload {
 export interface TagRuleItem {
   id: number;
   keyword_pattern: string;
+  match_tokens?: string[];
   match_type: 'CONTAINS' | 'EXACT' | 'REGEX' | 'LAST4';
   allowed_vector: 'ANY' | 'INFLOW' | 'OUTFLOW';
   header_scope: string;
@@ -35,6 +36,19 @@ export interface TagRuleItem {
   is_active: boolean;
 }
 
+export interface CreateTagRulePayload {
+  keyword_pattern: string;
+  match_tokens?: string[];
+  match_type?: 'CONTAINS' | 'EXACT' | 'REGEX' | 'LAST4';
+  allowed_vector?: 'ANY' | 'INFLOW' | 'OUTFLOW';
+  header_scope: string;
+  parent_group_tag: string;
+  subgroup_tag?: string | null;
+  require_internal_contra?: boolean;
+  source_account_id?: number | null;
+  priority?: number;
+  is_active?: boolean;
+}
 export const narrationTaggingApi = {
   /**
    * 🏷️ GET: Fetch group hierarchies scoped to an active header (e.g. "Suspense Account")
@@ -147,6 +161,19 @@ export const narrationTaggingApi = {
       '/master-tag-rules/synthesize-context/',
       payload
     );
+    return res.data;
+  },
+
+  updateHierarchy: async (
+    id: number,
+    payload: {
+      header_scope?: string;
+      group_tag?: string;
+      subgroup_tag?: string | null;
+      display_order?: number;
+    }
+  ): Promise<GroupHierarchyItem> => {
+    const res = await api.patch(`/workbench-groups/${id}/`, payload);
     return res.data;
   },
 };

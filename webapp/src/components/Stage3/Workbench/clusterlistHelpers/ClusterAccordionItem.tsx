@@ -27,8 +27,8 @@ interface Props {
   unmappingItemIds: Record<string, boolean>;
   onToggleExpand: (cluster: ExtendedCluster, clusterKey: string, e: React.MouseEvent) => void;
   onSelectCluster: (cluster: ExtendedCluster) => void;
-  onToggleClusterTxns: (txnIds: string[], e: React.MouseEvent) => void;
-  onToggleIndividualTxn: (id: string, e: React.MouseEvent) => void;
+  onToggleClusterTxns: (txnIds: string[], e: React.MouseEvent, items?: any[]) => void;
+  onToggleIndividualTxn: (id: string, e: React.MouseEvent, item?: any) => void;
   onUnmap: (e: React.MouseEvent, item: any, clusterKey: string) => void;
   onOpenRemarksModal: (item: any) => void;
 }
@@ -200,7 +200,7 @@ export const ClusterAccordionItem: React.FC<Props> = ({
                         }}
                         onClick={(e) => {
                           onSelectCluster(cluster);
-                          onToggleClusterTxns(vGroup.txnIds, e);
+                          onToggleClusterTxns(vGroup.txnIds, e,vGroup.items);
                         }}
                         onChange={() => {}}
                         className="w-3.5 h-3.5 accent-amber-500 cursor-pointer rounded shrink-0"
@@ -246,7 +246,7 @@ export const ClusterAccordionItem: React.FC<Props> = ({
                           searchTokens={searchTokens}
                           onToggleSelect={(id, e) => {
                             onSelectCluster(cluster);
-                            onToggleIndividualTxn(id, e);
+                            onToggleIndividualTxn(id, e,item);
                           }}
                           onUnmap={onUnmap}
                           onOpenRemarksModal={(it) => {

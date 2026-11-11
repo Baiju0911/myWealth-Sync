@@ -18,8 +18,8 @@ interface Props {
   visibleTxnIds: string[];
   activePreviewCluster: ExtendedCluster | Cluster | null;
   setActivePreviewCluster: (cluster: ExtendedCluster) => void;
-  toggleIndividualTxn: (txnId: string, e: React.MouseEvent) => void;
-  toggleClusterTxns: (clusterTxnIds: string[], e: React.MouseEvent) => void;
+  toggleIndividualTxn: (txnId: string, e: React.MouseEvent, item?: any) => void;
+  toggleClusterTxns: (clusterTxnIds: string[], e: React.MouseEvent, items?: any[]) => void;
   toggleSelectAllVisible: () => void;
   clearAllSelections: () => void;
   lastAppliedMapping?: { txnIds: string[]; asset_id?: string | number; asset_code?: string; asset_name?: string } | null;
@@ -348,7 +348,7 @@ export const ClusterListPanel: React.FC<Props> = ({
                   searchTokens={searchTokens}
                   onToggleSelect={(id, e) => {
                     if (item._parentCluster) setActivePreviewCluster(item._parentCluster);
-                    toggleIndividualTxn(id, e);
+                    toggleIndividualTxn(id, e, item);
                   }}
                   onUnmap={handleUnmapSubledger}
                   onOpenRemarksModal={(it) => {
@@ -395,7 +395,8 @@ export const ClusterListPanel: React.FC<Props> = ({
                 onToggleExpand={toggleExpandCluster}
                 onSelectCluster={setActivePreviewCluster}
                 onToggleClusterTxns={toggleClusterTxns}
-                onToggleIndividualTxn={toggleIndividualTxn}
+                //onToggleIndividualTxn={toggleIndividualTxn}
+                onToggleIndividualTxn={(id, e, item) => toggleIndividualTxn(id, e, item)} 
                 onUnmap={handleUnmapSubledger}
                 onOpenRemarksModal={(it) => setRemarksModalItem(it)}
               />

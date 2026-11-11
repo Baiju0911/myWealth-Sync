@@ -50,6 +50,9 @@ services:
       - "8000:8000"
       - "5678:5678"
     environment:
+      - PYTHONDONTWRITEBYTECODE=1 # Prevents writing .pyc files so edits take immediate effect
+      - PYTHONUNBUFFERED=1       # Flushes stdout/stderr logs immediately to docker logs
+      - DEBUG=1
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
       - PYTHONPATH=${PYTHONPATH}
       - DB_HOST=${DB_HOST}

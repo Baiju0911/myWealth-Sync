@@ -42,6 +42,8 @@ interface Props {
   onTagRuleSaved?: () => void;
   selectedTransaction?: any;
   activeVendorName?: string;
+  selectedTransactions?: any[];
+  
 }
 
 const ROOT_ACCOUNT_CLASSES = ['Asset', 'Expense', 'Income', 'Liability', 'Transfer'] as const;
@@ -85,7 +87,9 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
   handleApplyClassification,
   onClose,
   suggestedRule = null,
+  selectedTransactions = [],
   subledgerCapableSet = new Set(['Suspense Account']),
+  
   // subledgerCapableSet = new Set([
   //   'Suspense Account',
   //   'Gold & Precious Metals',
@@ -101,6 +105,8 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
   onOpenNewFolioModal,
   onTagRuleSaved,
 }) => {
+  
+
   const [subledgerInfo, setSubledgerInfo] = useState<SubcategoryBreakdownResponse | null>(null);
   const [loadingSubledgerInfo, setLoadingSubledgerInfo] = useState<boolean>(false);
   const [selectedFolioId, setSelectedFolioId] = useState<string>('');
@@ -113,6 +119,17 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
 
   // 🎯 Fetch all active cash float folios
   const [allCashFolios, setAllCashFolios] = useState<AssetSubLedgerNode[]>([]);
+
+  console.log('🔍 [DEBUG Step 3] Inside TaxonomyMapperPanel:', {
+    receivedTxnsCount: selectedTransactions?.length,
+    selectedTransactions,
+    isTagRuleBuilderOpen,
+  });
+
+
+
+  
+
 
   useEffect(() => {
     subledgerApi
@@ -151,6 +168,7 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
       }
     }
   }, [activePreviewCluster, setUpiStrategy]);
+
 
   // Robust resolver for the active item
   // Priority: 1. Specifically selected row -> 2. Cluster items -> 3. Fallback cluster
@@ -295,6 +313,7 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
 
   const lastFetchedSubcategoryRef = React.useRef<string | null>(null);
 
+
   useEffect(() => {
     if (!isSubledgerTarget || !selectedSubcategory) {
       setSubledgerInfo(null);
@@ -313,6 +332,9 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
       lastFetchedSubcategoryRef.current = selectedSubcategory;
       return;
     }
+
+    // Re-fetch groups helper so newly added subgroups appear in dropdowns immediately
+  
 
     let isMounted = true;
     lastFetchedSubcategoryRef.current = selectedSubcategory;
@@ -341,10 +363,43 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
     };
   }, [selectedSubcategory, isSubledgerTarget, subledgerInfo]);
 
-  const uniqueParentGroupTags = Array.from(new Set(availableGroups.map((g) => g.group_tag)));
-  const availableSubgroupsForSelected = availableGroups
-    .filter((g) => g.group_tag === selectedGroupTag && g.subgroup_tag)
-    .map((g) => g.subgroup_tag as string);
+  const refreshGroups = () => {
+    if (targetSubcategoryContext) {
+      narrationTaggingApi
+        .getHierarchies(targetSubcategoryContext)
+        .then((groups) => {
+          setAvailableGroups(groups);
+        })
+        .catch((err) => console.error('Failed to reload workbench groups:', err));
+    }
+  };
+
+  // const uniqueParentGroupTags = Array.from(new Set(availableGroups.map((g) => g.group_tag)));
+  // const availableSubgroupsForSelected = availableGroups
+  //   .filter((g) => g.group_tag === selectedGroupTag && g.subgroup_tag)
+  //   .map((g) => g.subgroup_tag as string);
+
+
+      const uniqueParentGroupTags = useMemo(
+    () => Array.from(new Set(availableGroups.map((g) => g.group_tag))),
+    [availableGroups]
+  );
+
+  const availableSubgroupsForSelected = useMemo(
+    () =>
+      availableGroups
+        .filter((g) => g.group_tag === selectedGroupTag && g.subgroup_tag)
+        .map((g) => g.subgroup_tag as string),
+    [availableGroups, selectedGroupTag]
+  );
+  
+    // Whenever selectedGroupTag changes, auto-select the first available subgroup if none selected
+  useEffect(() => {
+    if (availableSubgroupsForSelected.length > 0 && !selectedSubgroupTag) {
+      setSelectedSubgroupTag(availableSubgroupsForSelected[0]);
+    }
+  }, [selectedGroupTag, availableSubgroupsForSelected, selectedSubgroupTag]);
+
 
   return (
     <div className="w-[42%] flex flex-col justify-between p-5 bg-zinc-950 overflow-y-auto font-mono text-xs text-zinc-100 border-l border-zinc-800">
@@ -764,18 +819,22 @@ export const TaxonomyMapperPanel: React.FC<Props> = ({
             )}
         </div>
 
+        
         <TagRuleBuilderModal
           isOpen={isTagRuleBuilderOpen}
           onClose={() => setIsTagRuleBuilderOpen(false)}
           headerScope={targetSubcategoryContext}
           parentGroupTag={selectedGroupTag}
           subgroupTag={selectedSubgroupTag}
-          selectedTxnIds={selectedSummary.allTxnIds}
+          onSubgroupTagChange={(newSub: string | null) => {
+            setSelectedSubgroupTag(newSub || '');
+            refreshGroups();
+          }}
+          selectedTransactions={selectedTransactions}
           activeVendorName={activeVendorName}
-          defaultPattern={activePreviewCluster?.pattern}
-          vectorType={vectorType}
           onSuccess={(count) => {
             alert(`Rule saved! Tagged ${count} matching transactions as ${selectedGroupTag}.`);
+            refreshGroups();
             if (onTagRuleSaved) onTagRuleSaved();
           }}
         />

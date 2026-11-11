@@ -79,6 +79,7 @@ def _build_clusters_from_entries(
     entries, target_subcategory, search_query=None, include_items=False
 ):
     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+    MasterNarrationTagRule = apps.get_model("ledger", "MasterNarrationTagRule")
 
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
     staging_lines = list(
@@ -86,9 +87,20 @@ def _build_clusters_from_entries(
     )
     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
 
+    # Pre-cached map of active rules: tag -> subgroup
+    rule_subgroup_cache = dict(
+        MasterNarrationTagRule.objects.filter(is_active=True).values_list(
+            "parent_group_tag", "subgroup_tag"
+        )
+    )
+    rule_subgroup_cache = {
+        (k or "").strip().upper(): (v or "").strip().upper()
+        for k, v in rule_subgroup_cache.items()
+        if k
+    }
+
     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
-    acc_lookup = {a["id"]: a for a in acc_registry}
 
     clusters_map = {}
 
@@ -99,6 +111,10 @@ def _build_clusters_from_entries(
             entry.row_identifier,
             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
         )
+
+        # 🟢 Initialize loop-scoped variables deterministically
+        configured_subgroup: Optional[str] = None
+        stg_routing_status: str = ""
 
         if stg_line:
             parsed_meta = stg_line.parsed_narration or {}
@@ -113,6 +129,9 @@ def _build_clusters_from_entries(
                 stg_line, "narration", ""
             )
             host_account_id = getattr(stg_line, "account_id", None) or entry.account_id
+            stg_routing_status = (
+                (getattr(stg_line, "routing_status", "") or "").strip().upper()
+            )
         else:
             fallback_text = (
                 remarks.get("universal_narration")
@@ -132,6 +151,7 @@ def _build_clusters_from_entries(
             remark = parsed_meta.get("raw_remark")
             raw_statement_text = fallback_text
             host_account_id = entry.account_id
+            stg_routing_status = ""
 
         debit_val = float(entry.debit or 0)
         credit_val = float(entry.credit or 0)
@@ -143,23 +163,47 @@ def _build_clusters_from_entries(
         # -------------------------------------------------------------
         is_contra = contra_info.get("is_self_transfer", False)
         pair_id = None
+        src_name = contra_info.get("from_account_name", "Bank").upper()
+        dst_name = contra_info.get("to_account_name", "Bank").upper()
 
         if is_contra:
+            pair_amt = f"{amount:.2f}"
+            pair_id = (
+                f"PAIR_{min(src_name, dst_name)}_{max(src_name, dst_name)}_{pair_amt}"
+            )
+
+        # 🟢 TIER 1: MasterNarrationTagRule Explicit Priority
+        if stg_routing_status and stg_routing_status.startswith("#"):
+            pattern = stg_routing_status
+            configured_subgroup = rule_subgroup_cache.get(pattern)
+
+            if configured_subgroup:
+                canonical_title = configured_subgroup
+                display_subgroup = configured_subgroup
+            elif is_contra:
+                canonical_title = f"{src_name} ➔ {dst_name}"
+                display_subgroup = canonical_title
+                configured_subgroup = canonical_title
+            else:
+                canonical_title = payee or "Tagged Pattern"
+                display_subgroup = canonical_title
+                configured_subgroup = canonical_title
+
+            score, label, ok_to_classify = 1.0, "RULE_VERIFIED", True
+
+        # 🟢 TIER 2: Fallback to Self-Transfer / Contra Inference
+        elif is_contra:
             pattern = "#CONTRA"
-            src_name = contra_info.get("from_account_name", "Bank").upper()
-            dst_name = contra_info.get("to_account_name", "Bank").upper()
             canonical_title = f"{src_name} ➔ {dst_name}"
+            display_subgroup = canonical_title
+            configured_subgroup = canonical_title
             score, label, ok_to_classify = ConfidenceScorer.evaluate(
                 is_paired_contra=True,
                 has_ref_proof=bool(ref_no),
                 has_rule_precedent=True,
             )
-            # Normalize amount string for deterministic pair grouping
-            pair_amt = f"{amount:.2f}"
-            pair_id = (
-                f"PAIR_{min(src_name, dst_name)}_{max(src_name, dst_name)}_{pair_amt}"
-            )
-            display_subgroup = canonical_title
+
+        # 🟢 TIER 3: Generic Algorithmic Tagging via Regex & Bank Heuristics
         else:
             (
                 pattern,
@@ -174,6 +218,7 @@ def _build_clusters_from_entries(
                 registry=acc_registry,
             )
             display_subgroup = canonical_title
+            configured_subgroup = canonical_title
 
         pattern = pattern.upper().strip()
 
@@ -181,6 +226,7 @@ def _build_clusters_from_entries(
             clusters_map[pattern] = {
                 "pattern": pattern,
                 "display_name": canonical_title,
+                "subgroup_tag": configured_subgroup,
                 "count": 0,
                 "total_amount": 0.0,
                 "total_inflow": 0.0,
@@ -190,7 +236,7 @@ def _build_clusters_from_entries(
                 "sample_descriptions": [],
                 "items": [],
                 "transaction_ids": [],
-                "is_contra_group": (pattern == "#CONTRA"),
+                "is_contra_group": (pattern in ["#CONTRA", "#INTERABANK"]),
             }
 
         readable_narrative = build_human_readable_narrative(
@@ -228,6 +274,8 @@ def _build_clusters_from_entries(
                     "narration": raw_statement_text,
                     "raw_narration": raw_statement_text,
                     "display_payee": display_subgroup,
+                    "subgroup_tag": configured_subgroup,
+                    "vendor_name": payee,  # 👈 Fixed: correctly points to local variable payee
                     "universal_narration": readable_narrative,
                     "debit": debit_val,
                     "credit": credit_val,
@@ -235,6 +283,7 @@ def _build_clusters_from_entries(
                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
                     "transaction_date": str(entry.transaction_date),
                     "contra_meta": contra_info,
+                    "routing_status": stg_routing_status,
                 }
             )
 
@@ -259,174 +308,6 @@ def _build_clusters_from_entries(
         ]
 
     return sorted_clusters
-
-
-# def _build_clusters_from_entries(
-#     entries, target_subcategory, search_query=None, include_items=False
-# ):
-#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
-
-#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
-#     staging_lines = list(
-#         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
-#     )
-#     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
-
-#     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
-#     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
-
-#     clusters_map = {}
-
-#     for entry in entries:
-#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
-#         stg_line = staging_map.get(entry.row_identifier)
-#         contra_info = contra_map.get(
-#             entry.row_identifier,
-#             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
-#         )
-
-#         if stg_line:
-#             parsed_meta = stg_line.parsed_narration or {}
-#             raw_payee = (
-#                 parsed_meta.get("suggested_payee") or stg_line.display_payee or ""
-#             )
-#             ref_no = parsed_meta.get("detected_reference")
-#             rail = parsed_meta.get("detected_rail", "BANK")
-#             remark = parsed_meta.get("suggested_remark")
-#             raw_statement_text = getattr(stg_line, "raw_narration", None) or getattr(
-#                 stg_line, "narration", ""
-#             )
-#             host_account_id = getattr(stg_line, "account_id", None) or entry.account_id
-#         else:
-#             fallback_text = (
-#                 remarks.get("universal_narration")
-#                 or remarks.get("narration")
-#                 or remarks.get("display_text")
-#                 or ""
-#             )
-#             parsed_meta = UniversalNarrationExtractor.decompose_raw_narration(
-#                 fallback_text
-#             )
-#             raw_payee = (
-#                 remarks.get("payee") or parsed_meta.get("raw_payee") or fallback_text
-#             )
-#             ref_no = remarks.get("upi_ref") or parsed_meta.get("reference")
-#             rail = parsed_meta.get("rail", "BANK")
-#             remark = parsed_meta.get("raw_remark")
-#             raw_statement_text = fallback_text
-#             host_account_id = entry.account_id
-
-#         debit_val = float(entry.debit or 0)
-#         credit_val = float(entry.credit or 0)
-#         is_outflow = debit_val > 0
-#         amount = debit_val if is_outflow else credit_val
-
-#         # Route tagging, scoring, and pair isolation delegated to TaggingEngine
-#         is_contra = contra_info.get("is_self_transfer", False)
-#         (
-#             pattern,
-#             canonical_title,
-#             display_subgroup,
-#             pair_id,
-#             score,
-#             label,
-#             ok_to_classify,
-#         ) = TaggingEngine.resolve_cluster_envelope(
-#             is_contra=is_contra,
-#             contra_info=contra_info,
-#             raw_narration=raw_statement_text,
-#             payee=raw_payee,
-#             amount=amount,
-#             ref_no=ref_no,
-#             host_account_id=host_account_id,
-#             acc_registry=acc_registry,
-#         )
-#         if (
-#             "BAIJU" in str(raw_payee).upper()
-#             or "FRIEND" in str(raw_statement_text).upper()
-#         ):
-#             print(
-#                 f"\n>>> [CLUSTER DEBUG] Raw: {raw_statement_text[:35]}... | "
-#                 f"Payee: {raw_payee} -> Subgroup: {display_subgroup} | "
-#                 f"Pattern: {pattern} | Score: {score}",
-#                 flush=True,
-#             )
-
-#         if pattern not in clusters_map:
-#             clusters_map[pattern] = TaggingEngine.create_empty_cluster(
-#                 pattern=pattern,
-#                 display_name=canonical_title,
-#                 score=score,
-#                 label=label,
-#                 is_contra=is_contra,
-#             )
-
-#         readable_narrative = build_human_readable_narrative(
-#             rail=rail,
-#             direction="OUTFLOW" if is_outflow else "INFLOW",
-#             amount=amount,
-#             payee=display_subgroup,
-#             ref_no=ref_no,
-#             branch_or_remark=remark,
-#         )
-
-#         cluster = clusters_map[pattern]
-#         cluster["count"] += 1
-#         cluster["total_amount"] += amount
-#         if is_outflow:
-#             cluster["total_outflow"] += amount
-#         else:
-#             cluster["total_inflow"] += amount
-
-#         cluster["transaction_ids"].append(str(entry.id))
-#         if (
-#             len(cluster["sample_descriptions"]) < 2
-#             and readable_narrative not in cluster["sample_descriptions"]
-#         ):
-#             cluster["sample_descriptions"].append(readable_narrative)
-
-#         if include_items:
-#             cluster["items"].append(
-#                 {
-#                     "id": str(entry.id),
-#                     "pair_id": pair_id or f"SINGLE_{entry.id}",
-#                     "ok_to_classify": ok_to_classify,
-#                     "confidence_score": score,
-#                     "confidence_label": label,
-#                     "narration": raw_statement_text,
-#                     "raw_narration": raw_statement_text,
-#                     "display_payee": display_subgroup,
-#                     "universal_narration": readable_narrative,
-#                     "debit": debit_val,
-#                     "credit": credit_val,
-#                     "amount": amount,
-#                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
-#                     "transaction_date": str(entry.transaction_date),
-#                     "contra_meta": contra_info,
-#                 }
-#             )
-
-#     # Sort cluster items so paired transactions sit side-by-side
-#     if include_items:
-#         for c in clusters_map.values():
-#             c["items"].sort(
-#                 key=lambda x: (x["pair_id"], x["transaction_date"], x["direction"])
-#             )
-
-#     sorted_clusters = sorted(
-#         clusters_map.values(), key=lambda c: c["count"], reverse=True
-#     )
-
-#     if search_query and str(search_query).strip():
-#         norm_query = search_query.strip().upper()
-#         return [
-#             c
-#             for c in sorted_clusters
-#             if norm_query in c["pattern"].upper()
-#             or any(norm_query in s.upper() for s in c.get("sample_descriptions", []))
-#         ]
-
-#     return sorted_clusters
 
 
 def get_suspense_workbench_clusters(
@@ -635,11 +516,6 @@ def reclassify_and_learn(
 
 
 def fetch_cluster_line_items(entry_ids: list) -> list:
-    """
-    Fetches detailed line-item payload for an expanded cluster accordion.
-    Retrieves journal entries, statement staging lines, contra metadata,
-    and existing subledger folio mappings.
-    """
     if not entry_ids:
         return []
 
@@ -653,7 +529,6 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
             AssetTransactionMapping = model
             break
 
-    # 1. Fetch journal entries
     entries = list(
         JournalEntry.objects.filter(id__in=entry_ids)
         .only(
@@ -670,7 +545,6 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
 
     row_ids = [e.row_identifier for e in entries if e.row_identifier]
 
-    # 2. Query Asset mappings by row_identifier
     mapping_map = {}
     if row_ids and AssetTransactionMapping:
         mappings = AssetTransactionMapping.objects.filter(
@@ -686,16 +560,12 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
                 "asset_name": getattr(asset, "name", "Petty Cash Float"),
             }
 
-    # 3. Fetch staging lines
     staging_lines = list(
         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
     )
     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
-
-    # 4. Resolve internal contra transfers
     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
 
-    # 5. Fetch pairing bank account legs
     pairing_legs = list(
         JournalEntry.objects.filter(row_identifier__in=row_ids)
         .exclude(account_id=99)
@@ -754,6 +624,7 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
             ref_no = parsed.get("detected_reference")
             rail = parsed.get("detected_rail", "BANK")
             remark = parsed.get("suggested_remark")
+            routing_status = getattr(stg, "routing_status", None)
         else:
             raw_narration = (
                 remarks.get("universal_narration")
@@ -768,6 +639,7 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
             ref_no = parsed.get("reference") or remarks.get("upi_ref")
             rail = parsed.get("rail", "BANK")
             remark = parsed.get("raw_remark")
+            routing_status = None
 
         debit_val = float(entry.debit or 0)
         credit_val = float(entry.credit or 0)
@@ -820,6 +692,7 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
                 "asset_code": mapping_info.get("asset_code"),
                 "asset_name": mapping_info.get("asset_name"),
                 "contra_meta": contra_info,
+                "routing_status": routing_status,
                 "remarks": {
                     **remarks,
                     "payee": clean_payee,
@@ -830,6 +703,840 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
         )
 
     return items
+
+
+# # tracker/classification/engine.py
+# from __future__ import annotations
+# from typing import Any, Dict, List, Optional
+# from django.apps import apps
+# from django.db.models import Q
+# from django.utils import timezone
+
+# from tracker.models.models import ClassificationRule, JournalEntry
+# from tracker.parsers.universal_narration import UniversalNarrationExtractor
+
+# from .enginehelpers import (
+#     TaggingEngine,
+#     RuleLearningEngine,
+#     resolve_cross_account_contra_map,
+#     ConfidenceScorer,
+# )
+# from tracker.constants import (
+#     GENERIC_IGNORE_PATTERNS,
+#     GENERIC_PATTERNS,
+#     KNOWN_MERCHANTS,
+#     NOISE_KEYWORD_BLACKLIST,
+#     RULE_SAFETY_BLACKLIST,
+#     ABSOLUTE_GREEDY_BLACKLIST,
+#     OK_WORD_LIST,
+#     BLACKLIST_TAGS,
+#     ALL_SYSTEM_BLACKLIST,
+#     ACTION_AND_RAIL_NOISE,
+# )
+
+# extract_meaningful_tokens = TaggingEngine.extract_meaningful_tokens
+# sanitize_user_pattern = RuleLearningEngine.sanitize_user_pattern
+# extract_clean_payee_pattern = TaggingEngine.extract_clean_payee_pattern
+# generate_strict_multitoken_pattern = (
+#     RuleLearningEngine.generate_strict_multitoken_pattern
+# )
+# add_or_update_classification_rule = RuleLearningEngine.add_or_update_classification_rule
+# match_multi_tokens = RuleLearningEngine.match_multi_tokens
+# get_clean_patterns = RuleLearningEngine.get_clean_patterns
+# generate_canonical_cluster_tag = TaggingEngine.generate_canonical_cluster_tag
+
+
+# def build_human_readable_narrative(
+#     rail: str,
+#     direction: str,
+#     amount: float,
+#     payee: str,
+#     ref_no: str | None,
+#     branch_or_remark: str | None,
+# ) -> str:
+#     clean_payee = (
+#         UniversalNarrationExtractor.repair_kerning_and_splits(payee)
+#         if payee
+#         else "Unspecified Entity"
+#     )
+#     rail_label = f" via {rail}" if rail and rail != "UNKNOWN" else ""
+#     ref_label = f" (Ref: {ref_no})" if ref_no else ""
+
+#     if direction == "OUTFLOW":
+#         base = f"Paid ₹{amount:,.2f} to {clean_payee}{rail_label}{ref_label}"
+#     else:
+#         upper_payee = clean_payee.upper()
+#         if "INTEREST" in upper_payee:
+#             base = f"Interest Credit of ₹{amount:,.2f}{rail_label}"
+#         elif "OWN" in upper_payee or "SELF" in upper_payee:
+#             base = f"Self-Transfer / Deposit ₹{amount:,.2f}{rail_label}"
+#         else:
+#             base = f"Received ₹{amount:,.2f} from {clean_payee}{rail_label}{ref_label}"
+
+#     if branch_or_remark and branch_or_remark.upper() not in [
+#         "NO REMARKS",
+#         clean_payee.upper(),
+#     ]:
+#         base += f" • {branch_or_remark}"
+
+#     return base
+
+
+# def _build_clusters_from_entries(
+#     entries, target_subcategory, search_query=None, include_items=False
+# ):
+#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+#     staging_lines = list(
+#         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+#     )
+#     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
+
+#     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
+#     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
+#     acc_lookup = {a["id"]: a for a in acc_registry}
+
+#     clusters_map = {}
+
+#     for entry in entries:
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         stg_line = staging_map.get(entry.row_identifier)
+#         contra_info = contra_map.get(
+#             entry.row_identifier,
+#             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+#         )
+
+#         if stg_line:
+#             parsed_meta = stg_line.parsed_narration or {}
+#             raw_payee = (
+#                 parsed_meta.get("suggested_payee") or stg_line.display_payee or ""
+#             )
+#             payee = TaggingEngine.repair_narration_kerning(raw_payee)
+#             ref_no = parsed_meta.get("detected_reference")
+#             rail = parsed_meta.get("detected_rail", "BANK")
+#             remark = parsed_meta.get("suggested_remark")
+#             raw_statement_text = getattr(stg_line, "raw_narration", None) or getattr(
+#                 stg_line, "narration", ""
+#             )
+#             host_account_id = getattr(stg_line, "account_id", None) or entry.account_id
+#         else:
+#             fallback_text = (
+#                 remarks.get("universal_narration")
+#                 or remarks.get("narration")
+#                 or remarks.get("display_text")
+#                 or ""
+#             )
+#             parsed_meta = UniversalNarrationExtractor.decompose_raw_narration(
+#                 fallback_text
+#             )
+#             raw_payee = (
+#                 remarks.get("payee") or parsed_meta.get("raw_payee") or fallback_text
+#             )
+#             payee = TaggingEngine.repair_narration_kerning(raw_payee)
+#             ref_no = remarks.get("upi_ref") or parsed_meta.get("reference")
+#             rail = parsed_meta.get("rail", "BANK")
+#             remark = parsed_meta.get("raw_remark")
+#             raw_statement_text = fallback_text
+#             host_account_id = entry.account_id
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+#         is_outflow = debit_val > 0
+#         amount = debit_val if is_outflow else credit_val
+
+#         # -------------------------------------------------------------
+#         # Determine Tag, Canonical Title, Confidence & OK to Classify
+#         # -------------------------------------------------------------
+#         is_contra = contra_info.get("is_self_transfer", False)
+#         pair_id = None
+
+#         if is_contra:
+#             pattern = "#CONTRA"
+#             src_name = contra_info.get("from_account_name", "Bank").upper()
+#             dst_name = contra_info.get("to_account_name", "Bank").upper()
+#             canonical_title = f"{src_name} ➔ {dst_name}"
+#             score, label, ok_to_classify = ConfidenceScorer.evaluate(
+#                 is_paired_contra=True,
+#                 has_ref_proof=bool(ref_no),
+#                 has_rule_precedent=True,
+#             )
+#             # Normalize amount string for deterministic pair grouping
+#             pair_amt = f"{amount:.2f}"
+#             pair_id = (
+#                 f"PAIR_{min(src_name, dst_name)}_{max(src_name, dst_name)}_{pair_amt}"
+#             )
+#             display_subgroup = canonical_title
+#         else:
+#             (
+#                 pattern,
+#                 canonical_title,
+#                 score,
+#                 label,
+#                 ok_to_classify,
+#             ) = TaggingEngine.generate_canonical_cluster_tag(
+#                 raw_narration=raw_statement_text,
+#                 payee=payee,
+#                 host_account_id=host_account_id,
+#                 registry=acc_registry,
+#             )
+#             display_subgroup = canonical_title
+
+#         pattern = pattern.upper().strip()
+
+#         if pattern not in clusters_map:
+#             clusters_map[pattern] = {
+#                 "pattern": pattern,
+#                 "display_name": canonical_title,
+#                 "count": 0,
+#                 "total_amount": 0.0,
+#                 "total_inflow": 0.0,
+#                 "total_outflow": 0.0,
+#                 "confidence_score": score,
+#                 "confidence_label": label,
+#                 "sample_descriptions": [],
+#                 "items": [],
+#                 "transaction_ids": [],
+#                 "is_contra_group": (pattern == "#CONTRA"),
+#             }
+
+#         readable_narrative = build_human_readable_narrative(
+#             rail=rail,
+#             direction="OUTFLOW" if is_outflow else "INFLOW",
+#             amount=amount,
+#             payee=display_subgroup,
+#             ref_no=ref_no,
+#             branch_or_remark=remark,
+#         )
+
+#         cluster = clusters_map[pattern]
+#         cluster["count"] += 1
+#         cluster["total_amount"] += amount
+#         if is_outflow:
+#             cluster["total_outflow"] += amount
+#         else:
+#             cluster["total_inflow"] += amount
+
+#         cluster["transaction_ids"].append(str(entry.id))
+#         if (
+#             len(cluster["sample_descriptions"]) < 2
+#             and readable_narrative not in cluster["sample_descriptions"]
+#         ):
+#             cluster["sample_descriptions"].append(readable_narrative)
+
+#         if include_items:
+#             cluster["items"].append(
+#                 {
+#                     "id": str(entry.id),
+#                     "pair_id": pair_id or f"SINGLE_{entry.id}",
+#                     "ok_to_classify": ok_to_classify,
+#                     "confidence_score": score,
+#                     "confidence_label": label,
+#                     "narration": raw_statement_text,
+#                     "raw_narration": raw_statement_text,
+#                     "display_payee": display_subgroup,
+#                     "universal_narration": readable_narrative,
+#                     "debit": debit_val,
+#                     "credit": credit_val,
+#                     "amount": amount,
+#                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                     "transaction_date": str(entry.transaction_date),
+#                     "contra_meta": contra_info,
+#                 }
+#             )
+
+#     # Sort cluster line items so matched pairs sit adjacent:
+#     if include_items:
+#         for c in clusters_map.values():
+#             c["items"].sort(
+#                 key=lambda x: (x["pair_id"], x["transaction_date"], x["direction"])
+#             )
+
+#     sorted_clusters = sorted(
+#         clusters_map.values(), key=lambda c: c["count"], reverse=True
+#     )
+
+#     if search_query and str(search_query).strip():
+#         norm_query = search_query.strip().upper()
+#         return [
+#             c
+#             for c in sorted_clusters
+#             if norm_query in c["pattern"].upper()
+#             or any(norm_query in s.upper() for s in c.get("sample_descriptions", []))
+#         ]
+
+#     return sorted_clusters
+
+
+# # def _build_clusters_from_entries(
+# #     entries, target_subcategory, search_query=None, include_items=False
+# # ):
+# #     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+
+# #     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+# #     staging_lines = list(
+# #         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+# #     )
+# #     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
+
+# #     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
+# #     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
+
+# #     clusters_map = {}
+
+# #     for entry in entries:
+# #         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+# #         stg_line = staging_map.get(entry.row_identifier)
+# #         contra_info = contra_map.get(
+# #             entry.row_identifier,
+# #             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+# #         )
+
+# #         if stg_line:
+# #             parsed_meta = stg_line.parsed_narration or {}
+# #             raw_payee = (
+# #                 parsed_meta.get("suggested_payee") or stg_line.display_payee or ""
+# #             )
+# #             ref_no = parsed_meta.get("detected_reference")
+# #             rail = parsed_meta.get("detected_rail", "BANK")
+# #             remark = parsed_meta.get("suggested_remark")
+# #             raw_statement_text = getattr(stg_line, "raw_narration", None) or getattr(
+# #                 stg_line, "narration", ""
+# #             )
+# #             host_account_id = getattr(stg_line, "account_id", None) or entry.account_id
+# #         else:
+# #             fallback_text = (
+# #                 remarks.get("universal_narration")
+# #                 or remarks.get("narration")
+# #                 or remarks.get("display_text")
+# #                 or ""
+# #             )
+# #             parsed_meta = UniversalNarrationExtractor.decompose_raw_narration(
+# #                 fallback_text
+# #             )
+# #             raw_payee = (
+# #                 remarks.get("payee") or parsed_meta.get("raw_payee") or fallback_text
+# #             )
+# #             ref_no = remarks.get("upi_ref") or parsed_meta.get("reference")
+# #             rail = parsed_meta.get("rail", "BANK")
+# #             remark = parsed_meta.get("raw_remark")
+# #             raw_statement_text = fallback_text
+# #             host_account_id = entry.account_id
+
+# #         debit_val = float(entry.debit or 0)
+# #         credit_val = float(entry.credit or 0)
+# #         is_outflow = debit_val > 0
+# #         amount = debit_val if is_outflow else credit_val
+
+# #         # Route tagging, scoring, and pair isolation delegated to TaggingEngine
+# #         is_contra = contra_info.get("is_self_transfer", False)
+# #         (
+# #             pattern,
+# #             canonical_title,
+# #             display_subgroup,
+# #             pair_id,
+# #             score,
+# #             label,
+# #             ok_to_classify,
+# #         ) = TaggingEngine.resolve_cluster_envelope(
+# #             is_contra=is_contra,
+# #             contra_info=contra_info,
+# #             raw_narration=raw_statement_text,
+# #             payee=raw_payee,
+# #             amount=amount,
+# #             ref_no=ref_no,
+# #             host_account_id=host_account_id,
+# #             acc_registry=acc_registry,
+# #         )
+# #         if (
+# #             "BAIJU" in str(raw_payee).upper()
+# #             or "FRIEND" in str(raw_statement_text).upper()
+# #         ):
+# #             print(
+# #                 f"\n>>> [CLUSTER DEBUG] Raw: {raw_statement_text[:35]}... | "
+# #                 f"Payee: {raw_payee} -> Subgroup: {display_subgroup} | "
+# #                 f"Pattern: {pattern} | Score: {score}",
+# #                 flush=True,
+# #             )
+
+# #         if pattern not in clusters_map:
+# #             clusters_map[pattern] = TaggingEngine.create_empty_cluster(
+# #                 pattern=pattern,
+# #                 display_name=canonical_title,
+# #                 score=score,
+# #                 label=label,
+# #                 is_contra=is_contra,
+# #             )
+
+# #         readable_narrative = build_human_readable_narrative(
+# #             rail=rail,
+# #             direction="OUTFLOW" if is_outflow else "INFLOW",
+# #             amount=amount,
+# #             payee=display_subgroup,
+# #             ref_no=ref_no,
+# #             branch_or_remark=remark,
+# #         )
+
+# #         cluster = clusters_map[pattern]
+# #         cluster["count"] += 1
+# #         cluster["total_amount"] += amount
+# #         if is_outflow:
+# #             cluster["total_outflow"] += amount
+# #         else:
+# #             cluster["total_inflow"] += amount
+
+# #         cluster["transaction_ids"].append(str(entry.id))
+# #         if (
+# #             len(cluster["sample_descriptions"]) < 2
+# #             and readable_narrative not in cluster["sample_descriptions"]
+# #         ):
+# #             cluster["sample_descriptions"].append(readable_narrative)
+
+# #         if include_items:
+# #             cluster["items"].append(
+# #                 {
+# #                     "id": str(entry.id),
+# #                     "pair_id": pair_id or f"SINGLE_{entry.id}",
+# #                     "ok_to_classify": ok_to_classify,
+# #                     "confidence_score": score,
+# #                     "confidence_label": label,
+# #                     "narration": raw_statement_text,
+# #                     "raw_narration": raw_statement_text,
+# #                     "display_payee": display_subgroup,
+# #                     "universal_narration": readable_narrative,
+# #                     "debit": debit_val,
+# #                     "credit": credit_val,
+# #                     "amount": amount,
+# #                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
+# #                     "transaction_date": str(entry.transaction_date),
+# #                     "contra_meta": contra_info,
+# #                 }
+# #             )
+
+# #     # Sort cluster items so paired transactions sit side-by-side
+# #     if include_items:
+# #         for c in clusters_map.values():
+# #             c["items"].sort(
+# #                 key=lambda x: (x["pair_id"], x["transaction_date"], x["direction"])
+# #             )
+
+# #     sorted_clusters = sorted(
+# #         clusters_map.values(), key=lambda c: c["count"], reverse=True
+# #     )
+
+# #     if search_query and str(search_query).strip():
+# #         norm_query = search_query.strip().upper()
+# #         return [
+# #             c
+# #             for c in sorted_clusters
+# #             if norm_query in c["pattern"].upper()
+# #             or any(norm_query in s.upper() for s in c.get("sample_descriptions", []))
+# #         ]
+
+# #     return sorted_clusters
+
+
+# def get_suspense_workbench_clusters(
+#     account_id=None, search_query=None, include_cleared=False, include_items=False
+# ):
+#     JournalEntry = apps.get_model("ledger", "JournalEntry")
+#     query = JournalEntry.objects.filter(account_id=99)
+#     if not include_cleared:
+#         query = query.filter(is_reclassified=False)
+
+#     if account_id and str(account_id) != "99":
+#         bank_row_ids = JournalEntry.objects.filter(account_id=account_id).values_list(
+#             "row_identifier", flat=True
+#         )
+#         query = query.filter(row_identifier__in=bank_row_ids)
+
+#     entries = list(
+#         query.only(
+#             "id", "row_identifier", "debit", "credit", "remarks", "transaction_date"
+#         ).order_by("-transaction_date")
+#     )
+#     return _build_clusters_from_entries(
+#         entries, "Suspense Account", search_query, include_items
+#     )
+
+
+# def get_gl_head_workbench_clusters(
+#     target_subcategory: str, search_query=None, include_items=False
+# ):
+#     JournalEntry = apps.get_model("ledger", "JournalEntry")
+#     AssetSubLedger = apps.get_model("ledger", "AssetSubLedger")
+#     AssetTransactionMapping = apps.get_model("ledger", "AssetTransactionMapping")
+
+#     sub_clean = target_subcategory.strip()
+#     related_asset_ids = AssetSubLedger.objects.filter(
+#         Q(category__icontains=sub_clean)
+#         | Q(asset_category__name__icontains=sub_clean)
+#         | Q(asset_category__default_taxonomy_subcategory__icontains=sub_clean)
+#     ).values_list("id", flat=True)
+
+#     bound_row_ids = list(
+#         AssetTransactionMapping.objects.filter(
+#             asset_id__in=related_asset_ids
+#         ).values_list("row_identifier", flat=True)
+#     )
+
+#     gl_filter = (
+#         Q(evaluation_matrix_snapshot__resolved_subcategory__iexact=sub_clean)
+#         | Q(remarks__target_account_name__iexact=sub_clean)
+#         | Q(remarks__subcategory__iexact=sub_clean)
+#     )
+#     if bound_row_ids:
+#         gl_filter |= Q(row_identifier__in=bound_row_ids)
+
+#     query = (
+#         JournalEntry.objects.filter(gl_filter, debit__gt=0)
+#         .only("id", "row_identifier", "debit", "credit", "remarks", "transaction_date")
+#         .order_by("-transaction_date")
+#     )
+
+#     seen_row_ids = set()
+#     entries = []
+#     for e in list(query):
+#         rid = e.row_identifier or str(e.id)
+#         if rid in seen_row_ids:
+#             continue
+#         seen_row_ids.add(rid)
+#         entries.append(e)
+
+#     return _build_clusters_from_entries(entries, sub_clean, search_query, include_items)
+
+
+# def get_suspense_clusters(
+#     target_subcategory="Suspense Account",
+#     account_id=None,
+#     search_query=None,
+#     include_cleared=False,
+#     include_items=False,
+# ):
+#     if not target_subcategory or target_subcategory.strip() in [
+#         "Suspense Account",
+#         "All",
+#     ]:
+#         return get_suspense_workbench_clusters(
+#             account_id, search_query, include_cleared, include_items
+#         )
+#     return get_gl_head_workbench_clusters(
+#         target_subcategory, search_query, include_items
+#     )
+
+
+# def reclassify_and_learn(
+#     transaction_ids: List[str],
+#     target_category: str,
+#     target_subcategory: str,
+#     patterns: Optional[List[str]] = None,
+#     save_rule: bool = True,
+# ) -> Dict[str, Any]:
+#     if not transaction_ids:
+#         return {"status": "success", "reclassified_count": 0, "rules_updated": False}
+
+#     entries = list(JournalEntry.objects.filter(account_id=99, id__in=transaction_ids))
+#     if not entries:
+#         entries = list(
+#             JournalEntry.objects.filter(
+#                 account_id=99, row_identifier__in=transaction_ids
+#             )
+#         )
+
+#     if not entries:
+#         return {"status": "success", "reclassified_count": 0, "rules_updated": False}
+
+#     total_debit = sum(float(e.debit or 0) for e in entries)
+#     total_credit = sum(float(e.credit or 0) for e in entries)
+#     inferred_entry_type = "Credit" if total_credit > total_debit else "Debit"
+
+#     payee_groups = {}
+#     for entry in entries:
+#         snapshot = entry.evaluation_matrix_snapshot or {}
+#         snapshot["previous_category"] = snapshot.get("resolved_category")
+#         snapshot["previous_subcategory"] = snapshot.get("resolved_subcategory")
+#         snapshot["resolved_category"] = target_category
+#         snapshot["resolved_subcategory"] = target_subcategory
+#         snapshot["is_manual_override"] = True
+
+#         entry.evaluation_matrix_snapshot = snapshot
+#         entry.classification_status = "RECLASSIFIED"
+#         entry.is_reclassified = True
+
+#         remarks_dict = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         narration_text = remarks_dict.get("narration") or str(entry.remarks or "")
+#         payee = remarks_dict.get("payee") or ""
+#         clean_payee = (
+#             TaggingEngine.extract_clean_payee_pattern(payee or narration_text)
+#             or "GENERIC"
+#         )
+
+#         if clean_payee not in payee_groups:
+#             payee_groups[clean_payee] = []
+#         if narration_text:
+#             payee_groups[clean_payee].append(narration_text)
+
+#         entry.remarks = {
+#             **remarks_dict,
+#             "target_account_name": target_subcategory,
+#             "updated_at": timezone.now().isoformat(),
+#         }
+
+#     JournalEntry.objects.bulk_update(
+#         entries,
+#         [
+#             "evaluation_matrix_snapshot",
+#             "classification_status",
+#             "is_reclassified",
+#             "remarks",
+#         ],
+#     )
+
+#     rules_updated = False
+#     learned_patterns = []
+
+#     if save_rule:
+#         if patterns and isinstance(patterns, list) and len(patterns) > 0:
+#             for user_p in patterns:
+#                 clean_user_p = RuleLearningEngine.sanitize_user_pattern(user_p)
+#                 if not clean_user_p:
+#                     continue
+#                 if len(clean_user_p) >= 3:
+#                     if RuleLearningEngine.add_or_update_classification_rule(
+#                         category=target_category,
+#                         subcategory=target_subcategory,
+#                         new_pattern=clean_user_p,
+#                         entry_type=inferred_entry_type,
+#                     ):
+#                         rules_updated = True
+#                         learned_patterns.append(clean_user_p)
+#         else:
+#             for payee_key, group_narrations in payee_groups.items():
+#                 common_tokens = RuleLearningEngine.generate_strict_multitoken_pattern(
+#                     group_narrations
+#                 )
+#                 safe_tokens = [
+#                     t
+#                     for t in common_tokens
+#                     if not TaggingEngine.is_ref_hash_or_noise(t) and len(t) > 2
+#                 ]
+#                 if safe_tokens:
+#                     compound_pattern = " ".join(safe_tokens[:2])
+#                     if len(compound_pattern) >= 3:
+#                         if RuleLearningEngine.add_or_update_classification_rule(
+#                             category=target_category,
+#                             subcategory=target_subcategory,
+#                             new_pattern=compound_pattern,
+#                             entry_type=inferred_entry_type,
+#                         ):
+#                             rules_updated = True
+#                             learned_patterns.append(compound_pattern)
+
+#     return {
+#         "status": "success",
+#         "reclassified_count": len(entries),
+#         "entry_type_bound": inferred_entry_type,
+#         "rules_updated": rules_updated,
+#         "patterns_learned": learned_patterns,
+#     }
+
+
+# def fetch_cluster_line_items(entry_ids: list) -> list:
+#     """
+#     Fetches detailed line-item payload for an expanded cluster accordion.
+#     Retrieves journal entries, statement staging lines, contra metadata,
+#     and existing subledger folio mappings.
+#     """
+#     if not entry_ids:
+#         return []
+
+#     JournalEntry = apps.get_model("ledger", "JournalEntry")
+#     StatementStagingLine = apps.get_model("ledger", "StatementStagingLine")
+#     Account = apps.get_model("ledger", "Account")
+
+#     AssetTransactionMapping = None
+#     for model in apps.get_models():
+#         if model.__name__ == "AssetTransactionMapping":
+#             AssetTransactionMapping = model
+#             break
+
+#     # 1. Fetch journal entries
+#     entries = list(
+#         JournalEntry.objects.filter(id__in=entry_ids)
+#         .only(
+#             "id",
+#             "row_identifier",
+#             "account_id",
+#             "debit",
+#             "credit",
+#             "remarks",
+#             "transaction_date",
+#         )
+#         .order_by("-transaction_date")
+#     )
+
+#     row_ids = [e.row_identifier for e in entries if e.row_identifier]
+
+#     # 2. Query Asset mappings by row_identifier
+#     mapping_map = {}
+#     if row_ids and AssetTransactionMapping:
+#         mappings = AssetTransactionMapping.objects.filter(
+#             row_identifier__in=row_ids
+#         ).select_related("asset")
+#         for m in mappings:
+#             asset = getattr(m, "asset", None)
+#             mapping_map[m.row_identifier] = {
+#                 "is_mapped": True,
+#                 "mapping_id": str(m.id),
+#                 "asset_id": str(asset.id) if asset else None,
+#                 "asset_code": getattr(asset, "asset_code", "FLT"),
+#                 "asset_name": getattr(asset, "name", "Petty Cash Float"),
+#             }
+
+#     # 3. Fetch staging lines
+#     staging_lines = list(
+#         StatementStagingLine.objects.filter(row_identifier__in=row_ids)
+#     )
+#     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
+
+#     # 4. Resolve internal contra transfers
+#     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
+
+#     # 5. Fetch pairing bank account legs
+#     pairing_legs = list(
+#         JournalEntry.objects.filter(row_identifier__in=row_ids)
+#         .exclude(account_id=99)
+#         .values("id", "row_identifier", "account_id", "debit", "credit", "remarks")
+#     )
+
+#     row_to_bank_leg = {}
+#     bank_acc_ids = set()
+#     for p in pairing_legs:
+#         acc_id = p["account_id"]
+#         if acc_id:
+#             bank_acc_ids.add(int(acc_id))
+#             if p["row_identifier"] not in row_to_bank_leg:
+#                 row_to_bank_leg[p["row_identifier"]] = p
+
+#     account_lookup = {}
+#     if bank_acc_ids:
+#         for acc in Account.objects.filter(id__in=bank_acc_ids):
+#             acc_name = getattr(acc, "name", None) or getattr(acc, "bank_name", "Bank")
+#             acc_num = str(getattr(acc, "account_number", "") or "")
+#             last4 = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+#             account_lookup[acc.id] = {
+#                 "bank_name": acc_name,
+#                 "bank_last4": last4,
+#             }
+
+#     items = []
+#     for entry in entries:
+#         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
+#         stg = staging_map.get(entry.row_identifier)
+#         bank_leg = row_to_bank_leg.get(entry.row_identifier) or {}
+#         mapping_info = mapping_map.get(entry.row_identifier) or {}
+#         contra_info = contra_map.get(
+#             entry.row_identifier,
+#             {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+#         )
+
+#         raw_txn_date = (
+#             getattr(stg, "raw_statement_date", None)
+#             or remarks.get("raw_statement_date")
+#             or remarks.get("transaction_date")
+#             or entry.transaction_date
+#         )
+
+#         if stg:
+#             raw_narration = getattr(stg, "raw_narration", None) or getattr(
+#                 stg, "narration", ""
+#             )
+#             parsed = getattr(stg, "parsed_narration", {}) or {}
+#             raw_payee = (
+#                 parsed.get("suggested_payee") or parsed.get("statement_payee_raw") or ""
+#             )
+#             clean_payee = UniversalNarrationExtractor.repair_kerning_and_splits(
+#                 raw_payee
+#             )
+#             ref_no = parsed.get("detected_reference")
+#             rail = parsed.get("detected_rail", "BANK")
+#             remark = parsed.get("suggested_remark")
+#         else:
+#             raw_narration = (
+#                 remarks.get("universal_narration")
+#                 or remarks.get("narration")
+#                 or remarks.get("display_text")
+#                 or ""
+#             )
+#             parsed = UniversalNarrationExtractor.decompose_raw_narration(raw_narration)
+#             clean_payee = UniversalNarrationExtractor.repair_kerning_and_splits(
+#                 parsed.get("raw_payee") or remarks.get("payee") or ""
+#             )
+#             ref_no = parsed.get("reference") or remarks.get("upi_ref")
+#             rail = parsed.get("rail", "BANK")
+#             remark = parsed.get("raw_remark")
+
+#         debit_val = float(entry.debit or 0)
+#         credit_val = float(entry.credit or 0)
+#         is_outflow = debit_val > 0
+#         amount = debit_val if is_outflow else credit_val
+
+#         readable_narrative = build_human_readable_narrative(
+#             rail=rail,
+#             direction="OUTFLOW" if is_outflow else "INFLOW",
+#             amount=amount,
+#             payee=clean_payee,
+#             ref_no=ref_no,
+#             branch_or_remark=remark,
+#         )
+
+#         resolved_acc_id = bank_leg.get("account_id")
+#         if not resolved_acc_id:
+#             stg_acc_id = getattr(stg, "account_id", None)
+#             if stg_acc_id and int(stg_acc_id) != 99:
+#                 resolved_acc_id = int(stg_acc_id)
+#             elif entry.account_id and int(entry.account_id) != 99:
+#                 resolved_acc_id = int(entry.account_id)
+
+#         bank_meta = account_lookup.get(int(resolved_acc_id)) if resolved_acc_id else {}
+
+#         items.append(
+#             {
+#                 "id": str(entry.id),
+#                 "row_identifier": entry.row_identifier,
+#                 "narration": readable_narrative,
+#                 "raw_narration": raw_narration,
+#                 "display_payee": clean_payee,
+#                 "universal_narration": readable_narrative,
+#                 "display_text": readable_narrative,
+#                 "debit": debit_val,
+#                 "credit": credit_val,
+#                 "amount": amount,
+#                 "direction": "OUTFLOW" if is_outflow else "INFLOW",
+#                 "transaction_date": (
+#                     raw_txn_date.strftime("%Y-%m-%d")
+#                     if hasattr(raw_txn_date, "strftime")
+#                     else str(raw_txn_date)
+#                 ),
+#                 "account_id": resolved_acc_id,
+#                 "bank_name": bank_meta.get("bank_name"),
+#                 "bank_last4": bank_meta.get("bank_last4"),
+#                 "is_mapped": bool(mapping_info.get("is_mapped")),
+#                 "mapping_id": mapping_info.get("mapping_id"),
+#                 "asset_id": mapping_info.get("asset_id"),
+#                 "asset_code": mapping_info.get("asset_code"),
+#                 "asset_name": mapping_info.get("asset_name"),
+#                 "contra_meta": contra_info,
+#                 "remarks": {
+#                     **remarks,
+#                     "payee": clean_payee,
+#                     "universal_narration": readable_narrative,
+#                     "raw_narration": raw_narration,
+#                 },
+#             }
+#         )
+
+#     return items
 
 
 # from __future__ import annotations

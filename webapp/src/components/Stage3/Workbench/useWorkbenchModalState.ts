@@ -34,6 +34,10 @@ export function useWorkbenchModalState({
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [selectedTxnIds, setSelectedTxnIds] = useState<string[]>([]);
+  const [selectedRowsMap, setSelectedRowsMap] = useState<Record<string, any>>(
+    {}
+  );
+
   const [activePreviewCluster, setActivePreviewCluster] = useState<
     ExtendedCluster | Cluster | null
   >(null);
@@ -179,6 +183,7 @@ export function useWorkbenchModalState({
       lastExecutedSearchRef.current = '';
       setSearchQuery('');
       setSelectedTxnIds([]);
+      setSelectedRowsMap({});
       setActivePreviewCluster(null);
       setSelectedSubledgerFolioId('');
 
@@ -281,31 +286,76 @@ export function useWorkbenchModalState({
   );
 
   const toggleIndividualTxn = useCallback(
-    (txnId: string, e: React.MouseEvent) => {
+    (txnId: string, e: React.MouseEvent, txnItem?: any) => {
       e.stopPropagation();
-      setSelectedTxnIds((prev) =>
-        prev.includes(txnId)
+      setSelectedTxnIds((prev) => {
+        const next = prev.includes(txnId)
           ? prev.filter((id) => id !== txnId)
-          : [...prev, txnId]
-      );
+          : [...prev, txnId];
+
+        // Maintain the real row object map
+        setSelectedRowsMap((prevMap) => {
+          const newMap = { ...prevMap };
+          if (next.includes(txnId)) {
+            if (txnItem) newMap[txnId] = txnItem;
+          } else {
+            delete newMap[txnId];
+          }
+          return newMap;
+        });
+
+        return next;
+      });
     },
     []
   );
 
+  // const toggleClusterTxns = useCallback(
+  //   (clusterTxnIds: string[], e: React.MouseEvent) => {
+  //     e.stopPropagation();
+  //     const allSelected =
+  //       clusterTxnIds.length > 0 &&
+  //       clusterTxnIds.every((id) => selectedTxnIds.includes(id));
+  //     if (allSelected) {
+  //       setSelectedTxnIds((prev) =>
+  //         prev.filter((id) => !clusterTxnIds.includes(id))
+  //       );
+  //     } else {
+  //       setSelectedTxnIds((prev) =>
+  //         Array.from(new Set([...prev, ...clusterTxnIds]))
+  //       );
+  //     }
+  //   },
+  //   [selectedTxnIds]
+  // );
+
   const toggleClusterTxns = useCallback(
-    (clusterTxnIds: string[], e: React.MouseEvent) => {
+    (clusterTxnIds: string[], e: React.MouseEvent, items: any[] = []) => {
       e.stopPropagation();
       const allSelected =
         clusterTxnIds.length > 0 &&
         clusterTxnIds.every((id) => selectedTxnIds.includes(id));
+
       if (allSelected) {
         setSelectedTxnIds((prev) =>
           prev.filter((id) => !clusterTxnIds.includes(id))
         );
+        setSelectedRowsMap((prev) => {
+          const next = { ...prev };
+          clusterTxnIds.forEach((id) => delete next[id]);
+          return next;
+        });
       } else {
         setSelectedTxnIds((prev) =>
           Array.from(new Set([...prev, ...clusterTxnIds]))
         );
+        setSelectedRowsMap((prev) => {
+          const next = { ...prev };
+          items.forEach((it) => {
+            if (it && it.id) next[it.id] = it;
+          });
+          return next;
+        });
       }
     },
     [selectedTxnIds]
@@ -325,6 +375,190 @@ export function useWorkbenchModalState({
       );
     }
   }, [visibleTxnIds, selectedTxnIds]);
+
+  // 🎯 Resolve the actual transaction objects for all currently checked row IDs
+  // const selectedTransactions = useMemo(() => {
+  //   if (!clusters || selectedTxnIds.length === 0) return [];
+
+  //   // 🔍 Print the exact structure of clusters and activePreviewCluster
+  //   console.log('🔍 [CLUSTER SCHEMA DUMP]', {
+  //     clustersLength: clusters.length,
+  //     firstClusterKeys: clusters[0] ? Object.keys(clusters[0]) : [],
+  //     firstClusterSample: clusters[0],
+  //     activePreviewKeys: activePreviewCluster
+  //       ? Object.keys(activePreviewCluster)
+  //       : [],
+  //     selectedTxnIds,
+  //   });
+
+  //   const allItems: any[] = [];
+
+  //   // Exhaustive tree scanner
+  //   const scanNode = (node: any) => {
+  //     if (!node || typeof node !== 'object') return;
+
+  //     // Check all possible row collection property names
+  //     const candidates = [
+  //       node.items,
+  //       node.transactions,
+  //       node.txns,
+  //       node.lines,
+  //       node.records,
+  //       node.staging_lines,
+  //       node.statement_lines,
+  //       node.data,
+  //     ];
+
+  //     for (const list of candidates) {
+  //       if (Array.isArray(list) && list.length > 0) {
+  //         // Verify if elements look like transaction rows
+  //         if (
+  //           list[0] &&
+  //           typeof list[0] === 'object' &&
+  //           (list[0].narration ||
+  //             list[0].raw_narration ||
+  //             list[0].amount ||
+  //             list[0].id ||
+  //             list[0].row_identifier)
+  //         ) {
+  //           allItems.push(...list);
+  //         }
+  //       }
+  //     }
+
+  //     // Check all possible child collections
+  //     const childCollections = [
+  //       node.subclusters,
+  //       node.children,
+  //       node.groups,
+  //       node.subgroups,
+  //       node.clusters,
+  //       node.vendors,
+  //       node.vendor_clusters,
+  //     ];
+
+  //     for (const sub of childCollections) {
+  //       if (Array.isArray(sub)) {
+  //         sub.forEach(scanNode);
+  //       } else if (sub && typeof sub === 'object') {
+  //         Object.values(sub).forEach(scanNode);
+  //       }
+  //     }
+  //   };
+
+  //   clusters.forEach(scanNode);
+  //   if (activePreviewCluster) {
+  //     scanNode(activePreviewCluster);
+  //   }
+
+  //   console.log('🔍 [ALL ITEMS HARVESTED]', {
+  //     totalFound: allItems.length,
+  //     sampleFirstItem: allItems[0],
+  //     selectedTxnIds,
+  //   });
+
+  //   const matched = allItems.filter((item) => {
+  //     const candidates = [
+  //       item.id,
+  //       item.row_identifier,
+  //       item.staging_line_id,
+  //       item.txn_id,
+  //       item.statement_line_id,
+  //       item.uuid,
+  //       item.line_id,
+  //     ]
+  //       .filter((val) => val !== undefined && val !== null)
+  //       .map(String);
+
+  //     return selectedTxnIds.some((selectedId) =>
+  //       candidates.includes(String(selectedId))
+  //     );
+  //   });
+
+  //   console.log('🎯 [ID MATCH RESULT]', {
+  //     selectedCount: selectedTxnIds.length,
+  //     matchedCount: matched.length,
+  //     matchedSample: matched[0],
+  //   });
+
+  //   return matched;
+  // }, [clusters, activePreviewCluster, selectedTxnIds]);
+
+  // const selectedTransactions = useMemo(() => {
+  //   if (!clusters || selectedTxnIds.length === 0) return [];
+
+  //   const allItems: any[] = [];
+  //   const visitedNodes = new Set<any>();
+
+  //   // Recursively walk every node and inspect 'items'
+  //   const extractRows = (node: any) => {
+  //     if (!node || typeof node !== 'object' || visitedNodes.has(node)) return;
+  //     visitedNodes.add(node);
+
+  //     if (Array.isArray(node.items) && node.items.length > 0) {
+  //       for (const element of node.items) {
+  //         if (!element || typeof element !== 'object') continue;
+
+  //         // If this element has nested items, traverse deeper (sub-cluster)
+  //         if (Array.isArray(element.items) && element.items.length > 0) {
+  //           extractRows(element);
+  //         } else {
+  //           // It is an actual statement line row
+  //           allItems.push(element);
+  //         }
+  //       }
+  //     }
+
+  //     // Check other potential grouping arrays
+  //     const otherGroupKeys = ['subclusters', 'children', 'groups', 'vendors'];
+  //     for (const k of otherGroupKeys) {
+  //       if (Array.isArray(node[k])) {
+  //         node[k].forEach(extractRows);
+  //       }
+  //     }
+  //   };
+
+  //   clusters.forEach(extractRows);
+  //   if (activePreviewCluster) {
+  //     extractRows(activePreviewCluster);
+  //   }
+
+  //   console.log('🔍 [COLLECTED TRANSACTIONS TOTAL]:', allItems.length);
+  //   if (allItems.length > 0) {
+  //     console.log('🔍 [FIRST ROW SAMPLE]:', allItems[0]);
+  //   }
+
+  //   // Match collected rows against selectedTxnIds
+  //   const matched = allItems.filter((item) => {
+  //     const candidates = [
+  //       item.id,
+  //       item.row_identifier,
+  //       item.staging_line_id,
+  //       item.txn_id,
+  //       item.statement_line_id,
+  //       item.uuid,
+  //       item.line_id,
+  //     ]
+  //       .filter((val) => val !== undefined && val !== null)
+  //       .map(String);
+
+  //     return selectedTxnIds.some((selectedId) =>
+  //       candidates.includes(String(selectedId))
+  //     );
+  //   });
+
+  //   console.log('🎯 [FINAL MATCHED ROWS]:', {
+  //     selectedCount: selectedTxnIds.length,
+  //     matchedCount: matched.length,
+  //     matchedRows: matched,
+  //   });
+
+  //   return matched;
+  // }, [clusters, activePreviewCluster, selectedTxnIds]);
+  // 🎯 Zero crawling needed: Grab directly from selectedRowsMap
+  const selectedTransactions = useMemo(() => {
+    return Object.values(selectedRowsMap);
+  }, [selectedRowsMap]);
 
   const handleCreateTaxonomy = async () => {
     if (!newCatInput.trim() || !newSubInput.trim()) return;
@@ -541,6 +775,7 @@ export function useWorkbenchModalState({
       isFolioModalOpen,
       pendingTargetSubcategory,
       lastAppliedMapping,
+      selectedTransactions,
     },
     actions: {
       setSearchQuery,
@@ -548,7 +783,10 @@ export function useWorkbenchModalState({
       toggleIndividualTxn,
       toggleClusterTxns,
       toggleSelectAllVisible,
-      clearAllSelections: () => setSelectedTxnIds([]),
+      clearAllSelections: () => {
+        setSelectedTxnIds([]);
+        setSelectedRowsMap({});
+      },
       setSelectedCategory,
       setSelectedSubcategory,
       setSelectedSubledgerFolioId,

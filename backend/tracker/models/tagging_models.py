@@ -16,8 +16,8 @@ class WorkbenchGroupHierarchy(models.Model):
     subgroup_tag = models.CharField(
         max_length=150,
         blank=True,
-        null=True,
-        help_text="Optional subgroup label under this parent group",
+        default="",  # Avoids NULL so UniqueConstraint works deterministically in SQL
+        help_text="Optional subgroup label under this parent group (empty string if root)",
     )
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -53,8 +53,15 @@ class MasterNarrationTagRule(models.Model):
 
     keyword_pattern = models.CharField(
         max_length=255,
-        help_text="Narration substring, payee keyword, or account identifier",
+        blank=True,
+        default="",
+        help_text="Primary anchor token, legacy regex, or representative descriptor",
         db_index=True,
+    )
+    match_tokens = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Array of similarity tokens/aliases that trigger this tag",
     )
     match_type = models.CharField(
         max_length=20,
@@ -75,12 +82,13 @@ class MasterNarrationTagRule(models.Model):
     parent_group_tag = models.CharField(
         max_length=100,
         help_text="Assigned primary group tag, e.g., #CONTRA, #UTILITIES",
+        db_index=True,
     )
     subgroup_tag = models.CharField(
         max_length=150,
         blank=True,
-        null=True,
-        help_text="Assigned subgroup label (e.g., NRE_TO_NRO, PRAVEEN_P)",
+        default="",
+        help_text="Assigned subgroup label (e.g., SIB NRO 60 TO 81)",
     )
     require_internal_contra = models.BooleanField(
         default=False,
@@ -89,10 +97,12 @@ class MasterNarrationTagRule(models.Model):
     source_account_id = models.IntegerField(
         blank=True,
         null=True,
+        db_index=True,
         help_text="Optional: rule only triggers for statement lines of this specific account",
     )
     priority = models.IntegerField(
         default=10,
+        db_index=True,
         help_text="Higher values evaluate first",
     )
     is_active = models.BooleanField(default=True, db_index=True)
@@ -102,14 +112,12 @@ class MasterNarrationTagRule(models.Model):
     class Meta:
         db_table = "master_narration_tag_rules"
         ordering = ["-priority", "keyword_pattern"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["header_scope", "keyword_pattern", "allowed_vector"],
-                name="unique_rule_per_header_vector",
-            )
+        indexes = [
+            models.Index(fields=["header_scope", "is_active", "allowed_vector"]),
         ]
+        # Notice: Over-restrictive UniqueConstraint removed to allow multi-token aliases
+        # across specific accounts without raising unhandled DB IntegrityErrors.
 
     def __str__(self) -> str:
-        return (
-            f"[{self.header_scope}] '{self.keyword_pattern}' -> {self.parent_group_tag}"
-        )
+        tokens_str = f" ({len(self.match_tokens)} tokens)" if self.match_tokens else ""
+        return f"[{self.header_scope}] '{self.keyword_pattern}'{tokens_str} -> {self.parent_group_tag}"

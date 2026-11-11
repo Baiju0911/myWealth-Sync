@@ -148,44 +148,94 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
           />
 
           {/* Resolve the currently checked or focused transaction */}
+          {/* Resolve the currently checked or focused transaction */}
           {(() => {
-            let activeTxn: any = null;
             const targetId = state.selectedTxnIds?.[0];
+            let activeTxn: any = null;
 
-            // 1. Recursive helper searching clusters, subgroups, and transaction lists
-            const extractTransaction = (node: any): any => {
-              if (!node) return null;
-              const direct = node.items || node.transactions || [];
-              if (Array.isArray(direct) && direct.length > 0) {
-                if (targetId) {
-                  const match = direct.find(
-                    (it: any) => String(it.id ?? it.row_identifier ?? it.txn_id) === String(targetId)
-                  );
-                  if (match) return match;
-                } else {
-                  return direct[0];
+            // Deep recursive search across arbitrary nested cluster structures
+            const findSelectedTransaction = (nodes: any[]): any => {
+              if (!Array.isArray(nodes)) return null;
+
+              for (const node of nodes) {
+                if (!node) continue;
+
+                // 1. Check direct transaction rows in this node
+                const rowCandidates =
+                  node.items ||
+                  node.transactions ||
+                  node.lines ||
+                  node.staging_lines ||
+                  [];
+
+                if (Array.isArray(rowCandidates) && rowCandidates.length > 0) {
+                  if (targetId) {
+                    const matchedRow = rowCandidates.find((it: any) => {
+                      const candidateId = String(
+                        it.id ??
+                        it.row_identifier ??
+                        it.staging_line_id ??
+                        it.txn_id ??
+                        it.uuid ??
+                        ''
+                      );
+                      return candidateId === String(targetId);
+                    });
+                    if (matchedRow) return matchedRow;
+                  } else {
+                    return rowCandidates[0];
+                  }
                 }
-              }
-              const children = node.subclusters || node.children || node.groups || [];
-              for (const child of children) {
-                const found = extractTransaction(child);
-                if (found) return found;
+
+                // 2. Recurse into nested groups / subclusters / children
+                const subCollections =
+                  node.subclusters ||
+                  node.children ||
+                  node.groups ||
+                  node.subgroups ||
+                  node.clusters ||
+                  [];
+
+                if (Array.isArray(subCollections) && subCollections.length > 0) {
+                  const nestedFound = findSelectedTransaction(subCollections);
+                  if (nestedFound) return nestedFound;
+                }
               }
               return null;
             };
 
-            if (state.clusters) {
-              for (const cluster of state.clusters) {
-                activeTxn = extractTransaction(cluster);
-                if (activeTxn) break;
+            // Search through active clusters first
+            if (state.clusters && state.clusters.length > 0) {
+              activeTxn = findSelectedTransaction(state.clusters);
+            }
+
+            // Fallback search through activePreviewCluster if not found yet
+            if (!activeTxn && state.activePreviewCluster) {
+              activeTxn = findSelectedTransaction([state.activePreviewCluster]);
+            }
+
+            // Final fallback: if no row matched by ID, pick the first transaction in activePreviewCluster
+            if (!activeTxn && state.activePreviewCluster) {
+              const previewDirect =
+                (state.activePreviewCluster as any).items ||
+                (state.activePreviewCluster as any).transactions ||
+                [];
+              if (Array.isArray(previewDirect) && previewDirect.length > 0) {
+                activeTxn = previewDirect[0];
               }
             }
-
-            if (!activeTxn && state.activePreviewCluster) {
-              activeTxn = extractTransaction(state.activePreviewCluster);
-            }
+            {/* Add diagnostic right before rendering TaxonomyMapperPanel */}
+          {(() => {
+            console.log('🔍 [DEBUG Step 2] In ClassificationWorkbenchModal:', {
+              selectedTxnIds: state.selectedTxnIds,
+              selectedTransactionsCount: state.selectedTransactions?.length,
+              selectedTransactions: state.selectedTransactions,
+            });
+            return null;
+          })()}
 
             return (
+              
               <TaxonomyMapperPanel
                 targetSubcategoryContext={targetSubcategory}
                 selectedSummary={state.selectedSummary}
@@ -217,6 +267,7 @@ export const ClassificationWorkbenchModal: React.FC<ModalProps> = ({
                 suggestedRule={state.suggestedRule}
                 subledgerCapableSet={dynamicSubledgerCapableSet}
                 onOpenSubledgerDrawer={onOpenSubledgerDrawer}
+                selectedTransactions={state.selectedTransactions}
                 onOpenNewFolioModal={(sub) => {
                   actions.setPendingTargetSubcategory(sub);
                   actions.setIsFolioModalOpen(true);
