@@ -10,7 +10,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - S:/AI_Workspace/ollama_models:/root/.ollama
+      - J:/_BaijDockerData/ollama_models:/root/.ollama
     networks:
       - mywealth_net
     restart: unless-stopped
