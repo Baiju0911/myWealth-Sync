@@ -385,6 +385,20 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
         line = None
         if txn_ids:
             first_id = txn_ids[0]
+            JournalEntry = apps.get_model("ledger", "JournalEntry")
+            je_row_id = (
+                JournalEntry.objects.filter(id=first_id)
+                .values_list("row_identifier", flat=True)
+                .first()
+            )
+            lookup_id = je_row_id or first_id
+            query = Q(row_identifier=lookup_id)
+            try:
+                import uuid
+
+                query |= Q(id=uuid.UUID(str(lookup_id)))
+            except (ValueError, TypeError):
+                pass
             query = Q(row_identifier=first_id)
             try:
                 import uuid
