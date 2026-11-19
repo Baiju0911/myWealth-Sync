@@ -1,5 +1,6 @@
 import json
 import re
+from django.apps import apps
 from django.db.models import Q
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
@@ -107,6 +108,11 @@ class MasterNarrationTagRuleSerializer(serializers.ModelSerializer):
         required=False,
         default=list,
     )
+    source_account_id = serializers.IntegerField(required=False, allow_null=True)
+    destination_account_id = serializers.IntegerField(required=False, allow_null=True)
+    allowed_rail = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, default=""
+    )
 
     class Meta:
         model = MasterNarrationTagRule
@@ -116,11 +122,13 @@ class MasterNarrationTagRuleSerializer(serializers.ModelSerializer):
             "match_tokens",
             "match_type",
             "allowed_vector",
+            "allowed_rail",
             "header_scope",
             "parent_group_tag",
             "subgroup_tag",
             "require_internal_contra",
-            "source_account_id",  # Only source_account_id in fields
+            "source_account_id",
+            "destination_account_id",
             "priority",
             "is_active",
             "created_at",
@@ -128,13 +136,46 @@ class MasterNarrationTagRuleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def validate_allowed_rail(self, value: str | None) -> str:
+        val = (value or "").strip().upper()
+        return "" if val in ["ANY", "ALL", "NONE", "NULL"] else val
+
+    def validate_parent_group_tag(self, value: str) -> str:
+        tag = (value or "").strip().upper()
+        if tag and not tag.startswith("#"):
+            tag = f"#{tag}"
+        return tag
+
+    def validate_subgroup_tag(self, value: str | None) -> str:
+        return (value or "").strip().upper()
+
     def to_internal_value(self, data):
-        # Allow input mutation
         data = data.copy() if hasattr(data, "copy") else dict(data)
 
-        # Map legacy or frontend 'source_account' key to model column 'source_account_id'
-        if "source_account" in data and not data.get("source_account_id"):
-            data["source_account_id"] = data.pop("source_account")
+        # Normalize null allowed_rail to empty string
+        if data.get("allowed_rail") is None:
+            data["allowed_rail"] = ""
+
+        # Map legacy or frontend 'source_account' / 'destination_account' keys
+        if "source_account" in data:
+            src_val = data.pop("source_account")
+            if not data.get("source_account_id") and src_val:
+                data["source_account_id"] = src_val
+
+        if "destination_account" in data:
+            dest_val = data.pop("destination_account")
+            if not data.get("destination_account_id") and dest_val:
+                if isinstance(dest_val, int) or (
+                    isinstance(dest_val, str) and dest_val.isdigit()
+                ):
+                    data["destination_account_id"] = int(dest_val)
+                elif isinstance(dest_val, str) and dest_val.strip():
+                    Account = apps.get_model("ledger", "Account")
+                    matched_acc = Account.objects.filter(
+                        name__iexact=dest_val.strip()
+                    ).first()
+                    if matched_acc:
+                        data["destination_account_id"] = matched_acc.id
 
         # Auto-serialize keyword_pattern if frontend sends raw array string or tokens
         tokens = data.get("match_tokens")
@@ -161,6 +202,17 @@ class MasterNarrationTagRuleSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
+    def validate(self, attrs):
+        src = attrs.get("source_account_id")
+        dst = attrs.get("destination_account_id")
+        if src and dst and int(src) == int(dst):
+            raise serializers.ValidationError(
+                {
+                    "destination_account_id": "Destination account cannot be the same as source account."
+                }
+            )
+        return attrs
+
 
 class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
     queryset = MasterNarrationTagRule.objects.all().order_by("-priority", "id")
@@ -182,20 +234,27 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
                 {"detail": "Rule not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
+        JournalEntry = apps.get_model("ledger", "JournalEntry")
+
         qs = StatementStagingLine.objects.all()
         print(
-            f"\n🔍 [RULE EVALUATION START] Rule #{rule.id} -> {rule.parent_group_tag}"
+            f"\n🔍 [RULE EVALUATION START] Rule #{rule.id} -> {rule.parent_group_tag} ({rule.subgroup_tag})"
         )
         print(f"   [STAGE 0] Total lines in StatementStagingLine: {qs.count()}")
 
         # 1. Vector filter
         if rule.allowed_vector == "OUTFLOW":
-            qs = qs.filter(Q(amount__lt=0) | Q(debit__gt=0))
+            qs = qs.filter(
+                Q(debit__gt=0)
+                | (Q(debit__isnull=True, credit__isnull=True) & Q(amount__lt=0))
+            )
         elif rule.allowed_vector == "INFLOW":
-            qs = qs.filter(Q(amount__gt=0) | Q(credit__gt=0))
+            qs = qs.filter(
+                Q(credit__gt=0)
+                | (Q(debit__isnull=True, credit__isnull=True) & Q(amount__gt=0))
+            )
         print(f"   [STAGE 1] After vector ({rule.allowed_vector}): {qs.count()}")
-
-        # 2. Account filter (check account_id vs source_account_id)
+        # 2. Source Account filter
         if rule.source_account_id:
             acc_q = Q()
             for acc_field in ["account_id", "source_account_id", "bank_account_id"]:
@@ -204,65 +263,108 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
             if acc_q:
                 qs = qs.filter(acc_q)
             print(
-                f"   [STAGE 2] After account filter (ID {rule.source_account_id}): {qs.count()}"
+                f"   [STAGE 2] After source account filter (ID {rule.source_account_id}): {qs.count()}"
             )
 
-        # 3. Internal Contra filter - only enforce if the staging model tracks it
-        if rule.require_internal_contra:
-            contra_q = Q()
-            if hasattr(StatementStagingLine, "suggested_contra_account"):
-                contra_q |= Q(suggested_contra_account__isnull=False)
-            if hasattr(StatementStagingLine, "is_contra"):
-                contra_q |= Q(is_contra=True)
-            if hasattr(StatementStagingLine, "suggested_contra_id"):
-                contra_q |= Q(suggested_contra_id__isnull=False)
-            if hasattr(StatementStagingLine, "destination_account_id"):
-                contra_q |= Q(destination_account_id__isnull=False)
+        # 3. Rail Lock filter (e.g., UPI, IMPS, NEFT, CBS_TRANSFER)
+        if rule.allowed_rail and rule.allowed_rail.strip():
+            rail_val = rule.allowed_rail.strip().upper()
+            db_field_names = {f.name for f in StatementStagingLine._meta.get_fields()}
 
-            # Only apply if at least one contra column actually matched on the model
-            if contra_q:
-                # Test count before filtering; if 0, do not strangle the rule
-                contra_matches = qs.filter(contra_q).count()
-                print(f"   [STAGE 3] Potential contra rows: {contra_matches}")
-                if contra_matches > 0:
-                    qs = qs.filter(contra_q)
-                else:
-                    print(
-                        "   [STAGE 3 WARNING] No rows have explicit contra FK flag set, skipping contra strict filter."
-                    )
+            rail_q = Q(raw_narration__icontains=rail_val)
+            if "live_metadata" in db_field_names:
+                rail_q |= Q(live_metadata__detected_rail__iexact=rail_val)
+                rail_q |= Q(live_metadata__rail__iexact=rail_val)
+            if "transaction_type" in db_field_names:
+                rail_q |= Q(transaction_type__icontains=rail_val)
+
+            qs = qs.filter(rail_q)
+            print(f"   [STAGE 3] After rail lock ({rail_val}): {qs.count()}")
+
+        # 4. Narration & Match Tokens filter (Strict: require at least one valid token)
+        tokens = [str(t).strip() for t in (rule.match_tokens or []) if str(t).strip()]
+        if not tokens and rule.keyword_pattern and rule.keyword_pattern.strip():
+            tokens = [rule.keyword_pattern.strip()]
+
+        if not tokens:
+            return Response(
+                {
+                    "status": "ERROR",
+                    "detail": "Rule has no valid match tokens.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        token_q = Q()
+        for tk in tokens:
+            if "*" in tk:
+                sub_parts = [p.strip() for p in tk.split("*") if p.strip()]
+                compound_q = Q()
+                for sp in sub_parts:
+                    compound_q &= Q(raw_narration__icontains=sp)
+                token_q |= compound_q
+            elif rule.match_type == "EXACT":
+                token_q |= Q(raw_narration__iexact=tk)
+            elif rule.match_type == "REGEX":
+                token_q |= Q(raw_narration__iregex=tk)
             else:
-                print("   [STAGE 3] No contra field on model, skipping.")
+                token_q |= Q(raw_narration__icontains=tk)
 
-        # 4. Narration & Match Tokens filter (OR logic across all tokens on raw_narration)
-        tokens = list(rule.match_tokens or [])
-        if rule.keyword_pattern and rule.keyword_pattern not in tokens:
-            tokens.append(rule.keyword_pattern)
+        qs = qs.filter(token_q)
+        print(f"   [STAGE 4] After matching tokens {tokens}: {qs.count()}")
 
-        if tokens:
-            token_q = Q()
-            for tk in tokens:
-                tk_clean = str(tk).strip()
-                if not tk_clean:
+        # 5. Strict Internal Contra & Destination Account Pairing Check (ZERO LEAKS)
+        if rule.require_internal_contra or rule.destination_account_id:
+            candidate_lines = list(
+                qs.only("id", "row_identifier", "suggested_contra_account_id")
+            )
+            candidate_row_ids = [
+                c.row_identifier for c in candidate_lines if c.row_identifier
+            ]
+
+            # Resolve actual paired counterparty legs from JournalEntry (excluding Suspense 99 & Source)
+            pairing_qs = JournalEntry.objects.filter(
+                row_identifier__in=candidate_row_ids
+            ).exclude(account_id=99)
+
+            if rule.source_account_id:
+                pairing_qs = pairing_qs.exclude(account_id=rule.source_account_id)
+
+            row_to_dest_accounts: dict[str, set[int]] = {}
+            for leg in pairing_qs.values("row_identifier", "account_id"):
+                rid = leg["row_identifier"]
+                acc_id = leg["account_id"]
+                if rid and acc_id:
+                    row_to_dest_accounts.setdefault(rid, set()).add(int(acc_id))
+
+            valid_ids = []
+            for line in candidate_lines:
+                dest_accs = set(row_to_dest_accounts.get(line.row_identifier, set()))
+                if getattr(line, "suggested_contra_account_id", None):
+                    dest_accs.add(int(line.suggested_contra_account_id))
+
+                # Strictly reject solitary 1-way rows lacking any counterparty account
+                if not dest_accs:
                     continue
-                if "*" in tk_clean:
-                    sub_parts = [p.strip() for p in tk_clean.split("*") if p.strip()]
-                    compound_q = Q()
-                    for sp in sub_parts:
-                        compound_q &= Q(raw_narration__icontains=sp)
-                    token_q |= compound_q
-                elif rule.match_type == "EXACT":
-                    token_q |= Q(raw_narration__iexact=tk_clean)
-                else:
-                    token_q |= Q(raw_narration__icontains=tk_clean)
 
-            if token_q:
-                qs = qs.filter(token_q)
-            print(f"   [STAGE 4] After matching tokens {tokens}: {qs.count()}")
+                # If a specific destination account is locked, require exact match
+                if (
+                    rule.destination_account_id
+                    and int(rule.destination_account_id) not in dest_accs
+                ):
+                    continue
 
-        # 5. Apply the tag update strictly to valid model columns
+                valid_ids.append(line.id)
+
+            qs = StatementStagingLine.objects.filter(id__in=valid_ids)
+            print(
+                f"   [STAGE 5] After strict pair check (dest={rule.destination_account_id or 'ANY_INTERNAL'}): {qs.count()}"
+            )
+
+        # 6. Apply the tag update strictly to matched lines
         updated_count = qs.update(routing_status=rule.parent_group_tag)
         print(
-            f"   [STAGE 5] Final tagged rows updated in StatementStagingLine: {updated_count}\n"
+            f"   [STAGE 6] Final tagged rows updated in StatementStagingLine: {updated_count}\n"
         )
 
         return Response(
@@ -301,7 +403,8 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
         source_account = ""
         dest_account = ""
         source_account_id = None
-        is_contra = True
+        destination_account_id = None
+        is_contra = False
         rail = "ANY"
 
         if line:
@@ -313,7 +416,26 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
                 if line.suggested_contra_account
                 else ""
             )
-            is_contra = bool(line.suggested_contra_account)
+            destination_account_id = line.suggested_contra_account_id
+
+            # Fallback: resolve destination account from paired JournalEntry leg
+            if not destination_account_id and line.row_identifier:
+                JournalEntry = apps.get_model("ledger", "JournalEntry")
+                Account = apps.get_model("ledger", "Account")
+                paired_leg = (
+                    JournalEntry.objects.filter(row_identifier=line.row_identifier)
+                    .exclude(account_id__in=[99, source_account_id])
+                    .first()
+                )
+                if paired_leg and paired_leg.account_id:
+                    destination_account_id = paired_leg.account_id
+                    if not dest_account:
+                        dest_obj = Account.objects.filter(
+                            id=destination_account_id
+                        ).first()
+                        dest_account = dest_obj.name if dest_obj else ""
+
+            is_contra = bool(destination_account_id)
             rail = getattr(line, "detected_rail", "ANY")
 
         if not raw_narration and cluster_pattern:
@@ -394,6 +516,7 @@ class MasterNarrationTagRuleViewSet(viewsets.ModelViewSet):
                 "source_account": source_account,
                 "source_account_id": source_account_id,
                 "destination_account": dest_account,
+                "destination_account_id": destination_account_id,
                 "is_contra": is_contra,
             }
         )

@@ -75,6 +75,33 @@ def build_human_readable_narrative(
     return base
 
 
+def _resolve_rule_subgroup(
+    active_rules: List[Dict[str, Any]],
+    pattern: str,
+    src_acc_id: Optional[int],
+    dst_acc_id: Optional[int],
+    raw_narration: str,
+) -> Optional[str]:
+    upper_raw = (raw_narration or "").upper()
+    matching_tag_rules = [r for r in active_rules if r["parent_group_tag"] == pattern]
+    for r in matching_tag_rules:
+        if r["source_account_id"] and src_acc_id != r["source_account_id"]:
+            continue
+        if r["destination_account_id"] and dst_acc_id != r["destination_account_id"]:
+            continue
+        tokens = r["tokens"]
+        if tokens and not any(tk in upper_raw for tk in tokens):
+            continue
+        if r["subgroup_tag"]:
+            return r["subgroup_tag"]
+
+    # Fallback to first rule with a subgroup under this parent_group_tag
+    for r in matching_tag_rules:
+        if r["subgroup_tag"]:
+            return r["subgroup_tag"]
+    return None
+
+
 def _build_clusters_from_entries(
     entries, target_subcategory, search_query=None, include_items=False
 ):
@@ -87,17 +114,27 @@ def _build_clusters_from_entries(
     )
     staging_map = {s.row_identifier: s for s in staging_lines if s.row_identifier}
 
-    # Pre-cached map of active rules: tag -> subgroup
-    rule_subgroup_cache = dict(
-        MasterNarrationTagRule.objects.filter(is_active=True).values_list(
-            "parent_group_tag", "subgroup_tag"
-        )
+    # Load active rules ordered by priority so each line resolves its exact subgroup_tag
+    raw_rules = MasterNarrationTagRule.objects.filter(is_active=True).order_by(
+        "-priority", "id"
     )
-    rule_subgroup_cache = {
-        (k or "").strip().upper(): (v or "").strip().upper()
-        for k, v in rule_subgroup_cache.items()
-        if k
-    }
+    active_rules: List[Dict[str, Any]] = []
+    for r in raw_rules:
+        p_tag = (r.parent_group_tag or "").strip().upper()
+        if not p_tag:
+            continue
+        tks = [str(t).strip().upper() for t in (r.match_tokens or []) if str(t).strip()]
+        if not tks and r.keyword_pattern and r.keyword_pattern.strip():
+            tks = [r.keyword_pattern.strip().upper()]
+        active_rules.append(
+            {
+                "parent_group_tag": p_tag,
+                "subgroup_tag": (r.subgroup_tag or "").strip().upper(),
+                "source_account_id": r.source_account_id,
+                "destination_account_id": getattr(r, "destination_account_id", None),
+                "tokens": tks,
+            }
+        )
 
     contra_map = resolve_cross_account_contra_map(row_ids, staging_lines)
     acc_registry = TaggingEngine.get_dynamic_accounts_registry()
@@ -107,12 +144,36 @@ def _build_clusters_from_entries(
     for entry in entries:
         remarks = entry.remarks if isinstance(entry.remarks, dict) else {}
         stg_line = staging_map.get(entry.row_identifier)
-        contra_info = contra_map.get(
-            entry.row_identifier,
-            {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+        contra_info = dict(
+            contra_map.get(
+                entry.row_identifier,
+                {"is_self_transfer": False, "contra_type": "ONE_WAY_EXTERNAL"},
+            )
         )
+        if contra_info.get("is_self_transfer"):
+            acc_registry = TaggingEngine.get_dynamic_accounts_registry()
+            to_name_upper = (contra_info.get("to_account_name") or "").strip().upper()
+            from_name_upper = (
+                (contra_info.get("from_account_name") or "").strip().upper()
+            )
+            for acc in acc_registry:
+                acc_label = (acc.get("name") or "").strip().upper()
+                if not contra_info.get("to_account_id") and acc_label == to_name_upper:
+                    contra_info["to_account_id"] = acc["id"]
+                if (
+                    not contra_info.get("from_account_id")
+                    and acc_label == from_name_upper
+                ):
+                    contra_info["from_account_id"] = acc["id"]
 
-        # 🟢 Initialize loop-scoped variables deterministically
+        if (
+            not contra_info.get("to_account_id")
+            and stg_line
+            and getattr(stg_line, "suggested_contra_account_id", None)
+        ):
+            contra_info["to_account_id"] = stg_line.suggested_contra_account_id
+
+        # Initialize loop-scoped variables deterministically
         configured_subgroup: Optional[str] = None
         stg_routing_status: str = ""
 
@@ -158,6 +219,9 @@ def _build_clusters_from_entries(
         is_outflow = debit_val > 0
         amount = debit_val if is_outflow else credit_val
 
+        resolved_src_id = contra_info.get("from_account_id") or host_account_id
+        resolved_dst_id = contra_info.get("to_account_id")
+
         # -------------------------------------------------------------
         # Determine Tag, Canonical Title, Confidence & OK to Classify
         # -------------------------------------------------------------
@@ -172,10 +236,16 @@ def _build_clusters_from_entries(
                 f"PAIR_{min(src_name, dst_name)}_{max(src_name, dst_name)}_{pair_amt}"
             )
 
-        # 🟢 TIER 1: MasterNarrationTagRule Explicit Priority
+        # TIER 1: MasterNarrationTagRule Explicit Priority
         if stg_routing_status and stg_routing_status.startswith("#"):
             pattern = stg_routing_status
-            configured_subgroup = rule_subgroup_cache.get(pattern)
+            configured_subgroup = _resolve_rule_subgroup(
+                active_rules=active_rules,
+                pattern=pattern,
+                src_acc_id=resolved_src_id,
+                dst_acc_id=resolved_dst_id,
+                raw_narration=raw_statement_text,
+            )
 
             if configured_subgroup:
                 canonical_title = configured_subgroup
@@ -191,7 +261,7 @@ def _build_clusters_from_entries(
 
             score, label, ok_to_classify = 1.0, "RULE_VERIFIED", True
 
-        # 🟢 TIER 2: Fallback to Self-Transfer / Contra Inference
+        # TIER 2: Fallback to Self-Transfer / Contra Inference
         elif is_contra:
             pattern = "#CONTRA"
             canonical_title = f"{src_name} ➔ {dst_name}"
@@ -203,7 +273,7 @@ def _build_clusters_from_entries(
                 has_rule_precedent=True,
             )
 
-        # 🟢 TIER 3: Generic Algorithmic Tagging via Regex & Bank Heuristics
+        # TIER 3: Generic Algorithmic Tagging via Regex & Bank Heuristics
         else:
             (
                 pattern,
@@ -236,7 +306,9 @@ def _build_clusters_from_entries(
                 "sample_descriptions": [],
                 "items": [],
                 "transaction_ids": [],
-                "is_contra_group": (pattern in ["#CONTRA", "#INTERABANK"]),
+                "is_contra_group": (
+                    pattern in ["#CONTRA", "#INTERABANK", "#INTERBANK"]
+                ),
             }
 
         readable_narrative = build_human_readable_narrative(
@@ -275,13 +347,16 @@ def _build_clusters_from_entries(
                     "raw_narration": raw_statement_text,
                     "display_payee": display_subgroup,
                     "subgroup_tag": configured_subgroup,
-                    "vendor_name": payee,  # 👈 Fixed: correctly points to local variable payee
+                    "vendor_name": payee,
                     "universal_narration": readable_narrative,
                     "debit": debit_val,
                     "credit": credit_val,
                     "amount": amount,
                     "direction": "OUTFLOW" if is_outflow else "INFLOW",
                     "transaction_date": str(entry.transaction_date),
+                    "account_id": host_account_id,
+                    "source_account_id": resolved_src_id,
+                    "destination_account_id": resolved_dst_id,
                     "contra_meta": contra_info,
                     "routing_status": stg_routing_status,
                 }
@@ -691,6 +766,11 @@ def fetch_cluster_line_items(entry_ids: list) -> list:
                 "asset_id": mapping_info.get("asset_id"),
                 "asset_code": mapping_info.get("asset_code"),
                 "asset_name": mapping_info.get("asset_name"),
+                "source_account_id": contra_info.get("from_account_id")
+                or resolved_acc_id,
+                "destination_account_id": contra_info.get("to_account_id"),
+                "bank_name": bank_meta.get("bank_name"),
+                "bank_last4": bank_meta.get("bank_last4"),
                 "contra_meta": contra_info,
                 "routing_status": routing_status,
                 "remarks": {

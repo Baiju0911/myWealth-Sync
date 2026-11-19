@@ -73,6 +73,13 @@ class MasterNarrationTagRule(models.Model):
         choices=VectorConstraint.choices,
         default=VectorConstraint.ANY,
     )
+    allowed_rail = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Optional payment rail lock (e.g., UPI, IMPS, NEFT, CBS_TRANSFER)",
+    )
     header_scope = models.CharField(
         max_length=50,
         default="GLOBAL",
@@ -98,7 +105,13 @@ class MasterNarrationTagRule(models.Model):
         blank=True,
         null=True,
         db_index=True,
-        help_text="Optional: rule only triggers for statement lines of this specific account",
+        help_text="Optional: rule only triggers for statement lines of this specific origin account",
+    )
+    destination_account_id = models.IntegerField(
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Optional: strict destination account ID for paired internal transfers",
     )
     priority = models.IntegerField(
         default=10,
@@ -114,10 +127,16 @@ class MasterNarrationTagRule(models.Model):
         ordering = ["-priority", "keyword_pattern"]
         indexes = [
             models.Index(fields=["header_scope", "is_active", "allowed_vector"]),
+            models.Index(
+                fields=["source_account_id", "destination_account_id", "is_active"]
+            ),
         ]
-        # Notice: Over-restrictive UniqueConstraint removed to allow multi-token aliases
-        # across specific accounts without raising unhandled DB IntegrityErrors.
 
     def __str__(self) -> str:
         tokens_str = f" ({len(self.match_tokens)} tokens)" if self.match_tokens else ""
-        return f"[{self.header_scope}] '{self.keyword_pattern}'{tokens_str} -> {self.parent_group_tag}"
+        route_str = ""
+        if self.source_account_id and self.destination_account_id:
+            route_str = f" [{self.source_account_id}->{self.destination_account_id}]"
+        elif self.source_account_id:
+            route_str = f" [src:{self.source_account_id}]"
+        return f"[{self.header_scope}]{route_str} '{self.keyword_pattern}'{tokens_str} -> {self.parent_group_tag}"

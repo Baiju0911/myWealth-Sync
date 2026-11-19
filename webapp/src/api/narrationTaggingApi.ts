@@ -27,11 +27,13 @@ export interface TagRuleItem {
   match_tokens?: string[];
   match_type: 'CONTAINS' | 'EXACT' | 'REGEX' | 'LAST4';
   allowed_vector: 'ANY' | 'INFLOW' | 'OUTFLOW';
+  allowed_rail?: string;
   header_scope: string;
   parent_group_tag: string;
   subgroup_tag?: string | null;
   require_internal_contra: boolean;
   source_account_id?: number | null;
+  destination_account_id?: number | null;
   priority: number;
   is_active: boolean;
 }
@@ -41,14 +43,17 @@ export interface CreateTagRulePayload {
   match_tokens?: string[];
   match_type?: 'CONTAINS' | 'EXACT' | 'REGEX' | 'LAST4';
   allowed_vector?: 'ANY' | 'INFLOW' | 'OUTFLOW';
+  allowed_rail?: string;
   header_scope: string;
   parent_group_tag: string;
   subgroup_tag?: string | null;
   require_internal_contra?: boolean;
   source_account_id?: number | null;
+  destination_account_id?: number | null;
   priority?: number;
   is_active?: boolean;
 }
+
 export const narrationTaggingApi = {
   /**
    * 🏷️ GET: Fetch group hierarchies scoped to an active header (e.g. "Suspense Account")
@@ -109,7 +114,7 @@ export const narrationTaggingApi = {
    * ⚡ POST: Save a new pattern auto-routing tag rule
    */
   createTagRule: async (
-    payload: Partial<TagRuleItem>
+    payload: CreateTagRulePayload | Partial<TagRuleItem>
   ): Promise<TagRuleItem> => {
     const res = await api.post<TagRuleItem>('/master-tag-rules/', payload);
     return res.data;
@@ -117,7 +122,12 @@ export const narrationTaggingApi = {
 
   applyRuleToStream: async (
     ruleId: number
-  ): Promise<{ status: string; matched_rows: number; applied_tag: string }> => {
+  ): Promise<{
+    status: string;
+    matched_rows: number;
+    applied_tag: string;
+    subgroup_tag?: string;
+  }> => {
     const res = await api.post('/master-tag-rules/apply-rule/', {
       rule_id: ruleId,
     });
@@ -155,6 +165,7 @@ export const narrationTaggingApi = {
     source_account: string;
     source_account_id: number | null;
     destination_account: string;
+    destination_account_id: number | null;
     is_contra: boolean;
   }> => {
     const res = await api.post(

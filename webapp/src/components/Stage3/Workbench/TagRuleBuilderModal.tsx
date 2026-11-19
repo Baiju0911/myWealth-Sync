@@ -47,17 +47,57 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
   const [customTokenInput, setCustomTokenInput] = useState<string>('');
   const [userAddedTokens, setUserAddedTokens] = useState<string[]>([]);
 
+  // Backend-hydrated context fallback when line item lacks destination_account_id
+  const [backendContext, setBackendContext] = useState<{
+    source_account?: string;
+    source_account_id?: number | null;
+    destination_account?: string;
+    destination_account_id?: number | null;
+    detected_rail?: string;
+    tokens?: string[];
+  } | null>(null);
+
   const [accountScope, setAccountScope] = useState<'PAIR' | 'SOURCE_ONLY' | 'ANY'>('PAIR');
   const [lockDirection, setLockDirection] = useState<boolean>(true);
   const [lockRail, setLockRail] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
+  // Hydrate missing account IDs from backend synthesize-context when modal opens
   useEffect(() => {
-    if (isOpen) {
-      setActiveSubgroup(subgroupTag || '');
-      setUserAddedTokens([]);
+    if (!isOpen || !selectedTransactions || selectedTransactions.length === 0) {
+      setBackendContext(null);
+      return;
     }
-  }, [isOpen, subgroupTag]);
+
+    const first = selectedTransactions[0];
+    const hostId = first.account_id ?? first.source_account_id ?? first.account?.id ?? null;
+    const rawDestId =
+      first.destination_account_id ??
+      first.target_account_id ??
+      first.contra_meta?.to_account_id ??
+      first.suggested_contra_account_id ??
+      null;
+
+    // Fetch backend context if destination is missing or collides with host account ID
+    if (!rawDestId || (hostId && Number(rawDestId) === Number(hostId))) {
+      const txnIds = selectedTransactions
+        .map((t) => t.row_identifier || t.id)
+        .filter(Boolean);
+      narrationTaggingApi
+        .synthesizeRuleContext({
+          transaction_ids: txnIds,
+          vendor_name: activeVendorName || first.vendor_name || '',
+        })
+        .then((res) => {
+          setBackendContext(res);
+        })
+        .catch(() => {
+          setBackendContext(null);
+        });
+    } else {
+      setBackendContext(null);
+    }
+  }, [isOpen, selectedTransactions, activeVendorName]);
 
   // Telemetry Engine
   const telemetry = useMemo(() => {
@@ -68,11 +108,12 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
         date: '',
         displayNarration: '',
         rawNarrations: [] as string[],
-        sourceAccount: 'SIB NRO-60',
+        sourceAccount: '',
         sourceAccountId: null as number | null,
-        sourceMasked: '••0060',
-        destAccount: 'SIB NRO-81',
-        destMasked: '••0081',
+        sourceMasked: '',
+        destAccount: '',
+        destAccountId: null as number | null,
+        destMasked: '',
         detectedRail: 'ANY',
         direction: 'OUTFLOW' as 'OUTFLOW' | 'INFLOW',
         isInternalContra: false,
@@ -81,6 +122,7 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
     }
 
     const first = selectedTransactions[0];
+    const contraMeta = first.contra_meta || {};
     const rawNarrations = selectedTransactions
       .map((t) => t.raw_narration || t.narration || t.description || '')
       .filter(Boolean);
@@ -90,37 +132,78 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
       return acc + Math.abs(amt);
     }, 0);
 
+    // 1. Host account of the selected statement line(s)
+    const hostAccId: number | null =
+      first.account_id ??
+      backendContext?.source_account_id ??
+      first.source_account_id ??
+      first.account?.id ??
+      null;
+
+    const srcAccountId: number | null = hostAccId ? Number(hostAccId) : null;
+
+    // 2. Resolve the OTHER account in the contra pair (never equal to srcAccountId)
+    const contraFromId = contraMeta.from_account_id ? Number(contraMeta.from_account_id) : null;
+    const contraToId = contraMeta.to_account_id ? Number(contraMeta.to_account_id) : null;
+    const rawDestId =
+      first.destination_account_id ??
+      first.target_account_id ??
+      backendContext?.destination_account_id ??
+      first.suggested_contra_account_id ??
+      first.suggested_contra_account?.id ??
+      null;
+
+    let counterpartyAccId: number | null = rawDestId ? Number(rawDestId) : null;
+    if (!counterpartyAccId || (srcAccountId && counterpartyAccId === srcAccountId)) {
+      if (contraFromId && srcAccountId !== contraFromId) {
+        counterpartyAccId = contraFromId;
+      } else if (contraToId && srcAccountId !== contraToId) {
+        counterpartyAccId = contraToId;
+      } else {
+        counterpartyAccId = null;
+      }
+    }
+
+    const destAccountId: number | null = counterpartyAccId;
+
+    // 3. Resolve Source & Destination display names symmetrically
+    const isHostReceiver = Boolean(
+      contraToId && srcAccountId && contraToId === srcAccountId
+    );
+
     const srcName =
-      first.source_account_name ||
+      first.bank_name ||
       first.account_name ||
       first.account?.name ||
-      first.bank_name ||
-      first.bank?.name ||
+      (isHostReceiver ? contraMeta.to_account_name : contraMeta.from_account_name) ||
+      backendContext?.source_account ||
+      first.source_account_name ||
       first.source_account ||
-      first.remarks?.source_account ||
-      'SIB NRO-60';
+      'Origin Account';
 
     const srcNumber =
+      first.bank_last4 ||
       first.source_account_number ||
       first.account_number ||
       first.account?.account_number ||
-      first.account_no ||
+      (isHostReceiver ? contraMeta.to_account_number : contraMeta.from_account_number) ||
       '';
     const srcMasked = srcNumber
       ? `••${String(srcNumber).slice(-4)}`
-      : first.source_account_display || '••0060';
+      : first.source_account_display || '';
 
     const destName =
+      (isHostReceiver ? contraMeta.from_account_name : contraMeta.to_account_name) ||
+      backendContext?.destination_account ||
       first.target_account_name ||
       first.destination_account_name ||
       first.suggested_contra_account?.name ||
       first.destination_account ||
-      first.counterparty_name ||
       first.contra_account_name ||
-      first.remarks?.destination_account ||
-      'SIB NRO-81';
+      '';
 
     const destNumber =
+      (isHostReceiver ? contraMeta.from_account_number : contraMeta.to_account_number) ||
       first.target_account_number ||
       first.destination_account_number ||
       first.suggested_contra_account?.account_number ||
@@ -128,9 +211,9 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
       '';
     const destMasked = destNumber
       ? `••${String(destNumber).slice(-4)}`
-      : first.target_account_display || '••0081';
+      : first.target_account_display || '';
 
-    let rail = first.detected_rail || first.rail || '';
+    let rail = first.detected_rail || first.rail || backendContext?.detected_rail || '';
     if (!rail || rail === 'ANY' || rail === 'BANK_TRANSFER') {
       const combined = (rawNarrations.join(' ') + ' ' + (first.narration || '')).toUpperCase();
       if (combined.includes('UPI/') || combined.includes('@') || combined.includes('UPI')) rail = 'UPI';
@@ -155,23 +238,59 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
       if (refMatch) refNum = refMatch[1];
     }
 
+    const hasValidPair = Boolean(
+      srcAccountId &&
+        (destAccountId || (destName && destName !== srcName)) &&
+        (!destAccountId || srcAccountId !== destAccountId)
+    );
+
     return {
       count: selectedTransactions.length,
       amount: totalAmt,
-      date: first.date || first.transaction_date || '2024-12-30',
+      date: first.date || first.transaction_date || '',
       displayNarration: first.narration || first.clean_narration || '',
       rawNarrations,
       sourceAccount: srcName,
-      sourceAccountId: first.account_id || first.account?.id || null,
+      sourceAccountId: srcAccountId,
       sourceMasked: srcMasked,
       destAccount: destName,
+      destAccountId: destAccountId,
       destMasked: destMasked,
       detectedRail: rail,
       direction,
-      isInternalContra: Boolean(first.suggested_contra_account || first.is_contra || srcName !== destName),
+      isInternalContra: Boolean(
+        hasValidPair || contraMeta.is_self_transfer || first.suggested_contra_account_id
+      ),
       referenceNo: refNum,
     };
-  }, [selectedTransactions]);
+  }, [selectedTransactions, backendContext]);
+
+  const canStrictPair = Boolean(
+    telemetry.sourceAccountId &&
+      (telemetry.destAccountId ||
+        (telemetry.destAccount && telemetry.destAccount !== telemetry.sourceAccount)) &&
+      (!telemetry.destAccountId || telemetry.sourceAccountId !== telemetry.destAccountId)
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveSubgroup(subgroupTag || '');
+      setUserAddedTokens([]);
+      setSelectedAnchors([]);
+    }
+  }, [isOpen, subgroupTag]);
+
+  // Calibrate default scope whenever telemetry updates
+  useEffect(() => {
+    if (!isOpen) return;
+    if (canStrictPair) {
+      setAccountScope('PAIR');
+    } else if (telemetry.sourceAccountId) {
+      setAccountScope('SOURCE_ONLY');
+    } else {
+      setAccountScope('ANY');
+    }
+  }, [isOpen, canStrictPair, telemetry.sourceAccountId]);
 
   // Extract candidate tokens across inspected transactions
   const autoExtractedTokens = useMemo(() => {
@@ -223,17 +342,26 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
 
     selectedTransactions.forEach((txn) => {
       const raw = txn.raw_narration || txn.narration || '';
-      const v = txn.vendor || txn.payee || activeVendorName;
+      const v = txn.vendor_name || txn.vendor || txn.payee || activeVendorName;
       const tokens = extractTokens(raw, v);
       tokens.forEach((tk) => {
         tokenFrequency.set(tk, (tokenFrequency.get(tk) || 0) + 1);
       });
     });
 
+    if (backendContext?.tokens) {
+      backendContext.tokens.forEach((tk) => {
+        const up = String(tk).trim().toUpperCase();
+        if (up && !tokenFrequency.has(up)) {
+          tokenFrequency.set(up, 1);
+        }
+      });
+    }
+
     return Array.from(tokenFrequency.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([token]) => token);
-  }, [selectedTransactions, activeVendorName]);
+  }, [selectedTransactions, activeVendorName, backendContext]);
 
   // Combine auto-extracted tokens with custom tokens added by user
   const allCandidateTokens = useMemo(() => {
@@ -249,14 +377,12 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Toggle token checkbox
   const handleToggleToken = (token: string) => {
     setSelectedAnchors((prev) =>
       prev.includes(token) ? prev.filter((t) => t !== token) : [...prev, token]
     );
   };
 
-  // Add custom token from input
   const handleAddCustomToken = () => {
     const clean = customTokenInput.trim().toUpperCase();
     if (!clean) return;
@@ -289,54 +415,46 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
     }
   };
 
-  // const handleSaveAndApply = async () => {
-  //   if (selectedAnchors.length === 0) return;
-  //   setIsSubmitting(true);
-  //   try {
-  //     // Formatted as JSON array string: '["BAIJU SUSEELAN NAIR", "SIBL"]'
-  //     const patternPayload = JSON.stringify(selectedAnchors);
-
-  //     const createdRule = await narrationTaggingApi.createTagRule({
-  //       keyword_pattern: patternPayload,
-  //       match_type: 'CONTAINS',
-  //       allowed_vector: (lockDirection ? telemetry.direction : 'ANY') as 'ANY' | 'OUTFLOW' | 'INFLOW',
-  //       header_scope: headerScope,
-  //       parent_group_tag: parentGroupTag,
-  //       subgroup_tag: activeSubgroup || null,
-  //       require_internal_contra: telemetry.isInternalContra,
-  //       source_account_id: accountScope !== 'ANY' ? telemetry.sourceAccountId : null,
-  //       priority: 100,
-  //       is_active: true,
-  //     });
-
-  //     const applyRes = await narrationTaggingApi.applyRuleToStream(createdRule.id);
-  //     onSuccess(applyRes.matched_rows);
-  //     onClose();
-  //   } catch (err: any) {
-  //     alert(err?.response?.data?.detail || err.message || 'Error saving tag rule');
-  //   } finally {
-  //     setIsSubmitting(false);
-  //   }
-  // };
-
   const handleSaveAndApply = async () => {
     if (selectedAnchors.length === 0) return;
     setIsSubmitting(true);
     try {
-      // Primary anchor is first selected token
       const primaryAnchor = selectedAnchors[0];
+      const isStrictPair = accountScope === 'PAIR' && canStrictPair;
+
+      const resolvedSourceId =
+        accountScope === 'PAIR' || accountScope === 'SOURCE_ONLY'
+          ? telemetry.sourceAccountId
+          : null;
+
+      const resolvedDestId =
+        isStrictPair &&
+        telemetry.destAccountId &&
+        telemetry.destAccountId !== resolvedSourceId
+          ? telemetry.destAccountId
+          : null;
+
+      const resolvedRail =
+        lockRail && telemetry.detectedRail && telemetry.detectedRail !== 'ANY'
+          ? telemetry.detectedRail.trim().toUpperCase()
+          : '';
 
       const createdRule = await narrationTaggingApi.createTagRule({
         keyword_pattern: primaryAnchor,
-        match_tokens: selectedAnchors, 
+        match_tokens: selectedAnchors,
         match_type: 'CONTAINS',
         allowed_vector: (lockDirection ? telemetry.direction : 'ANY') as 'ANY' | 'OUTFLOW' | 'INFLOW',
+        allowed_rail: resolvedRail,
         header_scope: headerScope,
         parent_group_tag: parentGroupTag,
-        subgroup_tag: activeSubgroup || "",
-        require_internal_contra: accountScope === 'PAIR' ? telemetry.isInternalContra : false,
-        source_account_id: accountScope !== 'ANY' ? telemetry.sourceAccountId : null,
-        priority: 100,
+        subgroup_tag: activeSubgroup || '',
+        require_internal_contra: isStrictPair,
+        source_account_id: resolvedSourceId,
+        destination_account_id: resolvedDestId,
+        ...(isStrictPair && telemetry.destAccount && telemetry.destAccount !== telemetry.sourceAccount
+          ? { destination_account: telemetry.destAccount }
+          : {}),
+        priority: isStrictPair ? 100 : 50,
         is_active: true,
       });
 
@@ -344,17 +462,20 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
       onSuccess(applyRes.matched_rows);
       onClose();
     } catch (err: any) {
-      alert(err?.response?.data?.detail || err.message || 'Error saving tag rule');
+      const detail =
+        err?.response?.data?.destination_account_id?.[0] ||
+        err?.response?.data?.detail ||
+        err.message ||
+        'Error saving tag rule';
+      alert(detail);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-
   return createPortal(
     <div className="fixed inset-0 z-10000 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md font-mono text-zinc-100 animate-in fade-in duration-150">
       <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-2xl flex flex-col shadow-2xl overflow-hidden border-t-2 border-t-emerald-500">
-        
         {/* Header Bar */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-zinc-800/80 bg-zinc-900/50">
           <div className="flex items-center gap-3">
@@ -376,7 +497,8 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
                 )}
               </div>
               <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
-                Auto-tags future stream transactions under header scope: <span className="text-zinc-200 font-semibold">{headerScope}</span>
+                Auto-tags future stream transactions under header scope:{' '}
+                <span className="text-zinc-200 font-semibold">{headerScope}</span>
               </p>
             </div>
           </div>
@@ -391,7 +513,6 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 flex flex-col gap-4 max-h-[78vh] overflow-y-auto">
-          
           {/* SECTION 1: Selected Transaction Inspector HUD */}
           <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3 shadow-inner">
             <div className="flex justify-between items-center text-[10px] uppercase font-bold tracking-wider text-zinc-400">
@@ -401,12 +522,15 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
               </span>
               <div className="flex items-center gap-2">
                 {telemetry.amount > 0 && (
-                  <span className={`px-2 py-0.5 rounded font-mono font-bold text-xs ${
-                    telemetry.direction === 'OUTFLOW'
-                      ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60'
-                      : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60'
-                  }`}>
-                    {telemetry.direction === 'OUTFLOW' ? '-' : '+'}₹{telemetry.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <span
+                    className={`px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                      telemetry.direction === 'OUTFLOW'
+                        ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60'
+                        : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60'
+                    }`}
+                  >
+                    {telemetry.direction === 'OUTFLOW' ? '-' : '+'}₹
+                    {telemetry.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                 )}
                 <span className="text-zinc-500 font-normal">{telemetry.date}</span>
@@ -418,7 +542,9 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
               <div className="flex items-center gap-2.5">
                 <Building2 className="w-4 h-4 text-cyan-400 shrink-0" />
                 <div>
-                  <span className="text-[9px] text-zinc-500 uppercase font-bold block">Source Account</span>
+                  <span className="text-[9px] text-zinc-500 uppercase font-bold block">
+                    Source Account
+                  </span>
                   <span className="text-xs font-bold text-zinc-200 font-mono">
                     {telemetry.sourceAccount}{' '}
                     <span className="text-zinc-500 font-normal">{telemetry.sourceMasked}</span>
@@ -427,11 +553,13 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
               </div>
 
               <div className="flex flex-col items-center px-4">
-                <span className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase border flex items-center gap-1 ${
-                  telemetry.direction === 'OUTFLOW'
-                    ? 'bg-rose-950/60 text-rose-300 border-rose-800/80'
-                    : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/80'
-                }`}>
+                <span
+                  className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase border flex items-center gap-1 ${
+                    telemetry.direction === 'OUTFLOW'
+                      ? 'bg-rose-950/60 text-rose-300 border-rose-800/80'
+                      : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/80'
+                  }`}
+                >
                   <span>{telemetry.direction}</span>
                   {telemetry.detectedRail !== 'ANY' && (
                     <span className="text-zinc-400 font-normal">({telemetry.detectedRail})</span>
@@ -442,13 +570,25 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
 
               <div className="flex items-center gap-2.5 text-right">
                 <div>
-                  <span className="text-[9px] text-zinc-500 uppercase font-bold block">Destination Account</span>
+                  <span className="text-[9px] text-zinc-500 uppercase font-bold block">
+                    Destination Account
+                  </span>
                   <span className="text-xs font-bold text-zinc-200 font-mono">
-                    {telemetry.destAccount}{' '}
-                    <span className="text-zinc-500 font-normal">{telemetry.destMasked}</span>
+                    {telemetry.destAccount ? (
+                      <>
+                        {telemetry.destAccount}{' '}
+                        <span className="text-zinc-500 font-normal">{telemetry.destMasked}</span>
+                      </>
+                    ) : (
+                      <span className="text-zinc-500 font-normal italic">External / Unpaired</span>
+                    )}
                   </span>
                 </div>
-                <Building2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <Building2
+                  className={`w-4 h-4 shrink-0 ${
+                    telemetry.destAccount ? 'text-emerald-400' : 'text-zinc-600'
+                  }`}
+                />
               </div>
             </div>
 
@@ -462,7 +602,9 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
 
             {/* Raw Monospace Bank Telemetry Strip */}
             <div className="text-[10px] font-mono text-zinc-400 bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/70 break-all leading-relaxed select-all">
-              <span className="text-zinc-600 block text-[9px] uppercase font-bold mb-0.5">Raw Bank Narration Payload:</span>
+              <span className="text-zinc-600 block text-[9px] uppercase font-bold mb-0.5">
+                Raw Bank Narration Payload:
+              </span>
               {telemetry.rawNarrations[0] || 'No raw narration payload loaded.'}
             </div>
           </div>
@@ -475,27 +617,35 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
                 <Sliders className="w-3.5 h-3.5 text-cyan-400" /> Account Route Scope
               </label>
               <div className="flex flex-col gap-1.5">
-                {(['PAIR', 'SOURCE_ONLY', 'ANY'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setAccountScope(mode)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border text-left transition-all cursor-pointer flex items-center justify-between ${
-                      accountScope === mode
-                        ? 'bg-cyan-950/80 border-cyan-500 text-cyan-200 shadow-xs'
-                        : 'bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    <span>
-                      {mode === 'PAIR'
-                        ? 'Strict Pair (Source ➔ Destination)'
-                        : mode === 'SOURCE_ONLY'
-                        ? 'Host Account Only (Origin Bank)'
-                        : 'Any Account (Global)'}
-                    </span>
-                    {accountScope === mode && <Check className="w-3.5 h-3.5 text-cyan-400" />}
-                  </button>
-                ))}
+                {(['PAIR', 'SOURCE_ONLY', 'ANY'] as const).map((mode) => {
+                  const isDisabled = mode === 'PAIR' && !canStrictPair;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => setAccountScope(mode)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border text-left transition-all flex items-center justify-between ${
+                        isDisabled
+                          ? 'bg-zinc-950/30 border-zinc-900 text-zinc-600 cursor-not-allowed opacity-60'
+                          : accountScope === mode
+                          ? 'bg-cyan-950/80 border-cyan-500 text-cyan-200 shadow-xs cursor-pointer'
+                          : 'bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 cursor-pointer'
+                      }`}
+                    >
+                      <span>
+                        {mode === 'PAIR'
+                          ? 'Strict Pair (Source ➔ Destination)'
+                          : mode === 'SOURCE_ONLY'
+                          ? 'Host Account Only (Origin Bank)'
+                          : 'Any Account (Global)'}
+                      </span>
+                      {accountScope === mode && !isDisabled && (
+                        <Check className="w-3.5 h-3.5 text-cyan-400" />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -654,10 +804,15 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
               {lockRail && telemetry.detectedRail !== 'ANY' && (
                 <>via <strong className="text-blue-400">{telemetry.detectedRail}</strong> </>
               )}
-              {accountScope === 'PAIR' && telemetry.sourceAccount && telemetry.destAccount ? (
-                <>from <strong className="text-cyan-300">{telemetry.sourceAccount}</strong> to <strong className="text-cyan-300">{telemetry.destAccount}</strong> </>
+              {accountScope === 'PAIR' && canStrictPair ? (
+                <>
+                  from <strong className="text-cyan-300">{telemetry.sourceAccount}</strong> to{' '}
+                  <strong className="text-cyan-300">{telemetry.destAccount}</strong>{' '}
+                </>
               ) : accountScope === 'SOURCE_ONLY' && telemetry.sourceAccount ? (
-                <>from <strong className="text-cyan-300">{telemetry.sourceAccount}</strong> </>
+                <>
+                  from <strong className="text-cyan-300">{telemetry.sourceAccount}</strong>{' '}
+                </>
               ) : null}
               matching <span className="text-zinc-400">any token in</span>{' '}
               <strong className="text-emerald-300 font-mono">
@@ -668,11 +823,14 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
               will be auto-tagged under{' '}
               <strong className="text-emerald-400 font-bold">{parentGroupTag}</strong>
               {activeSubgroup ? (
-                <> ➔ <strong className="text-cyan-300 font-bold">{activeSubgroup}</strong></>
-              ) : null}.
+                <>
+                  {' '}
+                  ➔ <strong className="text-cyan-300 font-bold">{activeSubgroup}</strong>
+                </>
+              ) : null}
+              .
             </div>
           </div>
-
         </div>
 
         {/* Footer Bar */}
@@ -719,7 +877,6 @@ export const TagRuleBuilderModal: React.FC<TagRuleBuilderModalProps> = ({
             </button>
           </div>
         </div>
-
       </div>
     </div>,
     document.body
